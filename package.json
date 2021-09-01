@@ -1,0 +1,27 @@
+{
+  "name": "webenv",
+  "version": "0.0.1",
+  "keywords": [
+    "machine learning",
+    "dataset",
+    "environment",
+    "web",
+    "agi"
+  ],
+  "author": "Alexander Fedorov <alefedo6@gmail.com>",
+  "license": "MIT",
+  "description": "Extensible machine learning Web environment for training AGI.",
+  "main": "webenv.js",
+  "directories": {
+    "doc": "docs"
+  },
+  "dependencies": {
+    "puppeteer": "^10.1.0"
+  },
+  "devDependencies": {},
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "install-datasets": "nodejs tools/install-datasets.js || node tools/install-datasets.js",
+    "serve-datasets": "nodejs tools/serve-datasets.js || node tools/serve-datasets.js"
+  }
+}
