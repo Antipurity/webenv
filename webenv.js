@@ -567,8 +567,8 @@ function visualizePageScreenshot(obs, pred, elem, vState) {
         d[to++] = 255
     }
     elem.predCtx.putImageData(elem.predData, 0, 0)
-    function toByte(x, nan = 0) {
-        return x !== x ? nan : (x + 1) * 255 / 2 | 0
+    function toByte(x, nan = -1) {
+        return Math.round(((x !== x ? nan : x) + 1) * (255/2))
     }
 }
 
@@ -706,8 +706,8 @@ Provide a mask color (0xRRGGBB) to mask exact matches, or \`null\` to disable th
                 d[to++] = 255
             }
             elem.predCtx.putImageData(elem.predData, 0, 0)
-            function toByte(x, nan = 0) {
-                return x !== x ? nan : (x + 1) * 255 / 2 | 0
+            function toByte(x, nan = -1) {
+                return Math.round(((x !== x ? nan : x) + 1) * (255/2))
             }
         },
     }
@@ -1359,7 +1359,10 @@ For example: \`webenv.triggers([page => page.goto('https://www.youtube.com/watch
 
 exports.triggers.homepage = docs(`\`webenv.triggers([webenv.triggers.homepage])\`
 Back to homepage, please.
-`, function(page, env) { return console.error('homepage', env.homepage), page.goto(env.homepage).catch(doNothing) }) // TODO
+`, function(page, env) {
+    page.mouseX = env.width/2 | 0, page.mouseY = env.height/2 | 0
+    return page.goto(env.homepage).catch(doNothing)
+})
 
 
 
@@ -1800,8 +1803,8 @@ In particular, this:
         const newURL = newPage.url()
         newPage.close()
         try {
-            env._page && newURL && env._page.goto(newURL)
-        } catch (err) { console.error('WE bad URL:', newURL) } // TODO
+            env._page && newURL && env._page.goto(newURL).catch(doNothing)
+        } catch (err) { console.error('Bad URL of a popup:', newURL) }
     }
     function onDialog(dial) {
         // Who cares about questions and answers,

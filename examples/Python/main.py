@@ -30,6 +30,9 @@ hparams = {
   'layers': 2,
   'nonlinearity': 'Softsign',
   'ldl_local_first': False,
+
+  'console': True,
+  'tensorboard': False,
 }
 relevant_hparams = ['lr', 'gradmax', 'unroll_length'] # To be included in the run's name.
 
@@ -55,7 +58,7 @@ N_ins = N if hparams['merge_obs'] else 2*N
 dev = 'cuda'
 ns = ldl.NormSequential
 nl = getattr(torch.nn, hparams['nonlinearity'])
-lf = hparams['ldl_local_first'] # TODO
+lf = hparams['ldl_local_first']
 layers = hparams['layers']
 synth_grad = ns(N, N, ldl.LinDense, layer_count=layers, Nonlinearity=nl, local_first=lf, device=dev) if hparams['synth_grad'] else None
 actions = hparams['actions']
@@ -77,8 +80,9 @@ import datetime
 hparams_str = "__".join([k+"_"+str(hparams[k]) for k in relevant_hparams])
 run_name = datetime.datetime.now().strftime("%Y%m%d-%H%M%S") + "_" + hparams_str
 run_p = os.path.join(os.path.dirname(os.path.realpath(__file__)), 'runs', run_name)
-writer = SummaryWriter(log_dir=run_p)
-writer.add_hparams(hparams, {}) # Would have been nice if this worked without TF.
+if hparams['tensorboard']:
+  writer = SummaryWriter(log_dir=run_p)
+  writer.add_hparams(hparams, {}) # Would have been nice if this worked without TF.
 i = 0
 def loss(pred, got, obs, act_len):
   global i;  i += 1
@@ -86,7 +90,10 @@ def loss(pred, got, obs, act_len):
     got = got[pred.shape[-1]:].detach()
     pred = pred + recurrent.webenv_merge(torch.zeros_like(pred), obs, 0.)
   L = obs_loss(pred, got) / hparams['loss_divisor']
-  writer.add_scalar('Loss', L, i-1)
+  if hparams['console']:
+    print(L.cpu().detach().numpy())
+  if hparams['tensorboard']:
+    writer.add_scalar('Loss', L, i-1)
   if return_model is not None or max_model is not None:
     # Note: autoencoder loss may be more appropriate as reward, because that makes internal state more important than external state, minimizing control of web-pages over the agent.
     divisor = 1000. # A base-10 logarithmic scale might be better.
@@ -101,7 +108,6 @@ def loss(pred, got, obs, act_len):
     else:
       act_only = pred
     L = L + max_model(act_only, Return.detach())
-  print(L.cpu().detach().numpy()) # Why not print to console?
   return L
 def output(state, obs, act_len): # Add previous frame to next.
   if not hparams['merge_obs']:
@@ -127,7 +133,6 @@ webenv.webenv(
   #   (The defaults include a possibility of such a redirector.)
   webenv_path=we_p)
 
-# TODO: Test that Void does put noise in the visualization.
 # TODO: Test that all maximizers work together.
 
 # TODO: Catch a screenshot. Have examples/README.md, describing this.
