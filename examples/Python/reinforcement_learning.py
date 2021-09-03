@@ -19,8 +19,9 @@ class GradMaximize(torch.nn.Module):
 
   Constructor args:
   - `reward_model`: a function from state to reward (prediction).
-  - `loss=L1`: a function from reward prediction and reality, to the number to minimize.
+  - `loss=L2`: a function from reward prediction and reality, to the number to minimize.
   - `strength=1.`: multiplier of maximization's loss.
+  - `pred_gradient=False`: whether reward prediction gives gradient to the model too, for more accuracy.
 
   Call args:
   - `x`: state.
@@ -30,15 +31,17 @@ class GradMaximize(torch.nn.Module):
 
   Traditionally, Reinforcement Learning (reward maximization) is done via considering actions (or plans) and picking those with max predicted reward/return (let's call this "discrete RL" for convenience). Comparatively, GradMax has a few advantages, namely:
   - Discrete RL has to explicitly incorporate future rewards into the past, to compute the predicted & maximized `Return` (via the Bellman equation). GradMax incorporates the future via RNN's gradient, with no extra machinery and no extra hyperparameter.
+  - Discrete RL can only directly give gradient to actions. GradMax, unless explicitly limited, gives gradient to the whole state.
   - For continuous actions, discrete RL has to create binary search trees. GradMax assumes continuous and differentiable actions, though a step function can be used in the interface to make them discrete.
   - Discrete RL has to evaluate each of N actions, multiplying runtime+memory cost by N. GradMax only doubles that, approximately.
   - For very-high-dimensional action spaces, discrete RL has to consider exponentially many actions. GradMax is as linear-time as gradient descent.
   """
-  def __init__(self, reward_model, loss=L1, strength=1.):
+  def __init__(self, reward_model, loss=L2, strength=1., pred_gradient=True):
     super(GradMaximize, self).__init__()
     self.reward_model = reward_model
     self.loss = loss
     self.strength = strength
+    self.pred_gradient = pred_gradient
     pars = reward_model.parameters()
     if hasattr(loss, 'parameters'):
       pars = [*pars, *loss.parameters()]
@@ -48,8 +51,7 @@ class GradMaximize(torch.nn.Module):
       p.requires_grad_(requires_grad)
   def forward(self, x, reward):
     # 10 minutes to implement. 5 minutes to debug (more like, run).
-    lR = self.loss(self.reward_model(x.detach()), reward)
-    # (Not detaching `x` here could make predictions more accurate, at the cost of requiring a hyperparameter to trade off `x`'s gradients.)
+    lR = self.loss(self.reward_model(x if self.pred_gradient else x.detach()), reward)
     self.switch_param_gradient(False)
     lX = self.reward_model(x).sum() * self.strength
     self.switch_param_gradient(True)

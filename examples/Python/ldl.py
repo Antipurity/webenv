@@ -19,13 +19,14 @@ class LinDense(torch.nn.Module):
   Arguments:
   - `ins`: how many inputs there are.
   - `outs`: how many outputs there will be.
-  - `n=16`: the max size of each dimension. The layer works best if `ins = a*n**c` and `outs = b*n**c`.
+  - `n=16`: the max size of each dimension. The layer works best if `ins = a * n**c` and `outs = b * n**c`, especially if `ins = outs` (with `skip_connections`).
   - `batch_dims=1`: this many leading dimensions (1 or more) will share weights, the rest will have unique weights. (Vector inputs have a batch dimension inserted automatically.)
   - `unique_dims=()`: the sizes of non-batched non-mixed dimensions, for initialization. Total input dimension count must be `batch_dims + len(unique_dims) + 1`.
   - `weight_stdev=1`: the standard deviation of all weights, or a function from sub-layer index to that.
   - `Nonlinearity=None`: the constructor of non-linearities between sub-layers, given the input size.
   - `bias=True`: whether a static vector should be added after each mix.
   - `skip_connections=True`: whether the previous sub-layer result should be added, for improved gradient flow. Works best if `ins == outs`.
+  - `device`
   """
   def __init__(self, ins, outs, *, n=16, batch_dims=1, unique_dims=(), weight_stdev=1, Nonlinearity=None, bias=True, skip_connections=True, device='cuda'):
     if not isinstance(ins, int):
@@ -41,6 +42,7 @@ class LinDense(torch.nn.Module):
     dims = math.ceil(math.log(max(ins, outs), n) - 1e-8)
     self.ins_dims = _dims_of(ins, n, dims)
     self.outs_dims = _dims_of(outs, n, dims)
+    # TODO: How do we implement reverse-order mixing? Do we reverse ins_dims and outs_dims; anything else?
     self.biases = [None] * dims if bias else None
     self.weights = [None] * dims
     self.nonlinearities = [None] * dims

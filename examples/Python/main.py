@@ -61,7 +61,7 @@ from reinforcement_learning import GradMaximize, Maximize, Return, expand_action
 return_model = Return(ns(N, 1, ldl.LinDense, layer_count=layers, Nonlinearity=nl, device=dev), time_horizon=hparams['time_horizon']) if hparams['time_horizon']>0 else None
 if actions > 1:
   transition = Maximize(transition, return_model, action_info=expand_actions, N=actions)
-max_model = GradMaximize(ns(N, 1, ldl.LinDense, layer_count=layers, Nonlinearity=nl, device=dev), strength=hparams['gradmax']) if hparams['gradmax']>0 else None
+max_model = GradMaximize(ns(N, 1, ldl.LinDense, layer_count=layers, Nonlinearity=nl, device=dev), strength=hparams['gradmax'], pred_gradient=False) if hparams['gradmax']>0 else None
 optim = getattr(torch.optim, hparams['optim'])([
   { 'params':[*params(transition, return_model, max_model)] },
   { 'params':[*params(synth_grad)], 'lr':hparams['synth_grad_lr'] },
@@ -77,13 +77,6 @@ run_p = os.path.join(os.path.dirname(os.path.realpath(__file__)), 'runs', run_na
 writer = SummaryWriter(log_dir=run_p)
 writer.add_hparams(hparams, {}) # Would have been nice if this worked without TF.
 i = 0
-def GRAD_SUM(m):
-  with torch.no_grad():
-    s = 0
-    for p in params(m):
-      if p.grad is not None:
-        s = s + p.grad.abs().sum()
-    return s
 def loss(pred, got, obs, act_len):
   global i;  i += 1
   if not hparams['merge_obs']: # Un-concat if needed.
