@@ -22,7 +22,9 @@ hparams = {
 
   'actions': 1, # Cost is linear in this. No planning, only one-time action enumeration.
   'time_horizon': 0., # Without planning, this has to be non-zero, to transfer reward from future to past.
+
   'gradmax': 1., # Multiplier of planning via gradient.
+  'gradmax_only_actions': True, # Where GradMax's gradient goes: only actions, or the whole state.
 
   'layers': 2,
   'nonlinearity': 'Softsign',
@@ -98,7 +100,10 @@ def loss(pred, got, obs, act_len):
     L = L + L0
   if max_model is not None:
     # Do not consider internal state as actions.
-    act_only = torch.cat((pred[:-act_len].detach(), pred[-act_len:]))
+    if hparams['gradmax_only_actions']:
+      act_only = torch.cat((pred[:-act_len].detach(), pred[-act_len:])) if act_len > 0 else pred.detach()
+    else:
+      act_only = pred
     L = L + max_model(act_only, Return.detach())
   print(L.cpu().detach().numpy()) # Why not print to console?
   return L
@@ -123,5 +128,15 @@ webenv.webenv(
   '"about:blank"', # Note: ideally, this would be a random website redirector. One that won't mark the agent as a bot, and ban it.
   webenv_path=we_p)
 
+# TODO: Make LDL have the option to swap the order of mixed dimensions (to put locality first). Test that it works for LDL's test.
+# TODO: Have the hyperparam `ldl_reverse_ops=False`.
+#   ...Wait, does LDL transpose correct dimensions?
+
+# TODO: Test that Void does put noise in the visualization.
+# TODO: Test that all maximizers work together.
+
+# TODO: Catch a screenshot. Have examples/README.md, describing this.
+
 # TODO: Update AGENTS.md, removing learned loss, adding misprediction-maximization (curiosity-driven RL; to go from control-by-the-world to free-will, maximize autoencoder loss instead of prediction loss, which puts more emphasis on the more-voluminous thing, which is the internal state) to balance the convergence of prediction on past states, for bootstrapping.
 #   ...If this is the only thing left, then does this mean that we won't be continuing here? (Apart from potentially making `directScore` directly-optimizable.)
+#   "AGI does include literally everything under its umbrella, so, to not get lost, an extremely keen eye for redundancies is required. Here, we outline a minimal core that can learn everything. See [Examples](../examples/README.md) for implementations."
