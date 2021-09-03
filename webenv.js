@@ -1938,13 +1938,18 @@ Some DOM-aware image augmentations: random transforms and filters.
 
 
 
-exports.directScore = docs(`\`webenv.directScore(scores = 'scores.json', name = 'directScore', interval = 60000, momentum = .999)\`
-Exposes a function that allows web pages to rate the agent's performance. All scores must be -1..1, the higher the better.
-\`env.score.ALL\` is the average performance.
+exports.directScore = docs(`\`webenv.directScore(hidden = false, scores = '', name = 'directScore', interval = 60000, momentum = .999)\`
+Exposes a function that allows web pages to rate the agent's performance. All scores must be \`-1\`..\`1\`, the higher the better.
 
-This allows a different evaluation metric than loss, for comparing agents.
-The score is NOT exposed to agents, to prevent them from overfitting to one way of exposing reward. Instead, make the page expose the score/reward, preferably visually and with context cues that tell whether a higher or lower number is better.
-`, async function(scores = 'scores.json', name = 'directScore', interval = 60000, momentum = .999) {
+This allows a different evaluation metric than loss, for comparing agents. (As long as people create web pages that call \`directScore\`.)
+
+Args:
+- \`hidden\`: if \`false\`, exposes 1 number to the agent at the beginning: the average score since the last frame, or \`NaN\`. The agent can maximize that number if it wants to. If hidden, agents must do self-supervised learning.
+- \`scores\` (for example, \`'scores.json'\`): the file to synchronize per-page scores with. \`webenv.init(...).score.ALL\` is the average score.
+- \`name\`: the name of the exposed-to-pages function.
+- \`interval\`: how often to sync scores to file & compute average score, in ms.
+- \`momentum\`: how much a new score does not change per-page scores. Does not affect observations.
+`, async function(hidden = false, scores = '', name = 'directScore', interval = 60000, momentum = .999) {
     const fs = require('fs/promises')
     // `data` holds average scores, both total ("ALL") and per-URL.
     const data = Object.create(null)
@@ -1958,13 +1963,22 @@ The score is NOT exposed to agents, to prevent them from overfitting to one way 
     // These two hold the updated-later per-URL data.
     const newDataSum = Object.create(null), newDataNum = Object.create(null)
     let timeoutID = null, active = false
+    let scoreSum = 0, scoreNum = 0 // For observations, if !hidden.
     return {
+        priority:999999999,
+        reads: hidden ? undefined : 1,
+        read: hidden ? undefined : function(page, state, obs) {
+            obs[0] = scoreSum / scoreNum // NaN if no scores since the last frame.
+            scoreSum = scoreNum = 0
+        },
         init(page, env) {
             env.score = data
             active = true
-            if (timeoutID === null) timeoutID = setTimeout(updateData, interval)
+            if (scores && timeoutID === null) timeoutID = setTimeout(updateData, interval)
             return page.exposeFunction(name, async (score = -1) => {
                 if (typeof score != 'number' && !(score >= -1 && score <= 1)) return false
+                scoreSum += score, ++scoreNum
+                if (!scores) return
                 const u = page.url()
                 if (!newDataSum[u]) newDataSum[u] = 0
                 if (!newDataNum[u]) newDataNum[u] = 0
@@ -1973,8 +1987,8 @@ The score is NOT exposed to agents, to prevent them from overfitting to one way 
             })
         },
         deinit(page, state) {
-            active = false, clearTimeout(timeoutID), timeoutID = null
-            return updateData()
+            active = false
+            if (scores) return clearTimeout(timeoutID), timeoutID = null, updateData()
         },
     }
     async function updateData() {
@@ -2106,7 +2120,7 @@ function docs(str, fun) { fun.docs = str;  return fun }
 exports.defaults = [
     exports.stability(),
     exports.directLink(),
-    exports.directScore(), // TODO: Make `directScore` able to expose a number to the agent, with priority:999999999. (So that agents could choose to optimize, and even get reward from pages.)
+    exports.directScore(),
     exports.userAgent(),
     exports.fetchSlice(),
     exports.webView(),
@@ -2115,17 +2129,15 @@ exports.defaults = [
     exports.const(),
     exports.loopback(),
     exports.frameTime(),
-    // exports.audio(), // TODO
-    // exports.imageRect(100, 100, 1), // TODO
-    exports.imageFovea(100, 5000, 1), // TODO
+    exports.imageFovea(100, 5000, 1),
     exports.scrollBy(),
     exports.mouse({ absolute:false, relative:50 }),
     exports.keyboard(),
     exports.injectScript(exports.injectScript.augmentations()),
     exports.interval(exports.triggers.homepage),
-    // exports.triggers(
-    //     [exports.triggers.goBack, exports.triggers.randomLink, exports.triggers.randomInCache],
-    //     null,
-    //     { maxAtOnce:1, cooldown:3600 })
+    exports.triggers(
+        [exports.triggers.goBack, exports.triggers.randomLink],
+        null,
+        { maxAtOnce:1, cooldown:3600 }),
     'http://random.whatsmyip.org/',
 ]

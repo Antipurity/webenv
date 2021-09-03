@@ -21,7 +21,7 @@ hparams = {
   'merge_obs': True, # Whether inputs override state in-place (preventing gradient flow), or concatenated (with higher runtime cost).
 
   'actions': 1, # Cost is linear in this. No planning, only one-time action enumeration.
-  'time_horizon': 0., # Without planning, this has to be non-zero, to transfer reward from future to past.
+  'time_horizon': .0, # Without planning, this has to be non-zero, to transfer reward from future to past.
 
   'gradmax': 1., # Multiplier of planning via gradient.
   'gradmax_only_actions': True, # Where GradMax's gradient goes: only actions, or the whole state.
@@ -29,7 +29,7 @@ hparams = {
 
   'layers': 2,
   'nonlinearity': 'Softsign',
-  'ldl_local_first': False,
+  'ldl_local_first': True,
 
   'console': True,
   'tensorboard': False,
@@ -133,9 +133,8 @@ webenv.webenv(
   #   (The defaults include a possibility of such a redirector.)
   webenv_path=we_p)
 
-# TODO: Test that all maximizers work together.
-
 # TODO: Catch a screenshot. Have examples/README.md, describing this.
+#   ...Is it possible to get a random website generator, so that we don't just predict a random page or a blank page? Maybe use Google again?
 
 # TODO: Update AGENTS.md, removing learned loss, adding misprediction-maximization (curiosity-driven RL; to go from control-by-the-world to free-will, maximize autoencoder loss instead of prediction loss, which puts more emphasis on the more-voluminous thing, which is the internal state) to balance the convergence of prediction on past states, for bootstrapping.
 #   ...If this is the only thing left, then does this mean that we won't be continuing here? (Apart from potentially making `directScore` directly-optimizable.)

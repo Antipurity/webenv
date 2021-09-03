@@ -79,20 +79,19 @@ In a page, `directLink(PageAgent, Inputs = 0, Outputs = 0)` will return (a promi
 
 ```js
 webenv.directScore()
-webenv.directScore(scores = 'scores.json', name = 'directScore', interval = 60000, momentum = .999)
+webenv.directScore(hidden = false, scores = '', name = 'directScore', interval = 60000, momentum = .999)
 ```
 
-Allows web pages (in particular, datasets) to rate how well the agent is performing, via `directScore(x)`, where `x` is a number in `-1`..`1`, the higher the better.
+Exposes a function that allows web pages to rate the agent's performance. All scores must be `-1`..`1`, the higher the better.
 
-This creates a different evaluation metric than loss, for comparing agents.
+This allows a different evaluation metric than loss, for comparing agents. (As long as people create web pages that call `directScore`.)
 
-Access via `env.score.ALL`.
-
-This is NOT exposed to agents, to prevent them from overfitting to this one way of exposing reward. If needed, pages should expose it through other means, preferably visually, and with context cues that tell whether higher or lower is better and when.
-
-Do not optimize for score, simply make sure that it is not abysmal.
-
-(Of course, you can easily allow web-pages to dictate the agent's reward, and eventually turn the Web into a "please do this for me" environment rather than a "look at my things" one. It is either the worst or the best idea. We do not provide such an interface out of the box.)
+Args:
+- `hidden`: if `false`, exposes 1 number to the agent at the beginning: the average score since the last frame, or `NaN`. The agent can maximize that number if it wants to. If hidden, agents must do self-supervised learning.
+- `scores` (for example, `'scores.json'`): the file to synchronize per-page scores with. `webenv.init(...).score.ALL` is the average score.
+- `name`: the name of the exposed-to-pages function.
+- `interval`: how often to sync scores to file & compute average score, in ms.
+- `momentum`: how much a new score does not change per-page scores. Does not affect observations.
 
 ```js
 webenv.fetchSlice()
