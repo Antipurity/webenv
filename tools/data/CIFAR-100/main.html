@@ -1,0 +1,262 @@
+<!doctype html>
+<html lang=en>
+  <head>
+    <meta charset=utf-8>
+    <meta name=viewport content="width=device-width, initial-scale=1">
+    <title>CIFAR-100 dataset</title>
+  </head>
+  <body>
+    <p>You are looking at the CIFAR-100 image dataset, from 32×32 images to one of 20/100 classes, 50000 samples in total.</p>
+    <p>(Source: https://www.cs.toronto.edu/~kriz/cifar.html)</p>
+    <p>Test your image recognition skills: guess class labels correctly. Or watch.</p>
+    <p id=percentageCorrect></p>
+    <div class=fullFlex>
+      <input type=checkbox id=waitForGuesses name=waitForGuesses>
+      <label for=waitForGuesses>Perform guesses</label>
+    </div>
+    <div class=fullFlex>
+      <input type=checkbox id=useAllClasses name=useAllClasses>
+      <label for=useAllClasses>Use all 100 classes</label>
+    </div>
+    <div class=fullFlex>
+      <input type=checkbox id=doDirectLink name=useAllClasses>
+      <label for=doDirectLink>Direct link</label>
+    </div>
+    <div class=fullFlex>
+      <input id=taskCount name=taskCount type=number value=1 min=1 max=16 step=1>
+      <label for=taskCount>Batch size</label>
+    </div>
+    <div class=fullFlex id=taskArea></div>
+    <style>
+p { text-align: center; font-family: sans-serif }
+button { width: 100%; font-family: sans-serif }
+canvas { width: 64px; height: 64px; image-rendering: pixelated; }
+.fullFlex {
+  width: 100%;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  gap: .5em;
+}
+.fullFlexItem { width: 100%; }
+.grid { display: grid; text-align: center; }
+    </style>
+    <script>
+const coarseLabels = `aquatic_mammals fish flowers food_containers fruit_and_vegetables household_electrical_devices household_furniture insects large_carnivores large_man-made_outdoor_things large_natural_outdoor_scenes large_omnivores_and_herbivores medium_mammals non-insect_invertebrates people reptiles small_mammals trees vehicles_1 vehicles_2`.split(' ')
+const fineLabels = `apple aquarium_fish baby bear beaver bed bee beetle bicycle bottle bowl boy bridge bus butterfly camel can castle caterpillar cattle chair chimpanzee clock cloud cockroach couch crab crocodile cup dinosaur dolphin elephant flatfish forest fox girl hamster house kangaroo keyboard lamp lawn_mower leopard lion lizard lobster man maple_tree motorcycle mountain mouse mushroom oak_tree orange orchid otter palm_tree pear pickup_truck pine_tree plain plate poppy porcupine possum rabbit raccoon ray road rocket rose sea seal shark shrew skunk skyscraper snail snake spider squirrel streetcar sunflower sweet_pepper table tank telephone television tiger tractor train trout tulip turtle wardrobe whale willow_tree wolf woman worm`.split(' ')
+const numSamples = 50000
+
+
+
+let sampleBuf = [], samplesStart = 0, samplesMax = 10000
+const labelBytes = 2, sampleSize = 3074 // Coarse label, fine label, red, green, blue.
+async function requestSamples(n = 1) {
+  // Fetches `n` (contiguous) random samples at once, and puts them into `sampleBuf`.
+  const index = Math.random() * numSamples | 0
+  const start = index * sampleSize
+  const end = (index+n >= numSamples ? numSamples : index+n) * sampleSize
+  const data = await fetchSlice('train.bin', start, end)
+  if (data)
+    for (let i = 0; (i+1) * sampleSize <= data.length; ++i)
+      sampleBuf[samplesStart++] = data.subarray(i * sampleSize, (i+1) * sampleSize),
+      samplesStart > samplesMax && (samplesStart = 0)
+}
+
+
+
+// UI
+requestSamples(1000)
+const samplesEachStep = 16
+taskCount.onchange = deployCards
+deployCards()
+
+
+
+// Direct link: a single random sample every agent-step.
+if (typeof directLink != 'function')
+  doDirectLink.disabled = true
+else
+  doDirectLink.onchange = function startDirectLink() {
+    if (!doDirectLink.checked) return
+    const coarseLabelCount = 20, fineLabelCount = 100, img = 3*32*32
+    directLink((act, obs, mask) => {
+      if (Math.random() * samplesEachStep < 1) requestSamples(samplesEachStep)
+      if (!sampleBuf.length) return true
+      const sample = sampleBuf[Math.random() * sampleBuf.length | 0]
+      obs.fill(-1, 0, coarseLabelCount + fineLabelCount)
+      obs[sample[0]] = 1
+      obs[coarseLabelCount + sample[1]] = 1
+      const start = coarseLabelCount + fineLabelCount, end = start + img
+      for (let to = start, from = labelBytes; to < end; ++to, ++from)
+        obs[to] = sample[from]*2/255 - 1 // Make it -1…1.
+      return !!doDirectLink.checked
+    }, 0, coarseLabelCount + fineLabelCount + img)
+  }
+
+
+
+function sampleImage(sample, canvas = document.createElement('canvas')) {
+  // Extract input, visually, into a <canvas>.
+  if (!sample) return canvas
+  canvas.width = canvas.height = 32
+  const ctx = canvas.getContext('2d')
+  const image = ctx.createImageData(32, 32), data = image.data
+  for (let from = labelBytes, to = 0; from < labelBytes+1024; ++from, to += 4) {
+    data[to+0] = sample[from + 0]
+    data[to+1] = sample[from + 1024]
+    data[to+2] = sample[from + 2048]
+    data[to+3] = 255
+  }
+  ctx.putImageData(image, 0, 0)
+  return canvas
+}
+function sampleLabel(sample, onlyIndex = false) {
+  // Extract output, visually, into a string.
+  const full = !!useAllClasses.checked, ind = full ? sample[1] : sample[0]
+  if (onlyIndex) return ind
+  return full ? fineLabels[ind] : coarseLabels[ind]
+}
+
+
+
+function buttonsFor(el) {
+  // Buttons for the label.
+  const full = !!useAllClasses.checked, auto = !waitForGuesses.checked
+  const labels = auto ? (buttonsFor.empty || (buttonsFor.empty = [])) : full ? fineLabels : coarseLabels
+  if (el.childNodes.length !== labels.length) {
+    while (el.lastChild) el.removeChild(el.lastChild)
+    for (let name of labels)
+      el.appendChild(document.createElement('button')).textContent = name
+  }
+}
+
+
+
+let rightGuesses = 0, totalGuesses = 0
+function cardFor(el) {
+  if (!el.isConnected) return
+  if (!sampleBuf.length)
+    return requestAgentStep(() => cardFor(el))
+  if (el.updating) return
+  const full = !!useAllClasses.checked, auto = !waitForGuesses.checked
+  if (!el.firstChild) {
+    // If empty, create the structure.
+    el.prevLabel = el.appendChild(document.createElement('div'))
+    el.nextImage = el.appendChild(document.createElement('canvas'))
+    el.nextLabels = el.appendChild(document.createElement('div'))
+    el.nextLabels.className = 'grid'
+    el.real = '', el.imag = ''
+    el.updating = false
+    el.onclick = evt => { // On click, redraw a sample.
+      if (!evt.target || evt.target.tagName !== 'BUTTON') return
+      el.imag = evt.target.textContent
+      cardFor(el)
+    }
+  }
+
+  if (el.real && el.imag) {
+    const ok = el.real === el.imag
+    let prefix = (ok ? '✔ ☑ ✅ Correct Good Yes' : '✕ ✖ ❌ ❎ Wrong Bad No').split(' ')
+    prefix = prefix[Math.random() * prefix.length | 0]
+    el.prevLabel.textContent = prefix
+    typeof directScore == 'function' && directScore(!ok ? -1 : !full ? .5 : 1)
+    ok && ++rightGuesses, ++totalGuesses
+    const frac = rightGuesses / totalGuesses
+    percentageCorrect.textContent = 'Percentage correct: ' + (frac*100).toFixed(1) + '%'
+    if (!ok) return
+  } else el.prevLabel.textContent = ' \n '
+
+  if (!auto || !el.real || el.imag || Math.random() < .1) {
+    if (Math.random() * samplesEachStep < 1) requestSamples(samplesEachStep)
+
+    const sample = sampleBuf[Math.random() * sampleBuf.length | 0]
+    sampleImage(sample, el.nextImage)
+    el.real = sampleLabel(sample), el.imag = ''
+    buttonsFor(el.nextLabels)
+  }
+
+  el.classList.toggle('fullFlexItem', !!auto)
+
+  if (auto) {
+    el.prevLabel.textContent = el.real
+    el.updating = true
+    requestAgentStep(() => (el.updating = false, cardFor(el)))
+  }
+}
+
+
+
+function deployCards() {
+  const n = +taskCount.value
+  let ch = taskArea.firstChild || taskArea.appendChild(document.createElement('div'))
+  for (let i = 0; i < n; ++i) {
+    cardFor(ch)
+    ch = ch && ch.nextSibling || taskArea.appendChild(document.createElement('div'))
+  }
+  while (ch.nextSibling) ch.nextSibling.remove()
+  ch && ch.remove()
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+// Utility functions.
+function requestAgentStep(callback) {
+    const f = requestAgentStep
+    if (typeof directLink == 'function' && !f.cb)
+        f.cb = [], directLink(() => f.cb.splice(0, f.cb.length).forEach(f => f()) || true)
+    f.cb ? f.cb.push(callback) : setTimeout(callback, 200)
+}
+async function fetchSlice(url, start = 0, end = null) {
+    if (location.protocol !== 'file:') {
+        const response = await fetch(url, {headers:{ Range:'bytes='+start+'-'+(end !== null ? end-1 : null) }})
+        return new Uint8Array(await response.arrayBuffer())
+    }
+    if (typeof _fetchLocalFileSlice != ''+void 0) { // Use WebEnv.
+        const bin = atob(await _fetchLocalFileSlice(url, start, end))
+        const data = new Uint8Array(bin.length)
+        for (let i = 0; i < data.length; ++i) data[i] = bin.charCodeAt(i)
+        return data
+    } else { // File API has .slice, so, if a dataset page is opened directly, ask for assistance.
+        if (!fetchSlice.fileCache) fetchSlice.fileCache = Object.create(null)
+        const cache = fetchSlice.fileCache
+        const file = cache[url] instanceof Promise ? (cache[url] = await cache[url]) : cache[url] || await (cache[url] = getFile(url))
+        return new Promise(resolve => {
+            const R = new FileReader
+            R.onload = () => resolve(new Uint8Array(R.result))
+            R.readAsArrayBuffer(file.slice(start, end !== null ? end : file.size))
+        })
+        function getFile(url) {
+            return new Promise(resolve => {
+                addEventListener('click', function userActed() {
+                    removeEventListener('click', userActed)
+                    const el = document.createElement('input')
+                    el.type = 'file'
+                    if (url.lastIndexOf('.') >= 0) el.accept = url.slice(url.lastIndexOf('.'))
+                    el.onchange = () => resolve(el.files[0])
+                    el.click()
+                })
+            })
+        }
+    }
+}
+    </script>
+  </body>
+</html>

@@ -1,9 +1,9 @@
-puppeteer-chrome-profile/
-node_modules/
-cached/
-data/
+/puppeteer-chrome-profile/
+/node_modules/
+/cached/
+/data/
 scores.json
 test.js
 extension.pem
-examples/Python/runs/
-examples/Python/__pycache__/
+/examples/Python/runs/
+/examples/Python/__pycache__/

@@ -1,5 +1,12 @@
 This is the directory that contains dataset installers.
 
+Datasets are a very natural way to learn data, and test its comprehension. Just look at this:
+
+<p align=center>
+    <img src="cifar100.png">
+    <img src="cifar100-test.png">
+</p>
+
 # Installing
 
 Big data is big. Download it separately if needed, via:
@@ -38,7 +45,7 @@ function requestAgentStep(callback) {
     const f = requestAgentStep
     if (typeof directLink == 'function' && !f.cb)
         f.cb = [], directLink(() => f.cb.splice(0, f.cb.length).forEach(f => f()) || true)
-    f.cb ? f.cb.push(callback) : setTimeout(callback, 500)
+    f.cb ? f.cb.push(callback) : setTimeout(callback, 200)
 }
 ```
 - To coerce self-determination into learning particular behaviors, make being wrong boring: try only allowing non-trivial outcomes for correct answers, as games do. Incorrect answers would then require less representational volume to predict, making correct answers more likely to be selected, which would reinforce reasons-to-be-correct, which would make correct answers likelier.

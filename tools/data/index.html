@@ -1,0 +1,20 @@
+<!DOCTYPE html>
+<head>
+  <title>Datasets</title>
+  <!-- Look, it's perfectly reasonable to use Bootstrap for just a bunch of buttons. -->
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.0/dist/css/bootstrap.min.css" rel="stylesheet" integrity="sha384-KyZXEAg3QhqLMpG8r+8fhAXLRk2vvoC2f3B09zVXn8CA5QIVfZOJ3BCsw2P0p/We" crossorigin="anonymous">
+</head>
+<body>
+
+<style>a { width: 100%; }</style>
+<script>
+  const urls = ALL_URLS.split(' ')
+  urls.forEach(url => {
+    const el = document.createElement('a')
+    el.className = 'btn btn-primary'
+    el.href = url
+    el.textContent = url.slice(0, url.lastIndexOf('/'))
+    document.body.appendChild(el)
+  })
+</script>
+</body>

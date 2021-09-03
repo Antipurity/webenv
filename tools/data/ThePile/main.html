@@ -1,0 +1,238 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <title>The Illuminate Text Pile</title>
+    <script src="https://unpkg.com/fzstd"></script>
+  </head>
+  <body>
+    <div id=grid></div>
+
+    <style>
+@import url('https://fonts.googleapis.com/css?family=Abril+Fatface|Anton|Arvo|Baloo+Bhaina|Droid+Sans+Mono|Josefin+Slab|Lato|Roboto|Ubuntu|Volkhov');
+#grid {
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+  overflow: hidden;
+  position: absolute;
+  white-space: pre-wrap;
+}
+#grid>div {
+  height: 30em;
+  width: 100%;
+  overflow: hidden;
+  position: absolute;
+  display: inline-block;
+}
+#grid>div>div {
+  height: 30em;
+  width: 40em;
+  overflow: hidden;
+  position: absolute;
+  border: solid gray;
+  display: inline-block;
+  box-sizing: border-box;
+  overflow-wrap: break-word;
+  border-width: 1px 1px 0 0;
+}
+    </style>
+
+    <script>
+console.log('"The Pile" dataset: https://pile.eleuther.ai/')
+
+const fileCount = 30
+let curFile = null, nextFileOffset = 0, curDecompressor = null
+
+const cells = []
+createRows(cells)
+
+const sources = Object.create(null)
+const sampleBuf = new Uint8Array(64 * 2**20)
+let nextSample = 0
+fillCellsLoop()
+
+
+
+function createRows(cells = [], grid = document.getElementById('grid')) {
+  // Slowly creates rows, as many as the current viewport allows.
+  const viewportWidth = grid.scrollWidth, viewportHeight = grid.scrollHeight
+  let heights = 0
+  while (true) {
+    const row = createRow(grid)
+    row.style.left = 0, row.style.top = heights + 'px'
+    heights += row.offsetHeight || 1
+    if (heights > viewportHeight) return grid
+  }
+  function createRow(table) {
+    // Slowly creates elements in a row, as many as the current viewport allows.
+    const row = document.createElement('div');  table.append(row)
+    let widths = 0
+    while (true) {
+      const cell = document.createElement('div');  row.append(cell)
+      cell.style.top = 0, cell.style.left = widths + 'px'
+      widths += cell.offsetWidth || 1
+      cells.push(cell)
+      if (widths > viewportWidth) return row
+    }
+  }
+}
+
+
+
+function fillCellsLoop() {
+  try { fillCells() }
+  finally { requestAgentStep(fillCellsLoop) }
+}
+function fillCells(n = 1) {
+  for (let i = 0; i < cells.length; ++i) {
+    const cell = cells[i]
+    if (cell.textContent && Math.random() > .02) continue
+    const str = sampleString(4096)
+    cell.textContent = str
+    if (Math.random() < .2) {
+      // Sometimes, change the font.
+      const fonts = [
+        'Abril Fatface',
+        'Anton',
+        'Arvo',
+        'Baloo Bhaina',
+        'Droid Sans Mono',
+        'Josefin Slab',
+        'Lato',
+        'Roboto',
+        'Ubuntu',
+        'Volkhov',
+        'serif',
+        'sans-serif',
+        'monospace',
+        'cursive',
+      ]
+      const font = fonts[Math.random() * fonts.length | 0]
+      if (font !== 'monospace')
+        cell.style.fontFamily = /[^a-zA-Z\-]/.test(font) ? '"' + font + '"' : font
+      else
+        cell.style.fontFamily = 'monospace, monospace, Courier'
+      cell.style.fontSize = '1em'
+    }
+  }
+}
+
+
+
+function sampleString(len = 512) {
+  // Samples a random string from the buffer.
+  // First, get a random JSON object, contained between 2 newlines.
+  const last = beforeZeros(sampleBuf.length - 1)
+  const pick = beforeZeros(Math.random() * (last+1) | 0)
+  const start = nextNewline(pick)
+  if (start === pick) return requestSamples(), ''
+  const end = nextNewline(beforeZeros(start))
+  // Fetch (compressed) 1MB per (decompressed) seen (not sampled) 1MB.
+  //   (All this encourages skipping text, increasing diversity across runs.)
+  if (Math.random() * 2**20 < end-start) requestSamples(2**20)
+  let data
+  if (start <= end) data = sampleBuf.subarray(start, end)
+  else {
+    const A = sampleBuf.subarray(start)
+    const B = sampleBuf.subarray(0, end)
+    data = new Uint8Array(A.length + B.length)
+    data.set(A)
+    data.set(B, A.length)
+  }
+  data = new TextDecoder().decode(data) // Get some GC action in here, yeah.
+  const obj = JSON.parse(data)
+  const str = obj.text
+  const src = obj.meta.pile_set_name;  if (!sources[src]) sources[src] = true, console.log(src)
+  // Get a `len`-sized substring of `obj.text`.
+  const pick2 = prevNearbyBeginningInString(str, Math.random() * Math.max(0, str.length - len + 1) | 0)
+  return str.slice(pick2, pick2 + len)
+  function beforeZeros(n) {
+    while (n && sampleBuf[n] === 0) --n
+    return n
+  }
+  function nextNewline(n) { // Go to the next newline, if possible.
+    for (let i = n; true; ) {
+      i = i >= sampleBuf.length || sampleBuf[i] === 0 ? 0 : i+1
+      if (sampleBuf[i] === 10 || i === n) return i
+    }
+  }
+  function prevNearbyBeginningInString(str, ind, near = len/4|0) {
+    // Prefer to begin with whole lines, or at least with whole words.
+    for (let i = ind-1; i >= 0 && i >= ind-near; --i)
+      if (str[i] === '\n') return i+1
+    for (let i = ind-1; i >= 0 && i >= ind-near; --i)
+      if (str[i] === ' ') return i+1
+    return ind
+  }
+}
+
+
+
+function selectFile(i = Math.random() * fileCount | 0) {
+  curFile = `${(''+i).padStart(2, 0)}.jsonl.zst`, nextFileOffset = 0
+  curDecompressor && curDecompressor.push(new Uint8Array(0), true)
+  curDecompressor = new fzstd.Decompress(sampleArrived)
+}
+async function requestSamples(n = 1 * 2**20) {
+  if (curFile === null) selectFile()
+  let p = requestSamples.prev, then;  requestSamples.prev = new Promise(f => then=f)
+  const slice = await fetchSlice(curFile, nextFileOffset, nextFileOffset += n)
+  if (slice.length < n) selectFile() // It's truncated, so end-of-file was reached.
+
+  await p // Ensure linear decompression order.
+  try { curDecompressor.push(slice) }
+  finally { then() }
+}
+function sampleArrived(chunk) {
+  for (let i = 0; i < chunk.length; ++i)
+    sampleBuf[nextSample++] = chunk[i],
+    nextSample >= sampleBuf.length && (nextSample = 0)
+}
+
+
+
+// Utility functions.
+function requestAgentStep(callback) {
+    const f = requestAgentStep
+    if (typeof directLink == 'function' && !f.cb)
+        f.cb = [], directLink(() => f.cb.splice(0, f.cb.length).forEach(f => f()) || true)
+    f.cb ? f.cb.push(callback) : setTimeout(callback, 200)
+}
+async function fetchSlice(url, start = 0, end = null) {
+    if (location.protocol !== 'file:') {
+        const response = await fetch(url, {headers:{ Range:'bytes='+start+'-'+(end !== null ? end-1 : null) }})
+        return new Uint8Array(await response.arrayBuffer())
+    }
+    if (typeof _fetchLocalFileSlice != ''+void 0) { // Use WebEnv.
+        const bin = atob(await _fetchLocalFileSlice(url, start, end))
+        const data = new Uint8Array(bin.length)
+        for (let i = 0; i < data.length; ++i) data[i] = bin.charCodeAt(i)
+        return data
+    } else { // File API has .slice, so, if a dataset page is opened directly, ask for assistance.
+        if (!fetchSlice.fileCache) fetchSlice.fileCache = Object.create(null)
+        const cache = fetchSlice.fileCache
+        const file = cache[url] instanceof Promise ? (cache[url] = await cache[url]) : cache[url] || await (cache[url] = getFile(url))
+        return new Promise(resolve => {
+            const R = new FileReader
+            R.onload = () => resolve(new Uint8Array(R.result))
+            R.readAsArrayBuffer(file.slice(start, end !== null ? end : file.size))
+        })
+        function getFile(url) {
+            return new Promise(resolve => {
+                addEventListener('click', function userActed() {
+                    removeEventListener('click', userActed)
+                    const el = document.createElement('input')
+                    el.type = 'file'
+                    if (url.lastIndexOf('.') >= 0) el.accept = url.slice(url.lastIndexOf('.'))
+                    el.onchange = () => resolve(el.files[0])
+                    el.click()
+                })
+            })
+        }
+    }
+}
+    </script>
+  </body>
+</html>
