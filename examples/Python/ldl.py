@@ -26,9 +26,10 @@ class LinDense(torch.nn.Module):
   - `Nonlinearity=None`: the constructor of non-linearities between sub-layers, given the input size.
   - `bias=True`: whether a static vector should be added after each mix.
   - `skip_connections=True`: whether the previous sub-layer result should be added, for improved gradient flow. Works best if `ins == outs`.
+  - `local_first=False`: whether to mix among the closest or the furthest numbers first.
   - `device`
   """
-  def __init__(self, ins, outs, *, n=16, batch_dims=1, unique_dims=(), weight_stdev=1, Nonlinearity=None, bias=True, skip_connections=True, device='cuda'):
+  def __init__(self, ins, outs, *, n=16, batch_dims=1, unique_dims=(), weight_stdev=1, Nonlinearity=None, bias=True, skip_connections=True, local_first=False, device='cuda'):
     if not isinstance(ins, int):
       raise TypeError('Input size must be an int')
     if not isinstance(outs, int):
@@ -42,11 +43,14 @@ class LinDense(torch.nn.Module):
     dims = math.ceil(math.log(max(ins, outs), n) - 1e-8)
     self.ins_dims = _dims_of(ins, n, dims)
     self.outs_dims = _dims_of(outs, n, dims)
-    # TODO: How do we implement reverse-order mixing? Do we reverse ins_dims and outs_dims; anything else?
+    if local_first:
+      self.ins_dims = list(reversed(self.ins_dims))
+      self.outs_dims = list(reversed(self.outs_dims))
     self.biases = [None] * dims if bias else None
     self.weights = [None] * dims
     self.nonlinearities = [None] * dims
     self.skip_connections = skip_connections
+    self.local_first = local_first
     if batch_dims < 1:
       raise TypeError('Always include some batch dimension/s')
     self.batch_dims = batch_dims
@@ -81,8 +85,10 @@ class LinDense(torch.nn.Module):
     layer_dims = list(range(len(x.shape) - len(self.ins_dims), len(x.shape)))
     x = torch.transpose(x, batch_end-1, -2)
     layer_dims[-2] = batch_end-1
+    if self.local_first:
+      layer_dims = list(reversed(layer_dims))
     for i in range(len(self.ins_dims)):
-      # Nonlinearity, mix along a dimension, and skip.
+      # Nonlinearity, mix along a dimension (and bias), and skip.
       y = self.nonlinearities[i](x) if self.nonlinearities[i] is not None else x
       dim_at = layer_dims[i]
       y = torch.transpose(y, dim_at, -1)
@@ -90,7 +96,7 @@ class LinDense(torch.nn.Module):
         self.weights[i] = torch.randn(*y.shape[batch_end:-2], self.ins_dims[i], self.outs_dims[i], requires_grad=True, device=y.device)
       stdev = self.weight_stdev
       stdev = stdev(i) if callable(stdev) else stdev
-      y = torch.matmul(y, self.weights[i] * self.weight_stdev)
+      y = torch.matmul(y, self.weights[i] * stdev)
       if self.biases is not None:
         if self.biases[i] is None:
           self.biases[i] = torch.randn(*y.shape[batch_end:-2], 1, self.outs_dims[i], requires_grad=True, device=y.device)

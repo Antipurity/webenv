@@ -25,9 +25,11 @@ hparams = {
 
   'gradmax': 1., # Multiplier of planning via gradient.
   'gradmax_only_actions': True, # Where GradMax's gradient goes: only actions, or the whole state.
+  'gradmax_pred_gradient': False, # Whether GradMax's gradient to state includes reward misprediction.
 
   'layers': 2,
   'nonlinearity': 'Softsign',
+  'ldl_local_first': False,
 }
 relevant_hparams = ['lr', 'gradmax', 'unroll_length'] # To be included in the run's name.
 
@@ -53,15 +55,16 @@ N_ins = N if hparams['merge_obs'] else 2*N
 dev = 'cuda'
 ns = ldl.NormSequential
 nl = getattr(torch.nn, hparams['nonlinearity'])
+lf = hparams['ldl_local_first'] # TODO
 layers = hparams['layers']
-synth_grad = ns(N, N, ldl.LinDense, layer_count=layers, Nonlinearity=nl, device=dev) if hparams['synth_grad'] else None
+synth_grad = ns(N, N, ldl.LinDense, layer_count=layers, Nonlinearity=nl, local_first=lf, device=dev) if hparams['synth_grad'] else None
 actions = hparams['actions']
-transition = ldl.MGU(ns, N_ins, N, ldl.LinDense, layer_count=layers, Nonlinearity=nl, device=dev, example_batch_shape=(1,actions) if actions>1 else (2,), unique_dims=(actions,) if actions>1 else ())
+transition = ldl.MGU(ns, N_ins, N, ldl.LinDense, layer_count=layers, Nonlinearity=nl, local_first=lf, device=dev, example_batch_shape=(1,actions) if actions>1 else (2,), unique_dims=(actions,) if actions>1 else ())
 from reinforcement_learning import GradMaximize, Maximize, Return, expand_actions
-return_model = Return(ns(N, 1, ldl.LinDense, layer_count=layers, Nonlinearity=nl, device=dev), time_horizon=hparams['time_horizon']) if hparams['time_horizon']>0 else None
+return_model = Return(ns(N, 1, ldl.LinDense, layer_count=layers, Nonlinearity=nl, local_first=lf, device=dev), time_horizon=hparams['time_horizon']) if hparams['time_horizon']>0 else None
 if actions > 1:
   transition = Maximize(transition, return_model, action_info=expand_actions, N=actions)
-max_model = GradMaximize(ns(N, 1, ldl.LinDense, layer_count=layers, Nonlinearity=nl, device=dev), strength=hparams['gradmax'], pred_gradient=False) if hparams['gradmax']>0 else None
+max_model = GradMaximize(ns(N, 1, ldl.LinDense, layer_count=layers, Nonlinearity=nl, local_first=lf, device=dev), strength=hparams['gradmax'], pred_gradient=hparams['gradmax_pred_gradient']) if hparams['gradmax']>0 else None
 optim = getattr(torch.optim, hparams['optim'])([
   { 'params':[*params(transition, return_model, max_model)] },
   { 'params':[*params(synth_grad)], 'lr':hparams['synth_grad_lr'] },
@@ -118,12 +121,11 @@ we_p = os.path.join(os.path.dirname(os.path.realpath(__file__)), '..', '..', 'we
 webenv.webenv(
   agent,
   'we.defaults',
-  '"about:blank"', # Note: ideally, this would be a random website redirector. One that won't mark the agent as a bot, and ban it.
+  '"about:blank"',
+  # Note: ideally, the homepage would be a random website redirector.
+  #   One that won't mark the agent as a bot, and ban it.
+  #   (The defaults include a possibility of such a redirector.)
   webenv_path=we_p)
-
-# TODO: Make LDL have the option to swap the order of mixed dimensions (to put locality first). Test that it works for LDL's test.
-# TODO: Have the hyperparam `ldl_reverse_ops=False`.
-#   ...Wait, does LDL transpose correct dimensions?
 
 # TODO: Test that Void does put noise in the visualization.
 # TODO: Test that all maximizers work together.
