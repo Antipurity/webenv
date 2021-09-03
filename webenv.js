@@ -1944,7 +1944,7 @@ Exposes a function that allows web pages to rate the agent's performance. All sc
 This allows a different evaluation metric than loss, for comparing agents. (As long as people create web pages that call \`directScore\`.)
 
 Args:
-- \`hidden\`: if \`false\`, exposes 1 number to the agent at the beginning: the average score since the last frame, or \`NaN\`. The agent can maximize that number if it wants to. If hidden, agents must do self-supervised learning.
+- \`hidden\`: if \`false\`, exposes 1 number to the agent at the beginning: the average score since the last frame, or \`NaN\`. The agent can maximize that number if it wants to (be aware that this channel is easy to exploit). If hidden, agents must do self-supervised learning.
 - \`scores\` (for example, \`'scores.json'\`): the file to synchronize per-page scores with. \`webenv.init(...).score.ALL\` is the average score.
 - \`name\`: the name of the exposed-to-pages function.
 - \`interval\`: how often to sync scores to file & compute average score, in ms.

@@ -87,7 +87,7 @@ Exposes a function that allows web pages to rate the agent's performance. All sc
 This allows a different evaluation metric than loss, for comparing agents. (As long as people create web pages that call `directScore`.)
 
 Args:
-- `hidden`: if `false`, exposes 1 number to the agent at the beginning: the average score since the last frame, or `NaN`. The agent can maximize that number if it wants to. If hidden, agents must do self-supervised learning.
+- `hidden`: if `false`, exposes 1 number to the agent at the beginning: the average score since the last frame, or `NaN`. The agent can maximize that number if it wants to (be aware that this channel is easy to exploit). If hidden, agents must do self-supervised learning.
 - `scores` (for example, `'scores.json'`): the file to synchronize per-page scores with. `webenv.init(...).score.ALL` is the average score.
 - `name`: the name of the exposed-to-pages function.
 - `interval`: how often to sync scores to file & compute average score, in ms.
@@ -401,6 +401,37 @@ webenv.simultaneousSteps(n = 16)
 Overrides how many steps WebEnv is allowed to run at once (at most).
 
 Set this to `1` to fully synchronize on each step, which makes visualization nicer but introduces stalling.
+
+# Defaults
+
+```js
+webenv.defaults = [
+    webenv.stability(),
+    webenv.directLink(),
+    webenv.directScore(),
+    webenv.userAgent(), // WebEnv, no contact info
+    webenv.fetchSlice(),
+    webenv.webView(),
+    webenv.filter(null, 'cached'),
+    webenv.viewport(), // 640×480
+    webenv.const(),
+    webenv.loopback(),
+    webenv.frameTime(),
+    webenv.imageFovea(100, 5000, 1),
+    webenv.scrollBy(),
+    webenv.mouse({ absolute:false, relative:50 }),
+    webenv.keyboard(),
+    webenv.injectScript(webenv.injectScript.augmentations()),
+    webenv.interval(webenv.triggers.homepage), // Every minute, a random website
+    webenv.triggers(
+        [webenv.triggers.goBack, webenv.triggers.randomLink],
+        null,
+        { maxAtOnce:1, cooldown:3600 }),
+    'http://random.whatsmyip.org/', // Has anti-bot protection, so, unsuitable for ML; please contribute a better entry point.
+]
+```
+
+This defines a very simple environment for agents that have a reasonable execution time per step even with non-high-end Nvidia hardware.
 
 # Creating your own interfaces
 
