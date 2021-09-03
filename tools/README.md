@@ -2,7 +2,7 @@ This is the directory that contains dataset installers.
 
 Datasets are a very natural way to learn data, and test its comprehension. Just look at this:
 
-<p align=center>
+<p style="text-align:center">
     <img src="cifar100.png">
     <img src="cifar100-test.png">
 </p>

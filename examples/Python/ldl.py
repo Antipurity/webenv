@@ -43,6 +43,8 @@ class LinDense(torch.nn.Module):
     dims = math.ceil(math.log(max(ins, outs), n) - 1e-8)
     self.ins_dims = _dims_of(ins, n, dims)
     self.outs_dims = _dims_of(outs, n, dims)
+    self.expand = torch.nn.Unflatten(-1, self.ins_dims)
+    self.contract = torch.nn.Flatten(-len(self.ins_dims))
     if local_first:
       self.ins_dims = list(reversed(self.ins_dims))
       self.outs_dims = list(reversed(self.outs_dims))
@@ -58,8 +60,6 @@ class LinDense(torch.nn.Module):
     for i in range(dims):
       if Nonlinearity is not None and i > 0:
         self.nonlinearities[i] = Nonlinearity(self.ins_dims[i])
-    self.expand = torch.nn.Unflatten(-1, self.ins_dims)
-    self.contract = torch.nn.Flatten(-len(self.ins_dims))
     got_ins = np.prod(self.ins_dims)
     self.pre_pad = None if got_ins == ins else torch.nn.ConstantPad1d((0, got_ins - ins), 0)
     got_outs = np.prod(self.outs_dims)

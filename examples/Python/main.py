@@ -18,7 +18,8 @@ hparams = {
   'N_state': 1 * 2**16, # Cost is linearithmic in this.
   'unroll_length': 2, # Every `1/UL`th step will have `2*UL`× more cost.
   'synth_grad': True, # Unless UL is thousands, this gradient-prediction is a good idea.
-  'merge_obs': True, # Whether inputs override state in-place (preventing gradient flow), or concatenated (with higher runtime cost).
+  'merge_obs': 'concat', # 'add', 'merge', 'concat'.
+  #   'add' makes predictions too big, 'merge' cuts off gradient, 'concat' is expensive.
 
   'actions': 1, # Cost is linear in this. No planning, only one-time action enumeration.
   'time_horizon': .0, # Without planning, this has to be non-zero, to transfer reward from future to past.
@@ -32,7 +33,7 @@ hparams = {
   'ldl_local_first': True,
 
   'console': True,
-  'tensorboard': False,
+  'tensorboard': True,
 }
 relevant_hparams = ['lr', 'gradmax', 'unroll_length'] # To be included in the run's name.
 
@@ -54,20 +55,24 @@ def param_size(ps):
 
 
 N = hparams['N_state']
-N_ins = N if hparams['merge_obs'] else 2*N
+N_ins = N if hparams['merge_obs'] != 'concat' else 2*N
 dev = 'cuda'
 ns = ldl.NormSequential
 nl = getattr(torch.nn, hparams['nonlinearity'])
 lf = hparams['ldl_local_first']
 layers = hparams['layers']
-synth_grad = ns(N, N, ldl.LinDense, layer_count=layers, Nonlinearity=nl, local_first=lf, device=dev) if hparams['synth_grad'] else None
+def full_at_the_end(ins, outs, *args, **kwargs):
+  if outs == 1:
+    return torch.nn.Linear(ins, outs, device = kwargs['device'])
+  return ldl.LinDense(ins, outs, *args, **kwargs)
+synth_grad = ns(N, N, full_at_the_end, layer_count=layers, Nonlinearity=nl, local_first=lf, device=dev) if hparams['synth_grad'] else None
 actions = hparams['actions']
-transition = ldl.MGU(ns, N_ins, N, ldl.LinDense, layer_count=layers, Nonlinearity=nl, local_first=lf, device=dev, example_batch_shape=(1,actions) if actions>1 else (2,), unique_dims=(actions,) if actions>1 else ())
+transition = ldl.MGU(ns, N_ins, N, full_at_the_end, layer_count=layers, Nonlinearity=nl, local_first=lf, device=dev, example_batch_shape=(1,actions) if actions>1 else (2,), unique_dims=(actions,) if actions>1 else ())
 from reinforcement_learning import GradMaximize, Maximize, Return, expand_actions
-return_model = Return(ns(N, 1, ldl.LinDense, layer_count=layers, Nonlinearity=nl, local_first=lf, device=dev), time_horizon=hparams['time_horizon']) if hparams['time_horizon']>0 else None
+return_model = Return(ns(N, 1, full_at_the_end, layer_count=layers, Nonlinearity=nl, local_first=lf, device=dev), time_horizon=hparams['time_horizon']) if hparams['time_horizon']>0 else None
 if actions > 1:
   transition = Maximize(transition, return_model, action_info=expand_actions, N=actions)
-max_model = GradMaximize(ns(N, 1, ldl.LinDense, layer_count=layers, Nonlinearity=nl, local_first=lf, device=dev), strength=hparams['gradmax'], pred_gradient=hparams['gradmax_pred_gradient']) if hparams['gradmax']>0 else None
+max_model = GradMaximize(ns(N, 1, full_at_the_end, layer_count=layers, Nonlinearity=nl, local_first=lf, device=dev), strength=hparams['gradmax'], pred_gradient=hparams['gradmax_pred_gradient']) if hparams['gradmax']>0 else None
 optim = getattr(torch.optim, hparams['optim'])([
   { 'params':[*params(transition, return_model, max_model)] },
   { 'params':[*params(synth_grad)], 'lr':hparams['synth_grad_lr'] },
@@ -86,7 +91,7 @@ if hparams['tensorboard']:
 i = 0
 def loss(pred, got, obs, act_len):
   global i;  i += 1
-  if not hparams['merge_obs']: # Un-concat if needed.
+  if hparams['merge_obs'] == 'concat': # Un-concat if needed.
     got = got[pred.shape[-1]:].detach()
     pred = pred + recurrent.webenv_merge(torch.zeros_like(pred), obs, 0.)
   L = obs_loss(pred, got) / hparams['loss_divisor']
@@ -109,14 +114,14 @@ def loss(pred, got, obs, act_len):
       act_only = pred
     L = L + max_model(act_only, Return.detach())
   return L
-def output(state, obs, act_len): # Add previous frame to next.
-  if not hparams['merge_obs']:
+def output(state, obs, act_len): # Add previous frame to next, if needed.
+  if hparams['merge_obs'] == 'concat':
     state = state + recurrent.webenv_merge(state, obs, 0.)
   return recurrent.webenv_slice(state, obs, act_len)
 agent = recurrent.recurrent(
   (N,), loss=loss, optimizer=optim,
   unroll_length=hparams['unroll_length'], synth_grad=synth_grad,
-  input = recurrent.webenv_merge if hparams['merge_obs'] else recurrent.webenv_concat,
+  input = getattr(recurrent, 'webenv_' + hparams['merge_obs']),
   output=output,
   device=dev,
 )(transition)
@@ -127,14 +132,13 @@ we_p = os.path.join(os.path.dirname(os.path.realpath(__file__)), '..', '..', 'we
 webenv.webenv(
   agent,
   'we.defaults',
-  '"about:blank"',
+  '"https://www.google.com/"',
   # Note: ideally, the homepage would be a random website redirector.
   #   One that won't mark the agent as a bot, and ban it.
   #   (The defaults include a possibility of such a redirector.)
   webenv_path=we_p)
 
-# TODO: Catch a screenshot. Have examples/README.md, describing this.
-#   ...Is it possible to get a random website generator, so that we don't just predict a random page or a blank page? Maybe use Google again?
+# TODO: Catch another screenshot. Have examples/README.md, describing this.
 
 # TODO: Update AGENTS.md, removing learned loss, adding misprediction-maximization (curiosity-driven RL; to go from control-by-the-world to free-will, maximize autoencoder loss instead of prediction loss, which puts more emphasis on the more-voluminous thing, which is the internal state) to balance the convergence of prediction on past states, for bootstrapping.
 #   ...If this is the only thing left, then does this mean that we won't be continuing here? (Apart from potentially making `directScore` directly-optimizable.)

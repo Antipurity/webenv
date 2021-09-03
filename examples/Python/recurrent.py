@@ -5,6 +5,12 @@ import numpy as np
 
 
 
+def webenv_add(state, obs, pad_with=np.nan):
+  """
+  Adds WebEnv observations to internal state, properly ignoring holes (NaNs).
+  """
+  padded = torch.nn.functional.pad(obs, (0, state.shape[-1] - obs.shape[-1]), value=pad_with)
+  return torch.where(torch.isnan(padded), state, state + padded)
 def webenv_merge(state, obs, pad_with=np.nan):
   """
   Merges WebEnv observations into internal state, properly ignoring holes (NaNs).
