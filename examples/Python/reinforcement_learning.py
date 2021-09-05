@@ -59,88 +59,6 @@ class GradMaximize(torch.nn.Module):
 
 
 
-def add_one_hot_to_actions(x, N=None):
-  """Puts a one-hot embedding in the middle of the state tensor."""
-  # This is so long-winded.
-  if N is None:
-    return x
-  with torch.no_grad():
-    inds = torch.arange(N, device=x.device)
-    act = torch.nn.functional.one_hot(inds, N)
-    while len(act.shape) < len(x.shape)+1:
-      act = act.unsqueeze(-1)
-    mask = torch.ones_like(act)
-    pads = [(x.shape[i] - N + j) // 2 for i in range(len(x.shape)) for j in range(2)]
-    pads = [*reversed(pads),0,0] # Yeah, this interface makes perfect sense.
-    act = torch.nn.functional.pad(act, pads)
-    mask = torch.nn.functional.pad(mask, pads)
-  return x * mask + act
-class Stacked(torch.nn.Module):
-  """
-  Stacks results of models, CPU-side.
-  Args:
-    `N`: how many times to stack.
-    `Model`: how to construct model/s.
-    Others: args to `Model`.
-  """
-  def __init__(self, N, Model, *args, **kwargs):
-    super(Stacked, self).__init__()
-    self.models = torch.nn.ModuleList([Model(*args, **kwargs) for i in range(N)])
-  def forward(self, x):
-    # torch.nn.Linear did not bother with an option to not share weights, so, slow CPU-batching.
-    return torch.stack([self.models[i](x) for i in range(len(self.models))])
-def actions_as_is(x, N=None):
-  """Do not change actions.
-  The model must stack computations manually (such as via `Stacked` in this module)."""
-  return x
-def expand_actions(x, N=None):
-  """
-  Repeats state N times, inserting `(1,N)` at the start of dimensions.
-  The model must have different weights for each action.
-  """
-  if N is None:
-    return x.squeeze(0)
-  x = x.unsqueeze(0)
-  x = x.unsqueeze(0)
-  return x.expand(1, N, *x.shape[2:])
-
-
-
-class Maximize(torch.nn.Module):
-  """
-  Makes the model maximize a metric.
-  Presumably, the actual action will be encoded in the model's result.
-
-  Constructor args:
-    `model`: the model in question.
-    `max_over`: the metric, from state to a number. Learn it separately.
-    `action_info=...`: given state and `N`, creates `N` distinct actions in a tensor. Puts a one-hot embedding into state by default.
-    (Options, in this module: `expand_actions` (needs N× more memory, and model support), `actions_as_is`+`Stacked` (needs N× more memory), `add_one_hot_to_actions` (not diverse).)
-    `N=2`: how many actions to consider each time. Compute and memory requirements scale linearly with this, but so does performance.
-  
-  Forward-pass args: `x`, `random_action=False`
-  """
-  def __init__(self, model, max_over, action_info=add_one_hot_to_actions, N=2):
-    super(Maximize, self).__init__()
-    self.model = model
-    self.max_over = max_over
-    self.action_info = action_info
-    self.N = N
-  def forward(self, x, random_action=False):
-    # Tile and transition and argmax and select.
-    t = self.action_info(x, self.N)
-    t = self.model(t)
-    with torch.no_grad():
-      if not random_action:
-        max_metric = self.max_over(t).argmax(0).expand(*t.shape)
-      else:
-        max_metric = torch.randint(0, self.N, (), device=t.device).expand(*t.shape)
-    t = torch.gather(t, 0, max_metric)
-    t = self.action_info(t)
-    return t[0,...]
-
-
-
 class Return(torch.nn.Module):
   """
   Turns an instantaneous reward into its future return.
@@ -205,7 +123,59 @@ if __name__ == '__main__':
         optim.step(), optim.zero_grad()
       scores.append(reward(out).sum().detach())
     print('GradMax', 'score mean', str(np.mean(scores)), 'std-dev', str(np.std(scores)))
-  # Test Maximize.
+
+
+
+  # Test Maximize for comparison: discrete-actions RL.
+  class Stacked(torch.nn.Module):
+    """
+    Stacks results of models, CPU-side.
+    Args:
+      `N`: how many times to stack.
+      `Model`: how to construct model/s.
+      Others: args to `Model`.
+    """
+    def __init__(self, N, Model, *args, **kwargs):
+      super(Stacked, self).__init__()
+      self.models = torch.nn.ModuleList([Model(*args, **kwargs) for i in range(N)])
+    def forward(self, x):
+      # torch.nn.Linear did not bother with an option to not share weights, so, slow CPU-batching.
+      return torch.stack([self.models[i](x) for i in range(len(self.models))])
+  def actions_as_is(x, N=None):
+    """Do not change actions.
+    The model must stack computations manually (such as via `Stacked` in this module)."""
+    return x
+  class Maximize(torch.nn.Module):
+    """
+    Makes the model maximize a metric.
+    Presumably, the actual action will be encoded in the model's result.
+
+    Constructor args:
+      `model`: the model in question.
+      `max_over`: the metric, from state to a number. Learn it separately.
+      `action_info=...`: given state and `N`, creates `N` distinct actions in a tensor. Puts a one-hot embedding into state by default. (Options, in this module: `actions_as_is`+`Stacked` (needs N× more memory).)
+      `N=2`: how many actions to consider each time. Compute and memory requirements scale linearly with this, but so does performance.
+    
+    Forward-pass args: `x`, `random_action=False`
+    """
+    def __init__(self, model, max_over, action_info=actions_as_is, N=2):
+      super(Maximize, self).__init__()
+      self.model = model
+      self.max_over = max_over
+      self.action_info = action_info
+      self.N = N
+    def forward(self, x, random_action=False):
+      # Tile and transition and argmax and select.
+      t = self.action_info(x, self.N)
+      t = self.model(t)
+      with torch.no_grad():
+        if not random_action:
+          max_metric = self.max_over(t).argmax(0).expand(*t.shape)
+        else:
+          max_metric = torch.randint(0, self.N, (), device=t.device).expand(*t.shape)
+      t = torch.gather(t, 0, max_metric)
+      t = self.action_info(t)
+      return t[0,...]
   max_N = ins
   for N in range(1, max_N+1):
     scores = []

@@ -321,9 +321,18 @@ To write new interfaces, look at the pre-existing interfaces.
                 await b.close()
             }
 
-            // Open the new browser.
             const ext = require('path').join(__dirname, 'extension')
             const dataDir = require('path').join(__dirname, 'puppeteer-chrome-profile')
+
+            // Remove folders that may be problematic for long-term stability. (Things never just work.)
+            const fs = require('fs')
+            function rm(...p) {
+                const path = require('path').join(dataDir, ...p)
+                return new Promise(then => fs.rm(path, { force:true, recursive:true }, then))
+            }
+            await Promise.all([rm('Crashpad', 'reports'), rm('BrowserMetrics'), rm('ShaderCache')])
+
+            // Open the new browser.
             const _browser = res._browser = await puppeteer.launch({
                 headless:false,
                 defaultViewport:null,

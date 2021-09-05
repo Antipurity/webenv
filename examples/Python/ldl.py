@@ -59,7 +59,7 @@ class LinDense(torch.nn.Module):
     self.weight_stdev = weight_stdev
     for i in range(dims):
       if Nonlinearity is not None and i > 0:
-        self.nonlinearities[i] = Nonlinearity(self.ins_dims[i])
+        self.nonlinearities[i] = Nonlinearity()
     got_ins = np.prod(self.ins_dims)
     self.pre_pad = None if got_ins == ins else torch.nn.ConstantPad1d((0, got_ins - ins), 0)
     got_outs = np.prod(self.outs_dims)
@@ -142,7 +142,7 @@ class NormSequential(torch.nn.Module):
     super(NormSequential, self).__init__()
     self.skip_connections = skip_connections
     self.ins_equal_outs = ins == outs
-    self.layers = [Layer(ins, ins if i < layer_count-1 else outs, device=device, **kwargs) for i in range(layer_count)]
+    self.layers = [Layer(ins, ins if i < layer_count-1 else outs, Nonlinearity=Nonlinearity, skip_connections=skip_connections, device=device, **kwargs) for i in range(layer_count)]
     self.nonlinearities = [Nonlinearity() for i in range(layer_count-1)] if Nonlinearity is not None else [None] * (layer_count-1)
     self.mult = [1.] * layer_count
     # Normalize. (Hacky: divide each layer's params by standard deviation, to make it 1.)
@@ -175,6 +175,7 @@ class NormSequential(torch.nn.Module):
       if self.skip_connections and (self.ins_equal_outs or i < len(self.layers)-1):
         y = y + x
       x = y
+    x = torch.clamp(x, -10, 10) # Just in case.
     return x
   def parameters(self):
     for m in self.layers:

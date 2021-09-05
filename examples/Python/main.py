@@ -12,7 +12,7 @@ hparams = {
   'optim': 'Adam', # https://pytorch.org/docs/stable/optim.html
 
   'synth_grad_lr': .01,
-  'obs_loss': 'L1', # Or 'L2'
+  'obs_loss': 'L2', # 'L1', 'L2'
   'loss_divisor': 1, # A very rough estimate of the input count. Or 1.
 
   'N_state': 1 * 2**16, # Cost is linearithmic in this.
@@ -21,10 +21,9 @@ hparams = {
   'merge_obs': 'concat', # 'add', 'merge', 'concat'.
   #   'add' makes predictions too big, 'merge' cuts off gradient, 'concat' is expensive.
 
-  'actions': 1, # Cost is linear in this. No planning, only one-time action enumeration.
   'time_horizon': .0, # Without planning, this has to be non-zero, to transfer reward from future to past.
 
-  'gradmax': 1., # Multiplier of planning via gradient.
+  'gradmax': 0., # Multiplier of planning via gradient.
   'gradmax_only_actions': True, # Where GradMax's gradient goes: only actions, or the whole state.
   'gradmax_pred_gradient': False, # Whether GradMax's gradient to state includes reward misprediction.
 
@@ -36,6 +35,8 @@ hparams = {
   'tensorboard': True,
 }
 relevant_hparams = ['lr', 'gradmax', 'unroll_length'] # To be included in the run's name.
+
+add_input_on_concat = False # Output can be boring if input is added to prediction.
 
 
 
@@ -66,12 +67,9 @@ def full_at_the_end(ins, outs, *args, **kwargs):
     return torch.nn.Linear(ins, outs, device = kwargs['device'])
   return ldl.LinDense(ins, outs, *args, **kwargs)
 synth_grad = ns(N, N, full_at_the_end, layer_count=layers, Nonlinearity=nl, local_first=lf, device=dev) if hparams['synth_grad'] else None
-actions = hparams['actions']
-transition = ldl.MGU(ns, N_ins, N, full_at_the_end, layer_count=layers, Nonlinearity=nl, local_first=lf, device=dev, example_batch_shape=(1,actions) if actions>1 else (2,), unique_dims=(actions,) if actions>1 else ())
-from reinforcement_learning import GradMaximize, Maximize, Return, expand_actions
+transition = ldl.MGU(ns, N_ins, N, full_at_the_end, layer_count=layers, Nonlinearity=nl, local_first=lf, device=dev, example_batch_shape=(2,), unique_dims=())
+from reinforcement_learning import GradMaximize, Return
 return_model = Return(ns(N, 1, full_at_the_end, layer_count=layers, Nonlinearity=nl, local_first=lf, device=dev), time_horizon=hparams['time_horizon']) if hparams['time_horizon']>0 else None
-if actions > 1:
-  transition = Maximize(transition, return_model, action_info=expand_actions, N=actions)
 max_model = GradMaximize(ns(N, 1, full_at_the_end, layer_count=layers, Nonlinearity=nl, local_first=lf, device=dev), strength=hparams['gradmax'], pred_gradient=hparams['gradmax_pred_gradient']) if hparams['gradmax']>0 else None
 optim = getattr(torch.optim, hparams['optim'])([
   { 'params':[*params(transition, return_model, max_model)] },
@@ -93,7 +91,8 @@ def loss(pred, got, obs, act_len):
   global i;  i += 1
   if hparams['merge_obs'] == 'concat': # Un-concat if needed.
     got = got[pred.shape[-1]:].detach()
-    pred = pred + recurrent.webenv_merge(torch.zeros_like(pred), obs, 0.)
+    if add_input_on_concat:
+      pred = pred + recurrent.webenv_merge(torch.zeros_like(pred), obs, 0.)
   L = obs_loss(pred, got) / hparams['loss_divisor']
   if hparams['console']:
     print(L.cpu().detach().numpy())
@@ -115,7 +114,7 @@ def loss(pred, got, obs, act_len):
     L = L + max_model(act_only, Return.detach())
   return L
 def output(state, obs, act_len): # Add previous frame to next, if needed.
-  if hparams['merge_obs'] == 'concat':
+  if hparams['merge_obs'] == 'concat' and add_input_on_concat:
     state = state + recurrent.webenv_merge(state, obs, 0.)
   return recurrent.webenv_slice(state, obs, act_len)
 agent = recurrent.recurrent(
@@ -138,8 +137,8 @@ webenv.webenv(
   #   (The defaults include a possibility of such a redirector.)
   webenv_path=we_p)
 
-# TODO: Catch another screenshot. Have examples/README.md, describing this.
+# TODO: Make webenv.js's triggers much more sensitive by default. (Because they aren't getting tripped right now.) (Also, remove the keyboard from defaults.)
+# TODO: Catch another screenshot. In examples/README.md, describe this.
 
 # TODO: Update AGENTS.md, removing learned loss, adding misprediction-maximization (curiosity-driven RL; to go from control-by-the-world to free-will, maximize autoencoder loss instead of prediction loss, which puts more emphasis on the more-voluminous thing, which is the internal state) to balance the convergence of prediction on past states, for bootstrapping.
-#   ...If this is the only thing left, then does this mean that we won't be continuing here? (Apart from potentially making `directScore` directly-optimizable.)
 #   "AGI does include literally everything under its umbrella, so, to not get lost, an extremely keen eye for redundancies is required. Here, we outline a minimal core that can learn everything. See [Examples](../examples/README.md) for implementations."

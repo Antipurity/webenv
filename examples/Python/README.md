@@ -1,5 +1,41 @@
-TODO: Describe what files do.
+A PyTorch implementation of an agent.
 
-TODO: Have a screenshot to put here. And put it.
+## Structure
 
-TODO: Have a mini-tutorial (need to have Python installed, and PyTorch, and TensorBoard, and then launch main.py, and to stop it, Ctrl+C, exceptions here are normal but not during runtime).
+- `webenv.py`: a Python bridge to `webenv.js`.
+
+- `ldl.py`: linearithmic (time and space) dense layers. (Factorized, for handling big inputs & outputs with neither quadratic scaling nor assumptions about structure.)
+
+- `reinforcement_learning.py`: maximization code, for non-prediction goals. (Mostly by modeling the reward and maximizing the model's output.)
+
+- `recurrent.py`: RNN training. (Backpropagation-through-time and synthetic gradient.)
+
+- `main.py`: putting it all together.
+
+Unimplemented: save/load; multiple agents with the same model (which would reduce variance and make learning easier). Also opinions: sparsity (to make [low-dimensional representations](https://arxiv.org/abs/1906.10720) high-dimensional by combining many); [Transformers](https://arxiv.org/abs/2103.03206); non-loss [exploration reward](https://arxiv.org/abs/2101.09458) to [optimize](http://proceedings.mlr.press/v32/silver14.pdf); experience replay; [GAN losses](https://phillipi.github.io/pix2pix/), [BYOL variants](https://openreview.net/pdf?id=bgQek2O63w); literally anything else (use your imagination and/or ML expertise).
+
+## Tutorial
+
+If you ever woke up in the middle of the night to think, "damn, I **need** to know how to run this PyTorch example!" — well, you are in luck!
+
+First, [make sure to have Python](https://www.google.com/search?q=install+python) (90 MB) and [PyTorch](https://www.google.com/search?q=install+pytorch) (1.2 GB) installed.
+
+Optionally, install [TensorBoard](https://www.google.com/search?q=install+tensorboard), to be able to create and view those loss plots. Pretty bad software though, would not recommend.
+
+Then, launch `main.py` in this directory:
+
+```bash
+python main.py
+```
+
+To stop it, press Ctrl+C, or pour lava on your computer. On stopping, exceptions are normal, though not during runtime (if there are, you are seeing a bug that we have not figured out a solution to).
+
+If you want, modify hyperparameters in `main.py`, and/or copy this folder to another place and modify `webenv_path` at the bottom of `main.py` appropriately.
+
+This marks the end of this tutorial.
+
+## Results
+
+Video prediction with agency is hard, but possible.
+
+TODO: Put a screenshot here. ("Right-side are predictions; it's normal for them to be delayed.")
