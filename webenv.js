@@ -312,7 +312,7 @@ To write new interfaces, look at the pre-existing interfaces.
         return await func(arg)
     }
     async function relaunch(res) {
-        await stall;  let then;  stall = new Promise(t => then = t)
+        let then, prevStall = stall;  stall = new Promise(t => then = t);  await prevStall
         try {
             // Close the previous browser.
             if (res._browser) {
@@ -322,7 +322,8 @@ To write new interfaces, look at the pre-existing interfaces.
             }
 
             const ext = require('path').join(__dirname, 'extension')
-            const dataDir = require('path').join(__dirname, 'puppeteer-chrome-profile')
+            const profId = Math.random() * 16 | 0 // In case Chromiums overlap.
+            const dataDir = require('path').join(__dirname, 'puppeteer-chrome-profile', 'p'+profId)
 
             // Remove folders that may be problematic for long-term stability. (Things never just work.)
             const fs = require('fs')
@@ -409,9 +410,9 @@ To write new interfaces, look at the pre-existing interfaces.
             } finally {
                 // Unlink the agents that do not want to live on.
                 if (unlink.size) {
-                    await stall, stall = res.relink(res._all.filter(o => !unlink.has(o)))
+                    let prevStall = stall;  stall = res.relink(res._all.filter(o => !unlink.has(o)));  await prevStall
                     unlink.clear()
-                    await stall, stall = null
+                    prevStall = stall;  stall = null;  await prevStall
                 }
             }
 
