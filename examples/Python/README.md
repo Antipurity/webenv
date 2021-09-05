@@ -18,7 +18,7 @@ Unimplemented: save/load; multiple agents with the same model (which would reduc
 
 If you ever woke up in the middle of the night to think, "damn, I **need** to know how to run this PyTorch example!" — well, you are in luck!
 
-First, [make sure to have Python](https://www.google.com/search?q=install+python) (90 MB) and [PyTorch](https://www.google.com/search?q=install+pytorch) (1.2 GB) installed.
+First, make sure to have [Python](https://www.google.com/search?q=install+python) (90 MB) and [PyTorch](https://www.google.com/search?q=install+pytorch) (1.2 GB) installed.
 
 Optionally, install [TensorBoard](https://www.google.com/search?q=install+tensorboard), to be able to create and view those loss plots. Pretty bad software though, would not recommend.
 
@@ -30,7 +30,7 @@ python main.py
 
 To stop it, press Ctrl+C, or pour lava on your computer. On stopping, exceptions are normal, though not during runtime (if there are, you are seeing a bug that we have not figured out a solution to).
 
-If you want, modify hyperparameters in `main.py`, and/or copy this folder to another place and modify `webenv_path` at the bottom of `main.py` appropriately.
+If you want, modify hyperparameters in `main.py` (such as `tensorboard`), and/or copy this folder to another place and modify `webenv_path` at the bottom of `main.py` appropriately.
 
 This marks the end of this tutorial.
 
@@ -39,3 +39,18 @@ This marks the end of this tutorial.
 Video prediction with agency is hard, but possible.
 
 TODO: Put a screenshot here. ("Right-side are predictions; it's normal for them to be delayed.")
+
+## Bonus
+
+A comparison between vanilla dense layers and linearithmic dense layers, which should be enough to explain everything:
+
+<p style="text-align:center">
+  <p style="margin:0 auto; display:table">
+    <img width=300 src="images/dl_8.png">
+    <img width=300 src="images/ldl_8.png">
+  </p>
+  <p style="margin:0 auto; display:table">
+    <img width=300 src="images/dl_64.png">
+    <img width=300 src="images/ldl_64.png">
+  </p>
+</p>
