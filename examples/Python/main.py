@@ -137,12 +137,5 @@ webenv.webenv(
   #   (The defaults include a possibility of such a redirector.)
   webenv_path=we_p)
 
-# TODO: Remark on DDPG in GradMaximize. (Also, for simplicity, remove discrete RL even from actions. Also, mention that continuous RL can give gradient to the whole state, not just actions.)
-
-# TODO: Make webenv.js's triggers much more sensitive by default. (Because they aren't getting tripped right now.) (Also, remove the keyboard from defaults.)
-# TODO: 
 # TODO: Re-run this gradmax=0 run, because browser-launching was failing so hard.
 # TODO: Catch another screenshot. In examples/README.md, describe this.
-
-# TODO: Update AGENTS.md, removing learned loss, adding misprediction-maximization (curiosity-driven RL; to go from control-by-the-world to free-will, maximize autoencoder loss instead of prediction loss, which puts more emphasis on the more-voluminous thing, which is the internal state) to balance the convergence of prediction on past states, for bootstrapping.
-#   "AGI does include literally everything under its umbrella, so, to not get lost, an extremely keen eye for redundancies is required. Here, we outline a minimal core that can learn everything. See [Examples](../examples/README.md) for implementations."

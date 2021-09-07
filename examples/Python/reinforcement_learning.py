@@ -15,6 +15,8 @@ class GradMaximize(torch.nn.Module):
   """
   Gradient-based reward maximization.
 
+  In ML terms, this implements (simplified) Deep Deterministic Policy Gradients (which is an oxymoron): https://spinningup.openai.com/en/latest/algorithms/ddpg.html
+
   Optimizes via an adversarial game: given the internal model `rew`, `rew(state)` is made equal to actual reward (without gradient to `state`), whereas `state` maximizes `rew(state)` (without gradient to `rew`).
 
   Constructor args:
@@ -123,75 +125,3 @@ if __name__ == '__main__':
         optim.step(), optim.zero_grad()
       scores.append(reward(out).sum().detach())
     print('GradMax', 'score mean', str(np.mean(scores)), 'std-dev', str(np.std(scores)))
-
-
-
-  # Test Maximize for comparison: discrete-actions RL.
-  class Stacked(torch.nn.Module):
-    """
-    Stacks results of models, CPU-side.
-    Args:
-      `N`: how many times to stack.
-      `Model`: how to construct model/s.
-      Others: args to `Model`.
-    """
-    def __init__(self, N, Model, *args, **kwargs):
-      super(Stacked, self).__init__()
-      self.models = torch.nn.ModuleList([Model(*args, **kwargs) for i in range(N)])
-    def forward(self, x):
-      # torch.nn.Linear did not bother with an option to not share weights, so, slow CPU-batching.
-      return torch.stack([self.models[i](x) for i in range(len(self.models))])
-  def actions_as_is(x, N=None):
-    """Do not change actions.
-    The model must stack computations manually (such as via `Stacked` in this module)."""
-    return x
-  class Maximize(torch.nn.Module):
-    """
-    Makes the model maximize a metric.
-    Presumably, the actual action will be encoded in the model's result.
-
-    Constructor args:
-      `model`: the model in question.
-      `max_over`: the metric, from state to a number. Learn it separately.
-      `action_info=...`: given state and `N`, creates `N` distinct actions in a tensor. Puts a one-hot embedding into state by default. (Options, in this module: `actions_as_is`+`Stacked` (needs N× more memory).)
-      `N=2`: how many actions to consider each time. Compute and memory requirements scale linearly with this, but so does performance.
-    
-    Forward-pass args: `x`, `random_action=False`
-    """
-    def __init__(self, model, max_over, action_info=actions_as_is, N=2):
-      super(Maximize, self).__init__()
-      self.model = model
-      self.max_over = max_over
-      self.action_info = action_info
-      self.N = N
-    def forward(self, x, random_action=False):
-      # Tile and transition and argmax and select.
-      t = self.action_info(x, self.N)
-      t = self.model(t)
-      with torch.no_grad():
-        if not random_action:
-          max_metric = self.max_over(t).argmax(0).expand(*t.shape)
-        else:
-          max_metric = torch.randint(0, self.N, (), device=t.device).expand(*t.shape)
-      t = torch.gather(t, 0, max_metric)
-      t = self.action_info(t)
-      return t[0,...]
-  max_N = ins
-  for N in range(1, max_N+1):
-    scores = []
-    for tries in range(100):
-      model = Stacked(N, torch.nn.Linear, ins, ins, bias=False)
-      return_model = torch.nn.Linear(ins, 1, bias=False)
-      ret = Return(return_model, time_horizon=0.)
-      m = Maximize(model, ret, N=N, action_info=actions_as_is)
-      optim = torch.optim.Adam([*m.parameters()], lr=.01)
-      input = torch.randn(ins)
-      for iter in range(100):
-        # Get more accurate data before commiting. (Only helps a bit.)
-        out = m(input, random_action = True if iter < 50 else False)
-        # Detach `out` to make return-prediction not interact with the `model`.
-        loss = ret.reward(out.detach(), reward(out))[1]
-        loss.backward()
-        optim.step(), optim.zero_grad()
-      scores.append(reward(out).sum().detach())
-    print('N', N, 'score mean', str(np.mean(scores)), 'std-dev', str(np.std(scores)))

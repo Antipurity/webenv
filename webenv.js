@@ -1298,14 +1298,14 @@ Runs a func on an interval, with page and env as args (for example, use \`webenv
 
 
 
-exports.triggers = docs(`\`webenv.triggers([...start], [...stop], { threshold=.95, resetOnNewPage=true, maxAtOnce=0, cooldown=0, priority=0 })\`
+exports.triggers = docs(`\`webenv.triggers([...start], [...stop], { threshold=.5, resetOnNewPage=true, maxAtOnce=0, cooldown=0, priority=0 })\`
 Exposes a group of triggers, such as keys on a keyboard.
 For example: \`webenv.triggers([page => page.goto('https://www.youtube.com/watch?v=dQw4w9WgXcQ')], null, { maxAtOnce:1, cooldown:600 })\` (the cooldown is in frames)
 `, function(start, stop, opt) {
     if (!Array.isArray(start) || stop && (!Array.isArray(stop) || start.length !== stop.length))
         throw new Error('Bad start/end triggers')
     const triggers = start.length
-    const threshold = get(opt, 'threshold', .95)
+    const threshold = get(opt, 'threshold', .5)
     const resetOnNewPage = get(opt, 'resetOnNewPage', true)
     const maxAtOnce = get(opt, 'maxAtOnce', 0)
     const cooldown = get(opt, 'cooldown', 0)

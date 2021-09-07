@@ -1,4 +1,4 @@
-The term "AGI" includes literally everything under its umbrella, so to not get lost in infinite possibilities, an extremely keen sense of redundancies is required. Here, we outline the minimal AGI solution.
+The term "AGI" includes literally everything under its umbrella, so to not get lost in infinite possibilities, an extremely keen sense of redundancies is required. Here, we outline the minimal AGI solution; see [Examples](../examples/README.md) for implementations.
 
 ## Problem definition
 
@@ -88,7 +88,7 @@ Furthermore, remember that your agents are only as secure as the hardware+softwa
 
 If "integrated with anything, can represent anything, can learn anything, and is as efficient as it can be" is not enough for your conception of AGI, then you are probably overthinking it. Get a bigger computer, implement your conception, work out the kinks and redundancies, and you will probably arrive at equivalent functionality.
 
-Yes, get a bigger supercomputer.
+Yes, get a bigger supercomputer, in addition to an AGI-as-a-service platform.
 
 If only I was more powerful.
 

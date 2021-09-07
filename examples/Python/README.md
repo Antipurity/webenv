@@ -38,7 +38,7 @@ This marks the end of this tutorial.
 
 Video prediction with agency is hard, but possible.
 
-TODO: Put a screenshot here. ("Right-side are predictions; it's normal for them to be delayed.")
+TODO: Put a screenshot here. ("Mouse & keyboard were disabled." "Right-side are predictions; it's normal for them to be delayed." "The orange line is with an exploration bonus; the red line is acting via a simple slice of internal state. As you can see, exploration is broken.")
 
 ## Bonus
 

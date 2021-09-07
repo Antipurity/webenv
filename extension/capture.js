@@ -101,12 +101,13 @@ function updateObservers(obsers, width, height) {
                 mandatory:{ maxWidth:width, maxHeight:height },
             },
         }
+        // chrome.tabCapture.captureOffscreenTab is an interesting proposition, but, it's funnier to be able to interact with the agent's web-page.
         chrome.tabCapture.capture(opt, s => {
             if (s) {
                 stream = s
                 video.elem = document.createElement('video')
                 video.elem.srcObject = stream
-                video.elem.volume = 0
+                video.elem.volume = 0 // To not play audio to the human.
             } else throw stream = null, new Error('Stream capture failed; reason: ' + chrome.runtime.lastError.message)
         })
     }

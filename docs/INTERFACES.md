@@ -233,7 +233,7 @@ Periodically runs a function, such as `webenv.triggers.homepage` (which is parti
 
 ```js
 webenv.triggers([...start], [...stop], {
-  threshold=.95, resetOnNewPage=true, maxAtOnce=0, cooldown=0, priority=0
+  threshold=.5, resetOnNewPage=true, maxAtOnce=0, cooldown=0, priority=0
 })
 ```
 
