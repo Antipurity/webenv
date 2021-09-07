@@ -15,7 +15,7 @@ class GradMaximize(torch.nn.Module):
   """
   Gradient-based reward maximization.
 
-  In ML terms, this implements (simplified) Deep Deterministic Policy Gradients (which is an oxymoron): https://spinningup.openai.com/en/latest/algorithms/ddpg.html
+  In ML terms, this implements (simplified) Deep Deterministic Policy Gradients: https://spinningup.openai.com/en/latest/algorithms/ddpg.html
 
   Optimizes via an adversarial game: given the internal model `rew`, `rew(state)` is made equal to actual reward (without gradient to `state`), whereas `state` maximizes `rew(state)` (without gradient to `rew`).
 

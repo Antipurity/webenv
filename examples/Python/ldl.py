@@ -239,7 +239,7 @@ if __name__ == '__main__':
   n = 16
   k = 4
   N = 16**k
-  ldl = LinDense(N, N, n=16, weight_stdev=2**-k, bias=False, Nonlinearity=lambda ins:torch.nn.Softsign())
+  ldl = LinDense(N, N, n=16, weight_stdev=2**-k, bias=False, Nonlinearity=torch.nn.Softsign)
   report_mean_stdev(ldl, 10, N, 'cuda')
 
   optim = torch.optim.Adam(ldl.parameters(), lr=.01)
