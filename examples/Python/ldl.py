@@ -15,6 +15,8 @@ class LinDense(torch.nn.Module):
   An implementation of linearithmic dense layers for PyTorch.
   These avoid quadratic mixing by reshaping into `n`-sized dimensions, and mixing along each separately.
 
+  This improves same-parameter capacity (45%→95% on CIFAR100 train-set accuracy, 18.5%→19% on test-set accuracy: https://github.com/antipurity/conceptual/blob/master/tgba/tgba.pdf), and allows big inputs/outputs.
+
   ==========
   Arguments:
   - `ins`: how many inputs there are.

@@ -57,4 +57,4 @@ Let us go through some AGI conceptions that I know, from both AI-experts and com
 - Physics (no stone unturned). Consider also the scalability of AGI: it has essentially no limits, so what happens if you scale it up to the size of the reachable universe? It models the universe, it becomes the universe. This could be the future, and this could have been the past, too. If there is a possibility of AGI-universe-takeover, then with infinite time, it might as well be a certainty. And since every AGI performs a computation that learns through its past, this could be a justification for both [computational physics](https://www.wolframphysics.org/) and [fine-tuning](https://en.wikipedia.org/wiki/Fine-tuned_universe).    
 (The motivation for WebEnv covers everything, from before the beginning of the world to after its end. Answers ooze from every crack. Hope for magic has been eradicated. If not, contribute.)
 
-Get a bigger computer, and computation is the only god that you will ever need.
+Get a bigger computer, and computation is the only god that you will ever need. (Not that this sentence means much more than "stuff happens".)
