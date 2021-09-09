@@ -133,9 +133,9 @@ webenv.webenv(
   'we.defaults',
   '"https://www.google.com/"',
   # Note: ideally, the homepage would be a random website redirector.
-  #   One that won't mark the agent as a bot, and ban it.
+  #   One that won't mark the agent as a bot, and then it.
   #   (The defaults include a possibility of such a redirector.)
   webenv_path=we_p)
 
-# TODO: Re-run this gradmax=0 run, because browser-launching was failing so hard.
-# TODO: Catch another screenshot. In examples/README.md, describe this.
+# TODO: Re-run this gradmax=0 run, because browser-launching was failing so hard. (Not that it's much better now, actually. Still, statistical confidence, I guess?)
+# TODO: Catch another screenshot (...then again, maybe we had enough). In examples/README.md, describe this.

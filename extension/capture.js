@@ -3,6 +3,7 @@
 
 const observers = [], obsBegin = 1
 let stream = null
+let prevInputs = null
 const video = {
     ctx2d:document.createElement('canvas').getContext('2d'),
     elem:null, // ImageCapture throws far too many errors for us.
@@ -116,6 +117,7 @@ function updateObservers(obsers, width, height) {
 async function readObservers(inputs) {
     // Read all observers, then await if needed, then return space-separated base64 observation.
     if (observers.length <= obsBegin) return ''
+    if (typeof gotObserverData == ''+void 0) return
     const tmp = _allocArray(0)
     audio.grabbed = false
     for (let i = obsBegin; i < observers.length; ++i) {
@@ -125,7 +127,8 @@ async function readObservers(inputs) {
     }
     for (let i = 0; i < tmp.length; ++i) await tmp[i]
     _allocArray(tmp)
-    return await toBase64(encodeInts(observers[0]))
+    if (typeof gotObserverData == ''+void 0) return
+    toBase64(encodeInts(observers[0])).then(gotObserverData)
 }
 function encodeInts(d) {
     // Encoding floats in JSON & base64 sure is slow, so send 2 bytes per value instead of 4.

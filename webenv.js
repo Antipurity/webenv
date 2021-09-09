@@ -59,6 +59,8 @@ To write new interfaces, look at the pre-existing interfaces.
         _lastStepEnd:performance.now(),
         _period:new ObsNumber(0), // Actual time between two consecutive steps.
         _stepsNow:0, // Throughput is maximized by lowballing time-between-steps, but without too many steps at once.
+        _startStep:0, _currentStep:0,
+        _ready:false,
         async read() {
             // It might happen that a new read might get scheduled before an old one is finished.
             //   For these cases, make sure to only not modify internal buffers between `await`s, only modify in synchronous code.
@@ -67,6 +69,8 @@ To write new interfaces, look at the pre-existing interfaces.
             if (!this.reads) return
             // Collect extension-side observer results, then webenv-side reads.
             try {
+                // Call observers. The extension will call `gotObserverData` for future frames.
+                //   (No `await`: the observer stream is a bit delayed, for lower latency.)
                 const obsInputs = _allocArray(this._observerIndices.length)
                 for (let i = 0; i < this._observerIndices.length; ++i) {
                     const inAll = this._observerIndices[i], o = this._all[inAll]
@@ -74,13 +78,8 @@ To write new interfaces, look at the pre-existing interfaces.
                         obsInputs[i] = o.observerInput(this._page, this._allState[inAll])
                     else obsInputs[i] = undefined
                 }
-                let b64
-                try { b64 = (await this._extPage.evaluate(ins => readObservers(ins), obsInputs)) }
-                catch (err) {}
-                const obsBuf = Buffer.from(b64 || '', 'base64') // Int16; decode into floats.
-                const obsLen = obsBuf.byteLength / Int16Array.BYTES_PER_ELEMENT | 0
-                decodeInts(new Int16Array(obsBuf.buffer, obsBuf.byteOffset, obsLen), this._obsFloats)
-                _allocArray(obsInputs)
+                if (this._extPage.isClosed()) return
+                this._extPage.evaluate(ins => void setTimeout(readObservers, 0, ins), obsInputs).catch(doNothing)
                 // Defer observations to interfaces.
                 const inds = this._obsInds, p = this._page, a = this._all, s = this._allState
                 const obs = this._obsSlice
@@ -209,6 +208,10 @@ To write new interfaces, look at the pre-existing interfaces.
             const obsFloats = new Observations(reads)
             const predFloats = new Observations(reads)
             const actFloats = new Observations(writes)
+            obsFloats.fill(NaN), predFloats.fill(NaN), actFloats.fill(NaN)
+            overwriteArray(obsFloats, this._obsFloats)
+            overwriteArray(predFloats, this._predFloats)
+            overwriteArray(actFloats, this._actFloats)
             for (let i = 0, reads = 0, writes = 0; i < all.length; ++i) {
                 const o = all[i], prev = oldIndices.get(o)
                 if (typeof o.reads == 'number') {
@@ -294,101 +297,123 @@ To write new interfaces, look at the pre-existing interfaces.
     // This watchdog timer is easier than fixing rare-hang-on-navigation bugs.
     const watchdogCheckId = setInterval(() => {
         if (performance.now()-res._lastStepEnd < 20000) return
-        res._stepsNow = 0 // Ignore the hanged ones.
-        relaunch(res)
+        res._stepsNow = 0, res._startStep = res._currentStep // Ignore the hanged ones.
+        retry()
     }, 20000)
     const unlink = new Set
-    await relaunch(res)
+    await retry()
     return res
     function relaunchIfNeeded() {
         if (res._closed) return
         if (!res._browser || res._browser.isConnected() && !res._page.isClosed()) return
-        return retry(32, relaunch, res)
+        return retry()
     }
-    async function retry(n, func, arg) {
-        for (let i = 1; i < n; ++i)
-            try { return await func(arg) }
-            catch (err) {}
-        return await func(arg)
-    }
-    async function relaunch(res) {
+    async function retry(n = 32, func = relaunch, arg = res) { // Only for `func=relaunch`.
         let then, prevStall = stall;  stall = new Promise(t => then = t);  await prevStall
         try {
-            // Close the previous browser.
-            if (res._browser) {
-                const b = res._browser
-                res._browser = null
-                await b.close()
-            }
-
-            const ext = require('path').join(__dirname, 'extension')
-            const profId = Math.random() * 16 | 0 // In case Chromiums overlap.
-            const dataDir = require('path').join(__dirname, 'puppeteer-chrome-profile', 'p'+profId)
-
-            // Remove folders that may be problematic for long-term stability. (Things never just work.)
-            const fs = require('fs')
-            function rm(...p) {
-                const path = require('path').join(dataDir, ...p)
-                return new Promise(then => fs.rm(path, { force:true, recursive:true }, then))
-            }
-            await Promise.all([rm('Crashpad', 'reports'), rm('BrowserMetrics'), rm('ShaderCache')])
-
-            // Open the new browser.
-            const _browser = res._browser = await puppeteer.launch({
-                headless:false,
-                defaultViewport:null,
-                waitForInitialPage:false,
-                args:[
-                    '--allow-file-access-from-files',
-                    '--autoplay-policy=no-user-gesture-required',
-                    '--load-extension=' + ext,
-                    '--disable-extensions-except=' + ext,
-                    '--whitelisted-extension-id=clmfcdjojibdkmjpbfbddhjiolfjhcgn',
-                    '--lang='+lang,
-                    '--disable-notifications',
-                    '--user-data-dir=' + dataDir,
-                ],
-                ignoreDefaultArgs:[
-                    '--mute-audio',
-                    '--disable-gpu',
-                ],
-            })
-            const _page = res._page = await _browser.newPage()
-            closeAllPagesExcept(_browser, _page)
-            res._cdp = await _page.target().createCDPSession()
-            res._chromeWidth = await _page.evaluate(() => outerWidth - innerWidth)
-            res._chromeHeight = await _page.evaluate(() => outerHeight - innerHeight)
-            await _page.setUserAgent('')
-            const langParts = lang.split(',')
-            await _page.evaluateOnNewDocument(langParts => {
-                Object.defineProperty(navigator, 'language', { value:langParts[0] })
-                Object.defineProperty(navigator, 'languages', { value:langParts })
-            }, langParts)
-            await _page.setExtraHTTPHeaders({ 'Accept-Language': langParts[langParts.length-1] })
-            res._extPage = await (await _browser.waitForTarget(t => t.type() === 'background_page' && t._targetInfo.title === 'capture')).page()
-            const oldInters = res._all || interfaces
-            res._all = [] // Call all initializers again, to re-attach event listeners.
-            res._agentInds = [] // Re-launch the step loop if we have agents.
-            await res.relink(...oldInters)
-            if (res.homepage) _page.goto(res.homepage).then(() => res._cdp.send('Page.resetNavigationHistory')).catch(doNothing)
-            res._lastStepEnd = performance.now()
+            for (let i = 1; i < n; ++i)
+                try { return await func(arg) }
+                catch (err) {}
+            return await func(arg)
         } catch (err) { res && res._browser && res._browser.close();  throw err }
         finally { then(), stall = null }
+    }
+    async function relaunch(res) {
+        // Close the previous browser.
+        res._startStep = res._currentStep
+        res._ready = false
+        if (res._browser) {
+            const b = res._browser
+            res._browser = null
+            await b.close()
+        }
+
+        const ext = require('path').join(__dirname, 'extension')
+        const profId = Math.random() * 16 | 0 // In case Chromiums overlap.
+        const dataDir = require('path').join(__dirname, 'puppeteer-chrome-profile', 'p'+profId)
+
+        // Remove folders that may be problematic for long-term stability. (Things never just work.)
+        const fs = require('fs')
+        function rm(...p) {
+            const path = require('path').join(dataDir, ...p)
+            return new Promise(then => fs.rm(path, { force:true, recursive:true }, then))
+        }
+        await Promise.all([rm('Crashpad', 'reports'), rm('BrowserMetrics'), rm('ShaderCache')])
+
+        // Open the new browser.
+        const _browser = res._browser = await puppeteer.launch({
+            headless:false,
+            defaultViewport:null,
+            waitForInitialPage:false,
+            args:[
+                '--allow-file-access-from-files',
+                '--autoplay-policy=no-user-gesture-required',
+                '--load-extension=' + ext,
+                '--disable-extensions-except=' + ext,
+                '--whitelisted-extension-id=clmfcdjojibdkmjpbfbddhjiolfjhcgn',
+                '--lang='+lang,
+                '--disable-notifications',
+                '--user-data-dir=' + dataDir,
+            ],
+            ignoreDefaultArgs:[
+                '--mute-audio',
+                '--disable-gpu',
+            ],
+        })
+        const _page = res._page = await _browser.newPage()
+        _page.on('error', err => { throw err })
+        closeAllPagesExcept(_browser, _page)
+        const langParts = lang.split(',')
+        ;[ // Thanks, async/await, very helpful for efficiency via parallelization. (Sarcasm.)
+            res._cdp,
+            res._chromeWidth,
+            res._chromeHeight,
+            res._extPage,
+        ] = await Promise.all([
+            _page.target().createCDPSession(),
+            _page.evaluate(() => outerWidth - innerWidth),
+            _page.evaluate(() => outerHeight - innerHeight),
+            _browser.waitForTarget(t => t.type() === 'background_page' && t._targetInfo.title === 'capture').then(t => t.page()),
+            _page.setUserAgent(''),
+            _page.evaluateOnNewDocument(langParts => {
+                Object.defineProperty(navigator, 'language', { value:langParts[0] })
+                Object.defineProperty(navigator, 'languages', { value:langParts })
+            }, langParts),
+            _page.setExtraHTTPHeaders({ 'Accept-Language': langParts[langParts.length-1] }),
+        ])
+        let pP
+        if (res.homepage)
+            // Browser crahes are far more frequent if we don't wait at least a bit.
+            pP = Promise.race([
+                _page.goto(res.homepage).then(() => res._cdp.send('Page.resetNavigationHistory')).catch(doNothing),
+                new Promise(then => setTimeout(then, 10000)),
+            ])
+        const oldInters = res._all || interfaces
+        res._all = [] // Call all initializers again, to re-attach event listeners.
+        res._agentInds = [] // Re-launch the step loop if we have agents.
+        const rlP = res.relink(...oldInters)
+        await res._extPage.exposeFunction('gotObserverData', gotObserverData)
+        await rlP, await pP
+        res._lastStepEnd = performance.now()
+        res._ready = true
     }
     async function step() {
         // Read, think, write.
         // Each agent takes f32 observations (to read) and predictions and actions (to write).
         // It returns a promise, which must resolve to `true`, else its loop will stop.
+        let curStep = res._currentStep
         try {
             if (res._closed) return
             await relaunchIfNeeded();  await stall
             if (!res._agentInds.length) return
+            ++res._currentStep
 
             // Don't schedule too many steps at once. If all die, end-of-step will schedule anyway.
             if (res._stepsNow < maxStepsNow)
                 ++res._stepsNow, setTimeout(step, Math.max(0, +res._period - lowball))
 
             try {
+                if (!res._ready) return
                 await res.read()
 
                 const results = _allocArray(res._agentInds.length).fill()
@@ -419,6 +444,7 @@ To write new interfaces, look at the pre-existing interfaces.
             res._period.set(performance.now() - res._lastStepEnd)
             res._lastStepEnd = performance.now()
         } finally {
+            if (res._startStep > curStep) return
             --res._stepsNow
 
             // Don't let the fire die out.
@@ -441,6 +467,12 @@ To write new interfaces, look at the pre-existing interfaces.
         a.length = 0
         if (_allocArray.free.length > 100) return // Prevent madness.
         _allocArray.free.push(a)
+    }
+    function gotObserverData(b64) {
+        // Yeah, sure, u16 per color per pixel is 2× the inefficiency. But. Audio.
+        const obsBuf = Buffer.from(b64 || '', 'base64') // Int16; decode into floats.
+        const obsLen = obsBuf.byteLength / Int16Array.BYTES_PER_ELEMENT | 0
+        decodeInts(new Int16Array(obsBuf.buffer, obsBuf.byteOffset, obsLen), res._obsFloats)
     }
 })
 async function closeAllPagesExcept(browser, page) {
@@ -884,6 +916,7 @@ source.addEventListener('relink', function(evt) {
     while (root.lastChild) root.removeChild(root.lastChild)
     new Function('state', evt.data)(state = {}, root)
 })
+let knob = null
 source.onmessage = function(evt) {
     if (!state) return
     Promise.resolve(evt.data).then(data => {
@@ -1079,6 +1112,7 @@ function decodeInts(d, into) {
 }
 function overwriteArray(arr, next) {
     // This doesn't sweat size differences, not touching numbers at the end.
+    if (!next) return
     if (next.length <= arr.length)
         arr.set(next)
     else
@@ -1177,6 +1211,7 @@ In a page, \`directLink(PageAgent, Inputs = 0, Outputs = 0)\` will return (a pro
                     async write(page, state, pred, act) {
                         if (env._page !== page) continues = false
                         if (!continues) return
+                        if (page.isClosed()) return
                         // Call the page-agent with our action, to get observation.
                         const actBase64 = Buffer.from(act.buffer, act.byteOffset, act.byteLength).toString('base64')
                         let result
@@ -1538,9 +1573,9 @@ Exposes all mouse-related actions.
 
 
 
-exports.frameTime = docs(`\`webenv.frameTime(fps = 20, maxMagnitude = 100)\`
-Provides an observation of the time between frames, relative to the expected-Frames-Per-Second duration, in multiples of \`maxMagnitude\`.
-`, function(fps = 20, maxMagnitude = 100) {
+exports.frameTime = docs(`\`webenv.frameTime(fps = 20, maxMs = 1000)\`
+Provides an observation of the time between frames, relative to the expected-Frames-Per-Second duration, in (less-than-1) multiples of \`maxMs\`.
+`, function(fps = 20, maxMs = 1000) {
     const performance = require('perf_hooks').performance
     let prevFrame = performance.now()
     return {
@@ -1548,16 +1583,26 @@ Provides an observation of the time between frames, relative to the expected-Fra
         read(page, state, obs) {
             const nextFrame = performance.now()
             const duration = (nextFrame - prevFrame) - 1 / fps
-            obs[0] = Math.max(-1, Math.min(duration / maxMagnitude, 1))
+            obs[0] = Math.max(-1, Math.min(duration / maxMs, 1))
             prevFrame = nextFrame
         },
-        visState(page, state) { return { fps, maxMagnitude, runningAvg:null } },
+        visState(page, state) { return { fps, maxMs, runningAvg:null } },
         visualize:function(obs, pred, elem, vState) {
-            const frames = obs[0] * vState.maxMagnitude + 1 / vState.fps
+            if (!elem.firstChild) {
+                elem.appendChild(document.createElement('div'))
+                elem.firstChild.style.width = '1.2em'
+                elem.firstChild.style.height = '1.2em'
+                elem.firstChild.style.borderRadius = '50%'
+                elem.firstChild.style.display = 'inline-block'
+                elem.appendChild(document.createElement('div'))
+                elem.lastChild.style.fontFamily = 'monospace,monospace'
+                elem.frame = false
+            }
+            const frames = obs[0] * vState.maxMs + 1 / vState.fps
             if (vState.runningAvg == null) vState.runningAvg = frames
-            vState.runningAvg = .9 * vState.runningAvg + (1-.9) * frames
-            elem.textContent = (1000 / vState.runningAvg).toFixed(1) + ' FPS'
-            elem.style.fontFamily = 'monospace'
+            vState.runningAvg = .95 * vState.runningAvg + (1-.95) * frames
+            elem.firstChild.style.backgroundColor = (elem.frame = !elem.frame) ? 'lightgray' : 'darkgray'
+            elem.lastChild.textContent = (1000 / vState.runningAvg).toFixed(1) + ' FPS'
         },
     }
 })
@@ -1749,7 +1794,7 @@ Arguments:
 
 
 
-exports.stability = docs(`\`webenv.stability(timeout = 3000, noCookies = true)\`
+exports.stability = docs(`\`webenv.stability(timeout = 10, noCookies = true)\`
 A few utilities to increase stability of the environment. Always include this.
 
 In particular, this:
@@ -1759,9 +1804,10 @@ In particular, this:
 - Opens new tabs in the main tab, so that there is only ever one tab, and image/audio capture doesn't break.
 - Deletes cookies if \`noCookies\`, to be more stateless.
 - Discards JS console entries, in case they accumulate and cause bother.
-- To prevent infinite loops, if \`timeout\` is non-zero: periodically checks whether JS takes too long to execute, and if so, re-launches the browser.
-`, function(timeout = 3000, deleteCookies = true) {
-    let env = null
+- To prevent infinite loops and/or heavy memory thrashing, if \`timeout\` (seconds) is non-zero: periodically checks whether JS takes too long to execute, and if so, re-launches the browser.
+`, function(timeout = 10, deleteCookies = true) {
+    const performance = require('perf_hooks').performance
+    let env = null, lastStamp = performance.now(), intervalID = null
     return {
         init(page, E) {
             env = E
@@ -1781,8 +1827,10 @@ In particular, this:
             })()
             deleteCookies && page.on('load', noCookies)
             deleteCookies && page.on('framenavigated', noCookies)
+            clearInterval(intervalID), intervalID = setInterval(maybeKillBrowser, timeout/2)
         },
         deinit(page, state) {
+            clearInterval(intervalID), intervalID = null
             deleteCookies && page.off('framenavigated', noCookies)
             deleteCookies && page.off('load', noCookies)
             page.off('popup', onPopup)
@@ -1800,13 +1848,15 @@ In particular, this:
             //   (Re-launching can spam the console with unhandled promise rejection warnings.)
             if (!env || env._page.isClosed() || !env._browser.isConnected()) return
             env._cdp.send('Runtime.discardConsoleEntries').catch(doNothing)
-            if (timeout) {
-                const browserRelaunch = setTimeout(killBrowser, timeout)
-                env._page.evaluate(() => 0).then(() => clearTimeout(browserRelaunch)).catch(doNothing)
-            }
+            if (timeout)
+                env._page.evaluate(() => 0).then(() => lastStamp = performance.now()).catch(doNothing)
         },
     }
-    function killBrowser() { env && env._browser && env._browser.close() }
+    function maybeKillBrowser() {
+        if (!timeout || performance.now() - lastStamp <= timeout*1000) return
+        lastStamp = performance.now()
+        env && env._browser && env._browser.isConnected() && env._browser.close()
+    }
     function onPopup(newPage) {
         // A new tab opens up.
         // Tab capture is still capturing the old tab, so redirect newcomers to the old tab.

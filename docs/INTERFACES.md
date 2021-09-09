@@ -50,7 +50,7 @@ Identify yourself and include contact information to overcome some of [the preju
 
 ```js
 webenv.stability()
-webenv.stability(timeout = 3000, noCookies = true)
+webenv.stability(timeout = 10, noCookies = true)
 ```
 
 Increases stability.
@@ -62,7 +62,7 @@ In particular, this:
 - Opens new tabs in the main tab, so that there is only ever one tab, and image/audio capture doesn't break.
 - Deletes cookies if `noCookies`, to be more stateless.
 - Discards JS console entries, in case they accumulate and cause bother.
-- To prevent infinite loops, if `timeout` is non-zero: periodically checks whether JS takes too long to execute, and if so, re-launches the browser.
+- To prevent infinite loops and/or heavy memory thrashing, if `timeout` (seconds) is non-zero: periodically checks whether JS takes too long to execute, and if so, re-launches the browser.
 
 ```js
 webenv.directLink()
@@ -171,10 +171,10 @@ Observations of most-recent audio data, as `samples` interleaved-channel numbers
 
 ```js
 webenv.frameTime()
-webenv.frameTime(fps = 20, maxMagnitude = 100)
+webenv.frameTime(fps = 20, maxMs = 1000)
 ```
 
-Provides an observation of the time between frames, relative to the expected-Frames-Per-Second duration, in multiples of `maxMagnitude`.
+Provides an observation of the time between frames, relative to the expected-Frames-Per-Second duration, in (less-than-1) multiples of `maxMs`.
 
 ```js
 webenv.const()
