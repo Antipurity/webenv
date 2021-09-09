@@ -1,4 +1,4 @@
-# 5+ debugging days.
+# 10+ debugging days.
 
 from torch.utils.tensorboard import SummaryWriter
 import ldl
@@ -30,6 +30,7 @@ hparams = {
   'layers': 2,
   'nonlinearity': 'Softsign',
   'ldl_local_first': True,
+  'out_mult': 1., # 1.1 makes predicting pure black/white in MGU much easier.
 
   'console': True,
   'tensorboard': True,
@@ -67,7 +68,7 @@ def full_at_the_end(ins, outs, *args, **kwargs):
     return torch.nn.Linear(ins, outs, device = kwargs['device'])
   return ldl.LinDense(ins, outs, *args, **kwargs)
 synth_grad = ns(N, N, full_at_the_end, layer_count=layers, Nonlinearity=nl, local_first=lf, device=dev) if hparams['synth_grad'] else None
-transition = ldl.MGU(ns, N_ins, N, full_at_the_end, layer_count=layers, Nonlinearity=nl, local_first=lf, device=dev, example_batch_shape=(2,), unique_dims=())
+transition = ldl.MGU(ns, N_ins, N, full_at_the_end, layer_count=layers, Nonlinearity=nl, local_first=lf, device=dev, example_batch_shape=(2,), unique_dims=(), out_mult = hparams['out_mult'])
 from reinforcement_learning import GradMaximize, Return
 return_model = Return(ns(N, 1, full_at_the_end, layer_count=layers, Nonlinearity=nl, local_first=lf, device=dev), time_horizon=hparams['time_horizon']) if hparams['time_horizon']>0 else None
 max_model = GradMaximize(ns(N, 1, full_at_the_end, layer_count=layers, Nonlinearity=nl, local_first=lf, device=dev), strength=hparams['gradmax'], pred_gradient=hparams['gradmax_pred_gradient']) if hparams['gradmax']>0 else None

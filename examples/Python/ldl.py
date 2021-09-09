@@ -206,16 +206,17 @@ class MGU(torch.nn.Module):
   - Simplified to empirically perform well, while requiring few parameters: https://arxiv.org/abs/1603.09420
   (MGU is a simplification of GRU (a helpful illustration: https://static.posters.cz/image/750/%D0%9F%D0%BB%D0%B0%D0%BA%D0%B0%D1%82%D0%B8/despicable-me-2-gru-and-minions-i14553.jpg), which is a simplification of LSTM.)
   """
-  def __init__(self, Layer, ins, outs, *args, **kwargs):
+  def __init__(self, Layer, ins, outs, *args, out_mult=1., **kwargs):
     super(MGU, self).__init__()
     self.z = Layer(outs, outs, *args, **kwargs)
     self.h = Layer(outs, outs, *args, **kwargs)
     self.input = Layer(ins, outs, *args, **kwargs) if ins != outs else None
+    self.out_mult = out_mult
   def forward(self, x):
     # Why think about different non-linearities when you can just, not.
     y = self.input(x) if self.input is not None else x
     f = torch.sigmoid(self.z(y)) # 0…1
-    z = f * torch.tanh(self.h(f*y))
+    z = f * torch.tanh(self.h(f*y)) * self.out_mult
     if f.shape[-1] == x.shape[-1]:
       return (1-f) * x + z
     else:
