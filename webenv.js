@@ -1115,7 +1115,7 @@ In a page, \`directLink(PageAgent, Inputs = 0, Outputs = 0)\` will return (a pro
 \`PageAgent(Act, Obs)\` synchronously reads \`Act\` (of length \`Inputs\`) and writes to \`Obs\` (of length \`Outputs\`). All values are 32-bit floats, \`-1\`…\`1\` or \`NaN\`.
     (Access to observation predictions is forbidden.)
 
-(In humans, this is closest to a direct neural link. That tech is emerging, so what exactly an agent can learn to affect in this way is unclear, but this does allow experimentation.)
+(The closest analogue of a real-time data channel that has equal read and write capabilities for humans is music, which can be used to capture and convey the neural feel of arbitrary neural computations. Research music 2.0, preferably if you have a direct neural link device.)
 `, function directLink(name = 'directLink', maxReads = 1*1024*1024, maxWrites = 1*1024*1024, maxLinks = 1024) {
     // Data communication is not quite as optimized as it could be,
     //   since this sends/receives float32 instead of int16.
@@ -1948,79 +1948,108 @@ Some DOM-aware image augmentations: random transforms and filters.
 
 
 
-exports.directScore = docs(`\`webenv.directScore(hidden = false, scores = '', name = 'directScore', interval = 60000, momentum = .999)\`
-Exposes a function that allows web pages to rate the agent's performance. All scores must be \`-1\`..\`1\`, the higher the better.
+exports.directScore = docs(`\`webenv.directScore(hidden=false, maxHorizon=100000, maxUrls=1000000, scoreFile='', saveInterval=300, name='directScore')\`
 
-This allows a different evaluation metric than loss, for comparing agents. (As long as people create web pages that call \`directScore\`.)
+Exposes a function that allows web pages to rate the agent's performance with a number, the higher the better.
+
+The agents can access the normalized-to-\`-1\`…\`1\` \`obs[0]\` unless \`hidden\`, and model & maximize it. (Normalized so that there is no preference for pages, only in-page performance. And to be in a sane range.)
+
+Please create web pages that use \`typeof directScore!=''+void 0 && directScore(x)\`, if applicable.
+
+To view the latest improvement (the running average of normalized scores), access \`env=webenv.init(…),  env.score.ALL[1]\` in a WebEnv instance.
 
 Args:
-- \`hidden\`: if \`false\`, exposes 1 number to the agent at the beginning: the average score since the last frame, or \`NaN\`. The agent can maximize that number if it wants to (be aware that this channel is easy to exploit). If hidden, agents must do self-supervised learning.
-- \`scores\` (for example, \`'scores.json'\`): the file to synchronize per-page scores with. \`webenv.init(...).score.ALL\` is the average score.
+- \`hidden\`: if \`false\`, exposes 1 number to the agent at the beginning: the average score since the last frame, or \`NaN\`.
+- \`maxHorizon\`: approximately how many most-recent samples to average over.
+- \`maxUrls\`: how many statistics of reward streams to remember. No infinite memory allocation.
+- \`scoreFile\`, for example, \`'scores.json'\`: the file to save per-page scores to.
+- \`saveInterval\`: how often to save scores (and limit URL count), in seconds.
 - \`name\`: the name of the exposed-to-pages function.
-- \`interval\`: how often to sync scores to file & compute average score, in ms.
-- \`momentum\`: how much a new score does not change per-page scores. Does not affect observations.
-`, async function(hidden = false, scores = '', name = 'directScore', interval = 60000, momentum = .999) {
+`, async function(hidden=false, maxHorizon=100000, maxUrls=1000000, scoreFile='', saveInterval=300, name='directScore') {
+    const maxRawMagnitude = 1e9
     const fs = require('fs/promises')
-    // `data` holds average scores, both total ("ALL") and per-URL.
-    const data = Object.create(null)
-    data.ALL = -1
-    if (scores) {
-        try {
-            const o = JSON.parse(await fs.readFile(scores, { encoding:'utf8' }))
-            for (let u in o) if (typeof o[u] == 'number' && o[u] >= -1 && o[u] <= 1) data[u] = o[u]
-        } catch (err) {}
-    }
-    // These two hold the updated-later per-URL data.
-    const newDataSum = Object.create(null), newDataNum = Object.create(null)
+    let data = Object.create(null) // Running-average scores, both normalized-total ("ALL") and per-URL.
+    if (scoreFile)
+        try { data = JSON.parse(await fs.readFile(scoreFile, { encoding:'utf8' })) }
+        catch (err) {}
     let timeoutID = null, active = false
-    let scoreSum = 0, scoreNum = 0 // For observations, if !hidden.
+    let scoreSum = 0, scoreNum = 0, updated = false
     return {
-        priority:999999999,
+        priority: 999999999,
         reads: hidden ? undefined : 1,
-        read: hidden ? undefined : function(page, state, obs) {
-            obs[0] = scoreSum / scoreNum // NaN if no scores since the last frame.
+        read(page, state, obs) {
+            const v = scoreSum / scoreNum // NaN if no scores since the last frame.
             scoreSum = scoreNum = 0
+            const u = page.url()
+
+            const norm = signalNormalize(v, data[u])
+            if (v === v) // Update the page's reward-stream statistics, and cross-page improvement.
+                data[u] = signalUpdate(v, data[u], maxHorizon),
+                data.ALL = signalUpdate(norm, data.ALL, maxHorizon)
+            if (!hidden) obs[0] = norm
         },
         init(page, env) {
             env.score = data
-            active = true
-            if (scores && timeoutID === null) timeoutID = setTimeout(updateData, interval)
-            return page.exposeFunction(name, async (score = -1) => {
-                if (typeof score != 'number' && !(score >= -1 && score <= 1)) return false
-                scoreSum += score, ++scoreNum
-                if (!scores) return
-                const u = page.url()
-                if (!newDataSum[u]) newDataSum[u] = 0
-                if (!newDataNum[u]) newDataNum[u] = 0
-                newDataSum[u] += score
-                ++newDataNum[u]
+            if (timeoutID === null)
+                active = true, timeoutID = setTimeout(saveData, saveInterval*1000)
+            return page.exposeFunction(name, async score => {
+                if (typeof score != 'number' || score !== score) return false
+                scoreSum += Math.max(-maxRawMagnitude, Math.min(score, maxRawMagnitude))
+                ++scoreNum
+                return updated = true
             })
         },
         deinit(page, state) {
-            active = false
-            if (scores) return clearTimeout(timeoutID), timeoutID = null, updateData()
+            return active = false, saveData(true)
         },
     }
-    async function updateData() {
+    async function saveData(stop = false) {
+        limitStreamCount()
+        const prevID = timeoutID
         timeoutID = null
-        let updates = 0
-        for (let u in newDataSum) {
-            ++updates
-            if (data[u] !== undefined)
-                data[u] = data[u] * momentum + newDataSum[u] / newDataNum[u] * (1-momentum)
-            else
-                data[u] = newDataSum[u] / newDataNum[u]
-            delete newDataSum[u], delete newDataNum[u]
+        if (scoreFile && updated && prevID != null) {
+            updated = false
+            if (n) await fs.writeFile(scoreFile, JSON.stringify(data), { encoding:'utf8' })
         }
-        if (updates) {
-            let ALL = 0, n = 0
-            for (let u in data) if (u !== 'ALL') ALL += data[u], ++n
-            data.ALL = n ? ALL / n : -1
-            if (n) await fs.writeFile(scores, JSON.stringify(data), { encoding:'utf8' })
+        if (active && !stop) timeoutID = setTimeout(saveData, saveInterval*1000)
+        if (stop) clearTimeout(prevID)
+    }
+    function limitStreamCount() {
+        const size = Object.keys(data).length
+        const delta = size - (maxUrls+1)
+        if (delta <= 0) return
+        const keys = Object.keys(data)
+        for (let i = 0; i < delta; ++i) {
+            let u = null, pop = 0
+            for (let j = 0; j < 3; ++j) { // Pick some unpopular stream.
+                const u2 = keys[Math.random() * keys.length | 0]
+                if (!data[u2] || u2 === 'ALL') continue
+                if (u == null || data[u2][0] < pop) u = u2, pop = data[u2][0]
+            }
+            if (u != null) delete data[u] // And kill it.
         }
-        if (active) timeoutID = setTimeout(updateData, interval)
     }
 })
+function signalUpdate(value, moments = [0,0,0], maxHorizon = 10000) {
+    // Updates count & mean & variance estimates of `moments` in-place.
+    //   (Make sure that `value` is sane, such as `-1e9`…`1e9`. And not normalized.)
+    const prevMean = moments[1], n1 = moments[0], n2 = n1+1, d = value - moments[1]
+    if (moments[0] + 1 <= maxHorizon)
+        moments[0] = n2
+    moments[1] += d / n2
+    moments[2] = (moments[2] * n1 + d * (value - prevMean)) / n2
+    if (!isFinite(moments[1]) || !isFinite(moments[2]))
+        moments[0] = moments[1] = moments[2] = 0
+    return moments
+}
+function signalNormalize(value, moments, mean = 0, stddev = .33, maxMagnitude = 3*stddev) {
+    // Makes mean & variance of a signal's value roughly the same.
+    if (moments) {
+        const m1 = moments[1], m2 = Math.max(Math.sqrt(Math.max(0, moments[2])), 1e-6)
+        value = ((value-m1)/m2 * stddev) + mean
+    }
+    return Math.max(-maxMagnitude, Math.min(value, maxMagnitude))
+}
 
 
 

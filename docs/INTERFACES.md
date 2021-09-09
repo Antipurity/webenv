@@ -71,27 +71,32 @@ webenv.directLink(name = 'directLink', maxReads = 16*2**20, maxWrites = 16*2**20
 
 Allows web pages to dynamically establish high-bandwidth connections to the agent, via calling `directLink`.
 
-(In humans, this is closest to a direct neural link. That tech is emerging, so what exactly an agent can learn to affect in this way is unclear, but this does allow experimentation.)
+(The closest analogue of a real-time data channel that has equal read and write capabilities for humans is music, which can be used to capture and convey the neural feel of arbitrary neural computations. Research music 2.0, preferably if you have a direct neural link device.)
 
 In a page, `directLink(PageAgent, Inputs = 0, Outputs = 0)` will return (a promise of) `true` if successfully established, else `false`.
 
-`PageAgent` will be called automatically, until it returns a non-`true` value. `PageAgent(Act, Obs)` synchronously reads from `Act` (of length `Inputs`) and writes to `Obs` (of length `Outputs`). All values are 32-bit floats, `-1`…`1` or `NaN`.
+`PageAgent` will be called automatically, until it returns a non-`true` value. `PageAgent(Act, Obs)` synchronously reads from `Act` (of length `Inputs`) and writes to `Obs` (of length `Outputs`) after all asynchrony is done. All values are 32-bit floats, `-1`…`1` or `NaN`.
 
 ```js
 webenv.directScore()
-webenv.directScore(hidden = false, scores = '', name = 'directScore', interval = 60000, momentum = .999)
+webenv.directScore(hidden=false, maxHorizon=100000, maxUrls=1000000, scoreFile='', saveInterval=300, name='directScore')
 ```
 
-Exposes a function that allows web pages to rate the agent's performance. All scores must be `-1`..`1`, the higher the better.
+Exposes a function that allows web pages to rate the agent's performance with a number, the higher the better.
 
-This allows a different evaluation metric than loss, for comparing agents. (As long as people create web pages that call `directScore`.)
+The agents can access the normalized-to-`-1`…`1` `obs[0]` unless `hidden`, and model & maximize it. (Normalized so that there is no preference for pages, only in-page performance. And to be in a sane range.)
+
+Please create web pages that use `typeof directScore!=''+void 0 && directScore(x)`, if applicable.
+
+To view the latest improvement (the running average of normalized scores), access `env=webenv.init(…),  env.score.ALL[1]` in a WebEnv instance.
 
 Args:
-- `hidden`: if `false`, exposes 1 number to the agent at the beginning: the average score since the last frame, or `NaN`. The agent can maximize that number if it wants to (be aware that this channel is easy to exploit). If hidden, agents must do self-supervised learning.
-- `scores` (for example, `'scores.json'`): the file to synchronize per-page scores with. `webenv.init(...).score.ALL` is the average score.
+- `hidden`: if `false`, exposes 1 number to the agent at the beginning: the average score since the last frame, or `NaN`.
+- `maxHorizon`: approximately how many most-recent samples to average over.
+- `maxUrls`: how many statistics of reward streams to remember. No infinite memory allocation.
+- `scoreFile`, for example, `'scores.json'`: the file to save per-page scores to.
+- `saveInterval`: how often to save scores (and limit URL count), in seconds.
 - `name`: the name of the exposed-to-pages function.
-- `interval`: how often to sync scores to file & compute average score, in ms.
-- `momentum`: how much a new score does not change per-page scores. Does not affect observations.
 
 ```js
 webenv.fetchSlice()

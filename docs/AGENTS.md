@@ -74,7 +74,7 @@ Directly minimize (`min = -max`) [a basic loss](https://ml-cheatsheet.readthedoc
 (If datasets are augmented with ML models that solve them, or if the Web allows close interaction with other agents or even humans, then prediction would combine all models into one: the benefit of generality outweighs its overhead.)
 
 - **Change** goals.    
-Learning a thing is more efficient than leaving it static. So what is the goal of your goal, or of all goals? The search space is infinite, so you will have to encounter meta-circularity to have any stability.    
+Learning a thing is more efficient than leaving it static. So what is the goal of your goal, or of all goals? The search space is infinite, so you will eventually encounter meta-circularity as the most stable arrangement.    
 Without spoiling the experience, WebEnv's `directScore(x)` can provide a goal distribution that is both complex enough to average out heuristics, and is aligned with humanity's interests.    
 Have to apply that compute, though. Both human-compute, making it a standard practice, and machine-compute, learning it.
 

@@ -15,9 +15,11 @@ Big data is big. Download it separately if needed, via:
 npm explore webenv -- npm run install-datasets
 ```
 
-Say "yes" to all the datasets. Especially if you do not have enough storage capacity. Though you may have to download particular decompression utilities.
+Say "yes" to all the datasets. Especially if you do not have enough storage capacity.
 
 If installation is interrupted, simply start it again.
+
+In the end, you should see "OK".
 
 # Using
 
@@ -36,6 +38,7 @@ npm explore webenv -- npm run serve-datasets
 If you want to include a dataset/environment not covered here, add it.
 
 Guidelines:
+- For throughput: if fetching random samples (often data+label), do not wait for `fetchSlice` each time; instead, fetch into an in-memory buffer asynchronously, and sample from that buffer.
 - Do not duplicate already-available data. Do not include entire datasets, create dataset installers instead.
 - Include a text description of what the dataset is. With natural language understanding, this can help agents remember the correct behavior.
 - Try to include both a visual mode and a `directLink` mode, switched by a checkbox.
@@ -48,15 +51,14 @@ function requestAgentStep(callback) {
     f.cb ? f.cb.push(callback) : setTimeout(callback, 200)
 }
 ```
-- To coerce self-determination into learning particular behaviors, make being wrong boring: try only allowing non-trivial outcomes for correct answers, as games do. Incorrect answers would then require less representational volume to predict, making correct answers more likely to be selected, which would reinforce reasons-to-be-correct, which would make correct answers likelier.
-- A dataset is nice, but a dataset with pre-trained model/s is nicer.
-    - With self/supervised learning (data with or without labels), include a pre-trained model's output as a part of either data or label.
+- Try to directly link other models wherever you can: data is nice, but data with a teacher is nicer.
+    - With self/supervised learning (data with or without labels), include a pre-trained model's output or internal state as a part of either data or label.
         - For learning a generative model of the world, it should not matter whether the label (if any) is shown after the data or with the data.
     - Reinforcement learning (observations, actions, rewards):
         - Allow switching who plays the game with a checkbox.
             - For self-determination: both read and write all the information needed for a decision (per-action Q-values and policies), and have a checkbox that switches whether to read or write that (if reading, mask everything for prediction). Hard but fair: the main agent can compare how well it does against an auto-agent, and learn everything about why the auto-agent makes its decisions. With many such examples, coherent behavior is easier to remember and thus easier to choose to use.
             - (Simple memorization is explicitly forbidden: `directLink` has no way to read predictions.)
-- For throughput: if fetching random samples (often data+label), do not wait for `fetchSlice` each time; instead, fetch into an in-memory buffer asynchronously, and sample from that buffer.
+- To coerce self-determination into learning particular behaviors, make being right a struggle: try only allowing non-trivial outcomes for correct answers, as games do. In addition to unpredictability bonuses, incorrect answers would then require less representational volume to predict, making correct answers more likely to be selected, which would reinforce reasons-to-be-correct, which would make correct answers likelier.
 
 Installation is simply an extensible copy operation, from `tools/data` to `data`.
 
@@ -64,7 +66,7 @@ Data itself is not included with these data interfaces, because it is as large a
 
 All datasets must contain `main.html`.
 
-(In addition, the file `SIZE` may contain the file size, so that users know what to not install.)
+(In addition, the file `SIZE` may contain the file size, so that users know what to install if they do not have enough space.)
 
 Installation for already-installed datasets will copy non-downloaded files without running `INSTALL.js`, so that updating code is easy.
 
