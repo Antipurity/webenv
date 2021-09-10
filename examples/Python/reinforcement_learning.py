@@ -54,9 +54,11 @@ class GradMaximize(torch.nn.Module):
   def forward(self, x, reward):
     # 10 minutes to implement. 5 minutes to debug (more like, run).
     lR = self.loss(self.reward_model(x if self.pred_gradient else x.detach()), reward)
+    print('                lR', self.reward_model(x.detach()).cpu().detach().numpy(), '    ', reward.cpu().detach().numpy()) # TODO: ...Why is it so inaccurate?
     self.switch_param_gradient(False)
     lX = self.reward_model(x).sum() * self.strength
     self.switch_param_gradient(True)
+    print('                         lX', lX.cpu().detach().numpy()) # TODO
     return lR - lX # Predict reward, & maximize reward prediction.
 
 

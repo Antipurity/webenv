@@ -177,7 +177,7 @@ class NormSequential(torch.nn.Module):
       if self.skip_connections and (self.ins_equal_outs or i < len(self.layers)-1):
         y = y + x
       x = y
-    x = torch.clamp(x, -10, 10) # Just in case.
+    x = torch.clamp(x, -1000, 1000) # Just in case.
     return x
   def parameters(self):
     for m in self.layers:
@@ -216,7 +216,7 @@ class MGU(torch.nn.Module):
     # Why think about different non-linearities when you can just, not.
     y = self.input(x) if self.input is not None else x
     f = torch.sigmoid(self.z(y)) # 0…1
-    z = f * torch.tanh(self.h(f*y)) * self.out_mult
+    z = (f * self.out_mult) * torch.tanh(self.h(f*y))
     if f.shape[-1] == x.shape[-1]:
       return (1-f) * x + z
     else:

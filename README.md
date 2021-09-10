@@ -16,7 +16,7 @@ Setting up an infinite loop that allows useful learning in any situation is esse
 - [Create your own agent, via copy-paste-modify](examples/README.md)
 - [Choose the static interfaces](docs/INTERFACES.md)
 - [Choose additional datasets](tools/README.md)
-- [General agents](docs/AGENTS.md)
+- [What counts as solving WebEnv](docs/AGENTS.md)
 - [Explanations of architectural decisions](docs/questionable.md)
 
 ## Features

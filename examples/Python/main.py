@@ -11,31 +11,31 @@ hparams = {
   'lr': .001,
   'optim': 'Adam', # https://pytorch.org/docs/stable/optim.html
 
-  'synth_grad_lr': .01,
+  'synth_grad_lr': .03,
   'obs_loss': 'L2', # 'L1', 'L2'
   'loss_divisor': 1, # A very rough estimate of the input count. Or 1.
 
-  'N_state': 1 * 2**16, # Cost is linearithmic in this.
-  'unroll_length': 2, # Every `1/UL`th step will have `2*UL`× more cost.
+  'N_state': 8 * 2**12, # Cost is linearithmic in this.
+  'unroll_length': 1, # Every `1/UL`th step will have `2*UL`× more cost.
   'synth_grad': True, # Unless UL is thousands, this gradient-prediction is a good idea.
-  'merge_obs': 'concat', # 'add', 'merge', 'concat'.
-  #   'add' makes predictions too big, 'merge' cuts off gradient, 'concat' is expensive.
+  'merge_obs': 'concat', # 'add', 'merge' (Teacher Forcing in ML), 'concat'.
+  #   'add' makes predictions' magnitude too big, 'merge' cuts off gradient, 'concat' is expensive.
 
   'time_horizon': .0, # Without planning, this has to be non-zero, to transfer reward from future to past.
 
-  'gradmax': 0., # Multiplier of planning via gradient.
-  'gradmax_only_actions': True, # Where GradMax's gradient goes: only actions, or the whole state.
+  'gradmax': 1., # Multiplier of planning via gradient.
+  'gradmax_only_actions': False, # Where GradMax's gradient goes: only actions, or the whole state.
   'gradmax_pred_gradient': False, # Whether GradMax's gradient to state includes reward misprediction.
 
-  'layers': 2,
-  'nonlinearity': 'Softsign',
+  'layers': 1, # Makes computations-over-time more important than reactions, and increases FPS.
+  'nonlinearity': 'Softsign', # (With layers=1, this is only used in synthetic gradient.)
   'ldl_local_first': True,
-  'out_mult': 1., # 1.1 makes predicting pure black/white in MGU much easier.
+  'out_mult': 1.1, # 1.1 makes predicting pure black/white in MGU easier.
 
   'console': True,
   'tensorboard': True,
 }
-relevant_hparams = ['lr', 'gradmax', 'unroll_length'] # To be included in the run's name.
+relevant_hparams = ['lr', 'gradmax', 'unroll_length', 'nonlinearity'] # To be included in the run's name.
 
 add_input_on_concat = False # Output can be boring if input is added to prediction.
 
@@ -63,15 +63,11 @@ ns = ldl.NormSequential
 nl = getattr(torch.nn, hparams['nonlinearity'])
 lf = hparams['ldl_local_first']
 layers = hparams['layers']
-def full_at_the_end(ins, outs, *args, **kwargs):
-  if outs == 1:
-    return torch.nn.Linear(ins, outs, device = kwargs['device'])
-  return ldl.LinDense(ins, outs, *args, **kwargs)
-synth_grad = ns(N, N, full_at_the_end, layer_count=layers, Nonlinearity=nl, local_first=lf, device=dev) if hparams['synth_grad'] else None
-transition = ldl.MGU(ns, N_ins, N, full_at_the_end, layer_count=layers, Nonlinearity=nl, local_first=lf, device=dev, example_batch_shape=(2,), unique_dims=(), out_mult = hparams['out_mult'])
+synth_grad = ns(N, N, ldl.LinDense, layer_count = layers + 1, Nonlinearity=nl, local_first=lf, device=dev) if hparams['synth_grad'] else None
+transition = ldl.MGU(ns, N_ins, N, ldl.LinDense, layer_count=layers, Nonlinearity=nl, local_first=lf, device=dev, example_batch_shape=(2,), unique_dims=(), out_mult = hparams['out_mult'])
 from reinforcement_learning import GradMaximize, Return
-return_model = Return(ns(N, 1, full_at_the_end, layer_count=layers, Nonlinearity=nl, local_first=lf, device=dev), time_horizon=hparams['time_horizon']) if hparams['time_horizon']>0 else None
-max_model = GradMaximize(ns(N, 1, full_at_the_end, layer_count=layers, Nonlinearity=nl, local_first=lf, device=dev), strength=hparams['gradmax'], pred_gradient=hparams['gradmax_pred_gradient']) if hparams['gradmax']>0 else None
+return_model = Return(ns(N, 1, ldl.LinDense, layer_count=layers, Nonlinearity=nl, local_first=lf, device=dev), time_horizon=hparams['time_horizon']) if hparams['time_horizon']>0 else None
+max_model = GradMaximize(ns(N, 1, ldl.LinDense, layer_count=layers, Nonlinearity=nl, local_first=lf, device=dev), strength=hparams['gradmax'], pred_gradient=hparams['gradmax_pred_gradient']) if hparams['gradmax']>0 else None
 optim = getattr(torch.optim, hparams['optim'])([
   { 'params':[*params(transition, return_model, max_model)] },
   { 'params':[*params(synth_grad)], 'lr':hparams['synth_grad_lr'] },
@@ -138,5 +134,5 @@ webenv.webenv(
   #   (The defaults include a possibility of such a redirector.)
   webenv_path=we_p)
 
-# TODO: Re-run this gradmax=0 run, because browser-launching was failing so hard. (Not that it's much better now, actually. Still, statistical confidence, I guess?)
-# TODO: Catch another screenshot (...then again, maybe we had enough). In examples/README.md, describe this.
+# TODO: Re-run gradmax=0 and gradmax=10, now that we changed a lot of hyperparams.
+# TODO: Catch more screenshots, and a smooth GIF if we can. In examples/README.md, describe this.

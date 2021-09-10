@@ -59,13 +59,11 @@ To write new interfaces, look at the pre-existing interfaces.
         _lastStepEnd:performance.now(),
         _period:new ObsNumber(0), // Actual time between two consecutive steps.
         _stepsNow:0, // Throughput is maximized by lowballing time-between-steps, but without too many steps at once.
-        _startStep:0, _currentStep:0,
-        _ready:false,
         async read() {
             // It might happen that a new read might get scheduled before an old one is finished.
             //   For these cases, make sure to only not modify internal buffers between `await`s, only modify in synchronous code.
             if (this._closed) throw new Error('Cannot read from a closed environment')
-            await relaunchIfNeeded();  await stall
+            relaunchIfNeeded()
             if (!this.reads) return
             // Collect extension-side observer results, then webenv-side reads.
             try {
@@ -96,7 +94,7 @@ To write new interfaces, look at the pre-existing interfaces.
         },
         async write(acts) {
             if (this._closed) throw new Error('Cannot write to a closed environment')
-            await relaunchIfNeeded();  await stall
+            relaunchIfNeeded()
             if (!this.writes) return
             // Copy acts to our buffer.
             if (!(acts instanceof Observations))
@@ -204,29 +202,18 @@ To write new interfaces, look at the pre-existing interfaces.
             const h = this.height || 0
             await this._extPage.evaluate((o,w,h) => updateObservers(o,w,h), observers, w, h)
 
-            // Resize observations/actions, and copy the old ones to new positions.
+            // Resize observations/actions.
+            //   (Technically, could move observations to correct positions, but why?)
             const obsFloats = new Observations(reads)
             const predFloats = new Observations(reads)
             const actFloats = new Observations(writes)
             obsFloats.fill(NaN), predFloats.fill(NaN), actFloats.fill(NaN)
-            overwriteArray(obsFloats, this._obsFloats)
-            overwriteArray(predFloats, this._predFloats)
-            overwriteArray(actFloats, this._actFloats)
             for (let i = 0, reads = 0, writes = 0; i < all.length; ++i) {
-                const o = all[i], prev = oldIndices.get(o)
-                if (typeof o.reads == 'number') {
-                    const prevR = prev !== undefined ? this._allReadOffsets[prev] : undefined
-                    if (prevR !== undefined)
-                        obsFloats.copyWithin(reads, prevR, prevR + o.reads),
-                        predFloats.copyWithin(reads, prevR, prevR + o.reads)
+                const o = all[i]
+                if (typeof o.reads == 'number')
                     reads += o.reads
-                }
-                if (typeof o.writes == 'number') {
-                    const prevW = prev !== undefined ? this._allWriteOffsets[prev] : undefined
-                    if (prevW !== undefined)
-                        actFloats.copyWithin(writes, prevW, prevW + o.writes)
+                if (typeof o.writes == 'number')
                     writes += o.writes
-                }
             }
 
             // Pre-compute observation/action slices.
@@ -262,7 +249,8 @@ To write new interfaces, look at the pre-existing interfaces.
             // Schedule the interpreter loop if there are now agents.
             const looped = !!(this._agentInds && this._agentInds.length)
             const looping = !!agentInds.length
-            if (!this._stepsNow && !looped && looping) ++this._stepsNow, setTimeout(step, 0)
+            if (!this._stepsNow && !looped && looping)
+                ++this._stepsNow, setTimeout(step, 0)
 
             // Finalize what we computed here.
             this.reads = reads, this.writes = writes
@@ -297,7 +285,6 @@ To write new interfaces, look at the pre-existing interfaces.
     // This watchdog timer is easier than fixing rare-hang-on-navigation bugs.
     const watchdogCheckId = setInterval(() => {
         if (performance.now()-res._lastStepEnd < 20000) return
-        res._stepsNow = 0, res._startStep = res._currentStep // Ignore the hanged ones.
         retry()
     }, 20000)
     const unlink = new Set
@@ -306,6 +293,7 @@ To write new interfaces, look at the pre-existing interfaces.
     function relaunchIfNeeded() {
         if (res._closed) return
         if (!res._browser || res._browser.isConnected() && !res._page.isClosed()) return
+        if (stall) return // No double-relaunching please.
         return retry()
     }
     async function retry(n = 32, func = relaunch, arg = res) { // Only for `func=relaunch`.
@@ -320,8 +308,6 @@ To write new interfaces, look at the pre-existing interfaces.
     }
     async function relaunch(res) {
         // Close the previous browser.
-        res._startStep = res._currentStep
-        res._ready = false
         if (res._browser) {
             const b = res._browser
             res._browser = null
@@ -354,6 +340,7 @@ To write new interfaces, look at the pre-existing interfaces.
                 '--lang='+lang,
                 '--disable-notifications',
                 '--user-data-dir=' + dataDir,
+                '--allow-profiles-outside-user-dir',
             ],
             ignoreDefaultArgs:[
                 '--mute-audio',
@@ -381,39 +368,38 @@ To write new interfaces, look at the pre-existing interfaces.
             }, langParts),
             _page.setExtraHTTPHeaders({ 'Accept-Language': langParts[langParts.length-1] }),
         ])
-        let pP
-        if (res.homepage)
-            // Browser crahes are far more frequent if we don't wait at least a bit.
-            pP = Promise.race([
-                _page.goto(res.homepage).then(() => res._cdp.send('Page.resetNavigationHistory')).catch(doNothing),
-                new Promise(then => setTimeout(then, 10000)),
-            ])
         const oldInters = res._all || interfaces
         res._all = [] // Call all initializers again, to re-attach event listeners.
         res._agentInds = [] // Re-launch the step loop if we have agents.
         const rlP = res.relink(...oldInters)
+        let pP
+        if (res.homepage)
+            // Browser crahes are far more frequent if we don't wait at least a bit.
+            pP = Promise.race([
+                ...Promise.all([
+                    _page.goto(res.homepage).then(() => res._cdp.send('Page.resetNavigationHistory')).catch(doNothing),
+                    res._cdp.send('Page.resetNavigationHistory').catch(doNothing),
+                ]),
+                new Promise(then => setTimeout(then, 10000)),
+            ])
         await res._extPage.exposeFunction('gotObserverData', gotObserverData)
         await rlP, await pP
         res._lastStepEnd = performance.now()
-        res._ready = true
     }
     async function step() {
         // Read, think, write.
         // Each agent takes f32 observations (to read) and predictions and actions (to write).
         // It returns a promise, which must resolve to `true`, else its loop will stop.
-        let curStep = res._currentStep
         try {
             if (res._closed) return
-            await relaunchIfNeeded();  await stall
+            relaunchIfNeeded()
             if (!res._agentInds.length) return
-            ++res._currentStep
 
             // Don't schedule too many steps at once. If all die, end-of-step will schedule anyway.
             if (res._stepsNow < maxStepsNow)
                 ++res._stepsNow, setTimeout(step, Math.max(0, +res._period - lowball))
 
             try {
-                if (!res._ready) return
                 await res.read()
 
                 const results = _allocArray(res._agentInds.length).fill()
@@ -431,7 +417,7 @@ To write new interfaces, look at the pre-existing interfaces.
 
                 await res.write(res._actFloats)
             } catch (err) {
-                if (!stall && (!err || err.message.indexOf('Target closed') < 0)) console.error(err)
+                if (!stall) console.error(err)
             } finally {
                 // Unlink the agents that do not want to live on.
                 if (unlink.size) {
@@ -444,7 +430,6 @@ To write new interfaces, look at the pre-existing interfaces.
             res._period.set(performance.now() - res._lastStepEnd)
             res._lastStepEnd = performance.now()
         } finally {
-            if (res._startStep > curStep) return
             --res._stepsNow
 
             // Don't let the fire die out.
@@ -1314,7 +1299,7 @@ Exposes 2 actions, which add to viewport scroll position (in pixels).
             if (page.isClosed()) return
             const dx = sensitivity * Math.max(-1, Math.min(act[0], 1))
             const dy = sensitivity * Math.max(-1, Math.min(act[1], 1))
-            return page.evaluate((dx, dy) => scrollBy(dx, dy), dx, dy).catch(doNothing)
+            page.evaluate((dx, dy) => scrollBy(dx, dy), dx, dy).catch(doNothing)
         },
     }
 })
@@ -1506,7 +1491,7 @@ Exposes all mouse-related actions.
                 if (page.isClosed()) return
                 const dx = Math.max(-1, Math.min(act[0], 1)) * sensitivity
                 const dy = Math.max(-1, Math.min(act[1], 1)) * sensitivity
-                return page.mouse.wheel({ deltaX:dx, deltaY:dy })
+                page.mouse.wheel({ deltaX:dx, deltaY:dy }).catch(doNothing)
             },
         })
     }
@@ -1523,7 +1508,7 @@ Exposes all mouse-related actions.
                 const ay = Math.max(-1, Math.min(act[1], 1))
                 page.mouseX = (ax + 1) * .5 * (width-1) | 0
                 page.mouseY = (ay + 1) * .5 * (height-1) | 0
-                return page.mouse.move(page.mouseX, page.mouseY)
+                page.mouse.move(page.mouseX, page.mouseY).catch(doNothing)
             },
         })
     if (opt.relative && typeof opt.relative == 'number') {
@@ -1540,7 +1525,7 @@ Exposes all mouse-related actions.
                 const ay = Math.max(-1, Math.min(act[1], 1))
                 page.mouseX = Math.max(0, Math.min(page.mouseX + sensitivity * ax, width-1)) | 0
                 page.mouseY = Math.max(0, Math.min(page.mouseY + sensitivity * ay, height-1)) | 0
-                return page.mouse.move(page.mouseX, page.mouseY)
+                page.mouse.move(page.mouseX, page.mouseY).catch(doNothing).catch(doNothing)
             },
         })
     }
@@ -1807,19 +1792,20 @@ In particular, this:
 - To prevent infinite loops and/or heavy memory thrashing, if \`timeout\` (seconds) is non-zero: periodically checks whether JS takes too long to execute, and if so, re-launches the browser.
 `, function(timeout = 10, deleteCookies = true) {
     const performance = require('perf_hooks').performance
-    let env = null, lastStamp = performance.now(), intervalID = null
+    let env = null, lastStamp = performance.now(), intervalID = null, state = 'void'
     return {
-        init(page, E) {
+        async init(page, E) {
             env = E
-            env._cdp.send('Page.enable')
+            await env._cdp.send('Page.enable')
+            await env._cdp.send('Page.setDownloadBehavior', { behavior:'deny' }) // Deprecated, but so much better.
             env._cdp.send('Page.setAdBlockingEnabled', { enabled:true })
             env._browser.on('targetcreated', onNewTarget)
             page.on('dialog', onDialog)
             page.on('popup', onPopup)
             let expectedEnv = env
             ;(function waitMore(ch) {
+                ch && typeof ch.cancel == 'function' && ch.cancel()
                 if (env !== expectedEnv) return
-                ch && ch.cancel && ch.cancel()
                 expectedEnv = env
                 // With the default timeout,
                 //   closing and auto-reopening the browser causes an infinite loop in Puppeteer internals.
@@ -1828,8 +1814,9 @@ In particular, this:
             deleteCookies && page.on('load', noCookies)
             deleteCookies && page.on('framenavigated', noCookies)
             clearInterval(intervalID), intervalID = setInterval(maybeKillBrowser, timeout/2)
+            state = 'initialized'
         },
-        deinit(page, state) {
+        async deinit(page, state) {
             clearInterval(intervalID), intervalID = null
             deleteCookies && page.off('framenavigated', noCookies)
             deleteCookies && page.off('load', noCookies)
@@ -1837,12 +1824,12 @@ In particular, this:
             page.off('dialog', onDialog)
             env._browser.off('targetcreated', onNewTarget)
             env._cdp.send('Page.setAdBlockingEnabled', { enabled:false })
-            env._cdp.send('Page.disable')
+            await env._cdp.send('Page.disable')
             env = null
         },
         read(page, state, obs) {
-            if (env._page.isClosed()) return
-            if (Math.random() > .1) return
+            if (env._page.isClosed()) return lastStamp = performance.now()
+            if (Math.random() > .1 && performance.now() - lastStamp < timeout*(1000/2)) return
             // Discard console entries, and try to evaluate some JS;
             //   if it takes too long, re-launch the browser.
             //   (Re-launching can spam the console with unhandled promise rejection warnings.)
@@ -1850,10 +1837,12 @@ In particular, this:
             env._cdp.send('Runtime.discardConsoleEntries').catch(doNothing)
             if (timeout)
                 env._page.evaluate(() => 0).then(() => lastStamp = performance.now()).catch(doNothing)
+            if (state === 'initialized') state = 'ready'
         },
     }
     function maybeKillBrowser() {
-        if (!timeout || performance.now() - lastStamp <= timeout*1000) return
+        if (!timeout || state !== 'ready' || performance.now() - lastStamp <= timeout*1000) return
+        state = 'void'
         lastStamp = performance.now()
         env && env._browser && env._browser.isConnected() && env._browser.close()
     }
@@ -1878,6 +1867,7 @@ In particular, this:
         } catch (err) {}
     }
     function onNewTarget() {
+        lastStamp = performance.now()
         closeAllPagesExcept(env._browser, env._page)
     }
 })

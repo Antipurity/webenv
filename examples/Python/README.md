@@ -1,18 +1,16 @@
 A PyTorch implementation of an agent.
 
-## Structure
+## Files
 
-- `webenv.py`: a Python bridge to `webenv.js`.
+- Basic:
+  - `webenv.py`: a Python bridge to `webenv.js`.
+  - `recurrent.py`: RNN training. (Backpropagation-through-time and synthetic gradient.)
+- Replaceable:
+  - `ldl.py`: linearithmic (time and space) dense layers. (For handling big inputs & outputs with neither quadratic scaling nor assumptions about structure.)
+  - `reinforcement_learning.py`: maximization code, for non-prediction goals. (Mostly by modeling the reward and maximizing the model's output.)
+  - `main.py`: putting it all together.
 
-- `ldl.py`: linearithmic (time and space) dense layers. (Factorized, for handling big inputs & outputs with neither quadratic scaling nor assumptions about structure.)
-
-- `reinforcement_learning.py`: maximization code, for non-prediction goals. (Mostly by modeling the reward and maximizing the model's output.)
-
-- `recurrent.py`: RNN training. (Backpropagation-through-time and synthetic gradient.)
-
-- `main.py`: putting it all together.
-
-Unimplemented: save/load; multiple agents with the same model (which would reduce variance and make learning easier). Also opinions: sparsity (to make [low-dimensional representations](https://arxiv.org/abs/1906.10720) high-dimensional by combining many); [Transformers](https://arxiv.org/abs/2103.03206); non-loss [exploration reward](https://arxiv.org/abs/2101.09458) to [optimize](http://proceedings.mlr.press/v32/silver14.pdf); experience replay; [GAN losses](https://phillipi.github.io/pix2pix/), [BYOL variants](https://openreview.net/pdf?id=bgQek2O63w); literally anything else (use your imagination and/or ML expertise).
+Unimplemented: save/load; multiple agents with the same model (which would reduce variance and make learning easier). Also opinions: sparsity (to make [low-dimensional representations](https://arxiv.org/abs/1906.10720) high-dimensional by combining many); [Transformers](https://arxiv.org/abs/2103.03206); non-loss [exploration reward](https://arxiv.org/abs/2101.09458) to [optimize](http://proceedings.mlr.press/v32/silver14.pdf); experience replay; [GAN losses](https://phillipi.github.io/pix2pix/); [BYOL variants](https://openreview.net/pdf?id=bgQek2O63w) (for self-compression, for example, of actions); literally anything else (use your imagination and/or ML expertise).
 
 ## Tutorial
 
@@ -39,6 +37,12 @@ This marks the end of this tutorial.
 Video prediction with agency is hard, but possible.
 
 TODO: Put a screenshot here. ("Mouse & keyboard were disabled." "Right-side are predictions; it's normal for them to be delayed." "The orange line is with an exploration bonus; the red line is acting via a simple slice of internal state. As you can see, exploration is broken.")
+
+Predictions are blurry, and loss is relatively high. Video prediction is not solved, only poked.
+
+Not satisfied? Perfect: implement your own ideas on your big computer.
+
+[Here are some LSTM tricks for slightly better handling of learning-through-time, for example.](https://www.niklasschmidinger.com/posts/2020-09-09-lstm-tricks/)
 
 ## Bonus
 

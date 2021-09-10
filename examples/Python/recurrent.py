@@ -117,14 +117,13 @@ def recurrent(
       if unroll_length(unroll_index) if callable(unroll_length) else (unroll_length <= unroll_index):
         if synth_grad is not None:
           with torch.no_grad():
-            grad = synth_grad(state)
+            grad = state - synth_grad(state)
           unroll_loss = unroll_loss + (state * grad).sum()
         unroll_loss.backward()
         unroll_loss = 0.
         if synth_grad is not None:
           st = start_state.detach()
-          start_grad_pred = synth_grad(st)
-          synth_grad_loss(start_grad_pred, start_state.grad).backward()
+          synth_grad_loss(synth_grad(st), st - start_state.grad).backward()
         unrolls += 1
         if unrolls >= unrolls_per_step:
           unrolls = 0
