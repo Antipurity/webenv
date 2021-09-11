@@ -2,9 +2,14 @@
 
 
 
+import gc
 import sys
 import asyncio
 import numpy as np
+
+
+
+continue_on_errors = True
 
 
 
@@ -52,26 +57,38 @@ def webenv(agent, *interfaces, int_size=0, webenv_path='webenv', js_executor=js_
     prev_flush_info = [None]
     async def step(reader, writer, readFuture):
         nonlocal prev_agent_call
-        obs, act_len = await _read_all(reader, int_size)
-        readFuture.set_result(None)
-        prevW = prev_agent_call
-        nextW = prev_agent_call = asyncio.Future()
-        pred, act = await agent(obs, act_len)
-        if asyncio.isfuture(prevW): await prevW # Ensure linear ordering of writes.
-        nextW.set_result(None)
-        _write_all(writer, int_size, pred, act)
-        await _flush(writer, prev_flush_info)
+        try:
+            obs, act_len = await _read_all(reader, int_size)
+            readFuture.set_result(None)
+            prevW = prev_agent_call
+            nextW = prev_agent_call = asyncio.Future()
+            pred, act = await agent(obs, act_len)
+            if asyncio.isfuture(prevW): await prevW # Ensure linear ordering of writes.
+            nextW.set_result(None)
+            _write_all(writer, int_size, pred, act)
+            # await _flush(writer, prev_flush_info) # Apparently, `asyncio`'s `.drain()` cannot be trusted to return. Maybe it's because we turned off buffering.
+        except Exception as err:
+            if not continue_on_errors: raise
+            print(err)
     async def steps(cmd):
         P = asyncio.subprocess.PIPE
         proc = await asyncio.create_subprocess_shell(cmd, stdin=P, stdout=P)
-        proc.stdin.transport.set_write_buffer_limits(0, 0)
+        proc.stdin.transport.set_write_buffer_limits(0, 0) # Turn off buffering. (We only have 3 writes per message, so a buffer won't help us.)
         reader, writer = proc.stdout, proc.stdin
         _write_u32(writer, 0x01020304)
         await _flush(writer, prev_flush_info)
+        counter = 0
         while True:
-            read = asyncio.Future()
-            asyncio.create_task(step(reader, writer, read))
-            await read
+            try:
+                read = asyncio.Future()
+                asyncio.create_task(step(reader, writer, read))
+                if counter % 1000 == 0:
+                    gc.collect()
+                await read
+                counter = counter + 1
+            except Exception as err:
+                if not continue_on_errors: raise
+                print(err)
     asyncio.run(steps(cmd))
 async def _read_all(stream, int_size):
     obs = _decode(await _read_data(stream, int_size))

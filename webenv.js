@@ -51,7 +51,7 @@ To write new interfaces, look at the pre-existing interfaces.
     }
     const performance = require('perf_hooks').performance
     let maxStepsNow = 16 // Controlled by WEBENV_SIMULTANEOUS_STEPS.
-    const lowball = 5
+    const lowball = .95
     const res = {
         homepage: interfaces.find(x => typeof x == 'string'),
         _all:null, _allState:[],
@@ -301,7 +301,7 @@ To write new interfaces, look at the pre-existing interfaces.
         try {
             for (let i = 1; i < n; ++i)
                 try { return await func(arg) }
-                catch (err) {}
+                catch (err) { console.error('launch error', err) }
             return await func(arg)
         } catch (err) { res && res._browser && res._browser.close();  throw err }
         finally { then(), stall = null }
@@ -376,10 +376,10 @@ To write new interfaces, look at the pre-existing interfaces.
         if (res.homepage)
             // Browser crahes are far more frequent if we don't wait at least a bit.
             pP = Promise.race([
-                ...Promise.all([
-                    _page.goto(res.homepage).then(() => res._cdp.send('Page.resetNavigationHistory')).catch(doNothing),
+                ...(await Promise.all([
+                    _page.goto(res.homepage, {waitUntil:'domcontentloaded'}).then(() => res._cdp.send('Page.resetNavigationHistory')).catch(doNothing),
                     res._cdp.send('Page.resetNavigationHistory').catch(doNothing),
-                ]),
+                ])),
                 new Promise(then => setTimeout(then, 10000)),
             ])
         await res._extPage.exposeFunction('gotObserverData', gotObserverData)
@@ -397,7 +397,7 @@ To write new interfaces, look at the pre-existing interfaces.
 
             // Don't schedule too many steps at once. If all die, end-of-step will schedule anyway.
             if (res._stepsNow < maxStepsNow)
-                ++res._stepsNow, setTimeout(step, Math.max(0, +res._period - lowball))
+                ++res._stepsNow, setTimeout(step, Math.max(0, +res._period * lowball))
 
             try {
                 await res.read()
@@ -421,8 +421,7 @@ To write new interfaces, look at the pre-existing interfaces.
             } finally {
                 // Unlink the agents that do not want to live on.
                 if (unlink.size) {
-                    let prevStall = stall;  stall = res.relink(res._all.filter(o => !unlink.has(o)));  await prevStall
-                    unlink.clear()
+                    let prevStall = stall;  stall = res.relink(res._all.filter(o => !unlink.has(o))), unlink.clear();  await prevStall
                     prevStall = stall;  stall = null;  await prevStall
                 }
             }
@@ -436,7 +435,7 @@ To write new interfaces, look at the pre-existing interfaces.
             //   (If +res._period is too low, this trigger can get hit, and stall the pipeline.)
             //   (If +res._period is mostly accurate, there should be a steady stream of new-steps.)
             if (!res._stepsNow)
-                ++res._stepsNow, setTimeout(step, Math.max(0, +res._period - lowball))
+                ++res._stepsNow, setTimeout(step, Math.max(0, +res._period * lowball))
         }
     }
     function _allocArray(a) {
@@ -1391,7 +1390,7 @@ exports.triggers.homepage = docs(`\`webenv.triggers([webenv.triggers.homepage])\
 Back to homepage, please.
 `, function(page, env) {
     page.mouseX = env.width/2 | 0, page.mouseY = env.height/2 | 0
-    return page.goto(env.homepage).catch(doNothing)
+    return page.goto(env.homepage, {waitUntil:'domcontentloaded'}).catch(doNothing)
 })
 
 
@@ -1420,7 +1419,7 @@ Picks a random file: or http: or https: link on the current page, and follows it
     })
     if (!urls.length) return
     const url = urls[Math.random() * urls.length | 0]
-    return page.goto(url).catch(doNothing)
+    return page.goto(url, {waitUntil:'domcontentloaded'}).catch(doNothing)
 })
 
 
@@ -1437,7 +1436,7 @@ Must only be used with \`webenv.filter\`, with a string \`cache\` path.
     const navs = new Array(maxAttempts).fill(page.cache).map(getRandomNav)
     for (let nav of navs)
         if (nav = await nav)
-            return page.goto(nav).catch(doNothing)
+            return page.goto(nav, {waitUntil:'domcontentloaded'}).catch(doNothing)
     async function getRandomNav(name) {
         // Return a random URL deeply in `name` (assumed to be a `webenv.filter` cache),
         //   or `null` if not found.
@@ -1852,7 +1851,7 @@ In particular, this:
         const newURL = newPage.url()
         newPage.close()
         try {
-            env._page && newURL && env._page.goto(newURL).catch(doNothing)
+            env._page && newURL && env._page.goto(newURL, {waitUntil:'domcontentloaded'}).catch(doNothing)
         } catch (err) { console.error('Bad URL of a popup:', newURL) }
     }
     function onDialog(dial) {

@@ -52,7 +52,7 @@ Recent research on fully general architectures that deal with scalability includ
 
 - Externally: everything that lives is created to die, and all behavior is designed to **change** to make a number go up (learning).    
 The line between optimization and change is blurry, because for every change, there exist numbers that go up. Still, an explicit optimizer is the best way to control behavior.    
-So, infinite goal complexity; we will analyze it the same way we've analyzed infinite behavior complexity.
+So, infinite optimization complexity. We will analyze it in the same way we've analyzed infinite behavior complexity.
 
 ## What it will do
 
@@ -69,11 +69,11 @@ Alternatively, you can experiment with other ways-to-change, for example, Hebbia
 - **Awareness**.    
 If goals are intended to change, then it is better to not re-learn a model of the same world from scratch for each goal, but rather re-use the same one.    
 Predict the world. Compress it into your agent.    
-WebEnv is designed with next-frame prediction in mind.    
-Directly minimize (`min = -max`) [a basic loss](https://ml-cheatsheet.readthedocs.io/en/latest/loss_functions.html), or to assume less about causality, [learn a loss/goal and](https://phillipi.github.io/pix2pix/) [adversarially optimize it](https://keras.io/examples/rl/ddpg_pendulum/).    
-(If datasets are augmented with ML models that solve them, or if the Web allows close interaction with other agents or even humans, then prediction would combine all models into one: the benefit of generality outweighs its overhead.)
+WebEnv is designed with next-frame prediction in mind, as an easy-to-inspect target.    
+Directly minimize (`min = -max`) [a basic loss](https://ml-cheatsheet.readthedocs.io/en/latest/loss_functions.html), or to not assume direct causality, [learn a loss](https://en.wikipedia.org/wiki/Expectation%E2%80%93maximization_algorithm)[/goal and ](https://phillipi.github.io/pix2pix/)[adversarially optimize it](https://keras.io/examples/rl/ddpg_pendulum/).    
+The benefit of generality outweighs its overhead: if datasets are augmented with ML models that solve them, and/or if the Web allows close interaction with other agents or even humans, then prediction would combine all models into one. Alternatively:
 
-- **Change** goals.    
+- **Change** (learn) goals.    
 Learning a thing is more efficient than leaving it static. So what is the goal of your goal, or of all goals? The search space is infinite, so you will eventually encounter meta-circularity as the most stable arrangement.    
 Without spoiling the experience, WebEnv's `directScore(x)` can provide a goal distribution that is both complex enough to average out heuristics, and is aligned with humanity's interests.    
 Have to apply that compute, though. Both human-compute, making it a standard practice, and machine-compute, learning it.

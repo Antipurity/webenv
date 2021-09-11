@@ -24,6 +24,7 @@ class GradMaximize(torch.nn.Module):
   - `loss=L2`: a function from reward prediction and reality, to the number to minimize.
   - `strength=1.`: multiplier of maximization's loss.
   - `pred_gradient=False`: whether reward prediction gives gradient to the model too, for more accuracy.
+  - `momentum=.99`: we keep a slowly-changing copy of `reward_model` with parameters updated by momentum, and maximize that for more stability. `0` for instant updates.
 
   Call args:
   - `x`: state.
@@ -38,26 +39,31 @@ class GradMaximize(torch.nn.Module):
   - Discrete RL has to evaluate each of N actions, multiplying runtime+memory cost by N. GradMax only doubles that, approximately.
   - For very-high-dimensional action spaces, discrete RL has to consider exponentially many actions. GradMax is as linear-time as gradient descent.
   """
-  def __init__(self, reward_model, loss=L2, strength=1., pred_gradient=True):
+  def __init__(self, reward_model, loss=L2, strength=1., pred_gradient=True, momentum=.99):
     super(GradMaximize, self).__init__()
     self.reward_model = reward_model
     self.loss = loss
     self.strength = strength
     self.pred_gradient = pred_gradient
-    pars = reward_model.parameters()
-    if hasattr(loss, 'parameters'):
-      pars = [*pars, *loss.parameters()]
-    self.params = [p for p in pars if hasattr(p, 'requires_grad') and p.requires_grad]
-  def switch_param_gradient(self, requires_grad=True):
-    for p in self.params:
-      p.requires_grad_(requires_grad)
+    self.momentum = momentum
+    self.copy = self.init_momentum(reward_model)
+  def init_momentum(self, net):
+    import copy
+    cp = copy.deepcopy(net)
+    for x,y in zip(net.parameters(), cp.parameters()):
+      y.requires_grad_(False)
+      y.data.copy_(x.data)
+    return cp
+  def update_momentum(self, net, cp, momentum):
+    with torch.no_grad():
+      for x,y in zip(net.parameters(), cp.parameters()):
+        y.data = momentum * y.data + (1-momentum) * x.data
   def forward(self, x, reward):
     # 10 minutes to implement. 5 minutes to debug (more like, run).
+    self.update_momentum(self.reward_model, self.copy, self.momentum)
     lR = self.loss(self.reward_model(x if self.pred_gradient else x.detach()), reward)
     print('                lR', self.reward_model(x.detach()).cpu().detach().numpy(), '    ', reward.cpu().detach().numpy()) # TODO: ...Why is it so inaccurate?
-    self.switch_param_gradient(False)
-    lX = self.reward_model(x).sum() * self.strength
-    self.switch_param_gradient(True)
+    lX = self.copy(x).sum() * self.strength
     print('                         lX', lX.cpu().detach().numpy()) # TODO
     return lR - lX # Predict reward, & maximize reward prediction.
 

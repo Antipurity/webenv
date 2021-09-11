@@ -18,7 +18,7 @@ hparams = {
   'N_state': 8 * 2**12, # Cost is linearithmic in this.
   'unroll_length': 1, # Every `1/UL`th step will have `2*UL`× more cost.
   'synth_grad': True, # Unless UL is thousands, this gradient-prediction is a good idea.
-  'merge_obs': 'concat', # 'add', 'merge' (Teacher Forcing in ML), 'concat'.
+  'merge_obs': 'concat', # 'add', 'merge' (Teacher Forcing in ML), 'concat'. # TODO
   #   'add' makes predictions' magnitude too big, 'merge' cuts off gradient, 'concat' is expensive.
 
   'time_horizon': .0, # Without planning, this has to be non-zero, to transfer reward from future to past.
@@ -134,5 +134,5 @@ webenv.webenv(
   #   (The defaults include a possibility of such a redirector.)
   webenv_path=we_p)
 
-# TODO: Re-run gradmax=0 and gradmax=10, now that we changed a lot of hyperparams.
+# TODO: Re-run gradmax=1 and gradmax=10, now that we have momentum.
 # TODO: Catch more screenshots, and a smooth GIF if we can. In examples/README.md, describe this.
