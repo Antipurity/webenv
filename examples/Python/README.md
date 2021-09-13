@@ -7,10 +7,10 @@ A PyTorch implementation of an agent.
   - `recurrent.py`: RNN training. (Backpropagation-through-time and synthetic gradient.)
 - Replaceable:
   - `ldl.py`: linearithmic (time and space) dense layers. (For handling big inputs & outputs with neither quadratic scaling nor assumptions about structure.)
-  - `reinforcement_learning.py`: maximization code, for non-prediction goals. (Mostly by modeling the reward and maximizing the model's output.)
+  - `reinforcement_learning.py`: maximization code, for non-prediction goals. (Mostly by modeling the reward and maximizing that model's output.)
   - `main.py`: putting it all together.
 
-Unimplemented: save/load; multiple agents with the same model (which would reduce variance and make learning easier). Also opinions: sparsity (to make [low-dimensional representations](https://arxiv.org/abs/1906.10720) high-dimensional by combining many); [Transformers](https://arxiv.org/abs/2103.03206); non-loss [exploration reward](https://arxiv.org/abs/2101.09458) to [optimize](http://proceedings.mlr.press/v32/silver14.pdf); experience replay; [GAN losses](https://phillipi.github.io/pix2pix/); [Siamese networks](https://arxiv.org/abs/2011.10566); literally anything else (use your imagination and/or ML expertise).
+Unimplemented: save/load; multiple agents with the same model (which would reduce variance and make learning easier). Also did not implement opinions: non-static sparsity (to make [low-dimensional representations](https://arxiv.org/abs/1906.10720) high-dimensional by combining many); [Transformers](https://arxiv.org/abs/2103.03206); non-loss [exploration reward](https://arxiv.org/abs/2101.09458) to [optimize](http://proceedings.mlr.press/v32/silver14.pdf); experience replay; [GAN losses](https://phillipi.github.io/pix2pix/); [Siamese networks](https://arxiv.org/abs/2011.10566); literally anything else (use your imagination and/or ML expertise).
 
 ## Tutorial
 
@@ -26,9 +26,9 @@ Then, launch `main.py` in this directory:
 python main.py
 ```
 
-To stop it, press Ctrl+C, or pour lava on your computer. On stopping, exceptions are normal, though not during runtime (if there are, you are seeing a bug that we have not figured out a solution to).
+To stop it, press Ctrl+C, or pour lava on your computer. On stopping, exceptions are normal, though not during runtime (if there are, then you are seeing a bug; open an issue).
 
-If you want, modify hyperparameters in `main.py` (such as `tensorboard`), and/or copy this folder to another place and modify `webenv_path` at the bottom of `main.py` appropriately.
+If you want, modify hyperparameters in `main.py` (such as `tensorboard`), and/or copy this folder to another place and modify `webenv_path` at the bottom of `main.py` appropriately: if in a folder with the `webenv` NPM package installed, simply `webenv`.
 
 This marks the end of this tutorial.
 
@@ -36,17 +36,44 @@ This marks the end of this tutorial.
 
 Video prediction with agency is hard, but possible.
 
-TODO: Put a screenshot here. ("Mouse & keyboard were disabled." "Right-side are predictions; it's normal for them to be delayed." "The orange line is with an exploration bonus; the red line is acting via a simple slice of internal state. As you can see, exploration is broken.")
+Here, predictions are on the right, delayed by a few frames. We used [Google's homepage](https://www.google.com/).
 
-Predictions are blurry, and loss is relatively high. Video prediction is not solved, only poked.
+<p>
+  <img width=49% src=images/agent-1.png>
+  <img width=49% src=images/agent-2.png>
+  <img width=49% src=images/agent-3.png>
+  <img width=49% src=images/agent-4.png>
+</p>
+
+<p style="text-align:center">
+  <img src=images/noexplore-anim.gif>
+</p>
+
+The loss goes down somewhat, though exploration hardly does anything here.
+
+Here, `unroll_length` is `1`, and blue is without an exploration bonus (so, only next-frame prediction), orange is with it (`gradmax` is `1.`):
+
+<p style="text-align:center">
+  <img width=342 src=images/orange-explore-blue-not.png>
+</p>
+
+However, `unroll_length`=`2` (orange) learns better than synthetic-gradient-only `unroll_length`=`1` (red):
+
+<p style="text-align:center">
+  <img width=342 src=images/unroll_length_2_is_better.png>
+</p>
+
+In conclusion:
+
+Predictions are blurry, and loss is high. Video prediction is not solved, only poked at.
 
 Not satisfied? Perfect: implement your own ideas on your big computer.
 
-[Here are some LSTM tricks for slightly better handling of learning-through-time, for example.](https://www.niklasschmidinger.com/posts/2020-09-09-lstm-tricks/)
+[For example, here are some LSTM tricks for slightly better handling of learning-through-time.](https://www.niklasschmidinger.com/posts/2020-09-09-lstm-tricks/)
 
 ## Bonus
 
-A comparison between vanilla dense layers and linearithmic dense layers, which should be enough to explain everything:
+Since math-y visualizations are always pretty, here is a comparison between vanilla dense layers and linearithmic dense layers:
 
 <p style="text-align:center">
   <p style="margin:0 auto; display:table">

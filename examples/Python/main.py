@@ -18,14 +18,15 @@ hparams = {
   'N_state': 8 * 2**12, # Cost is linearithmic in this.
   'unroll_length': 1, # Every `1/UL`th step will have `2*UL`× more cost.
   'synth_grad': True, # Unless UL is thousands, this gradient-prediction is a good idea.
-  'merge_obs': 'concat', # 'add', 'merge' (Teacher Forcing in ML), 'concat'. # TODO
+  'merge_obs': 'concat', # 'add', 'merge' (Teacher Forcing in ML), 'concat'.
   #   'add' makes predictions' magnitude too big, 'merge' cuts off gradient, 'concat' is expensive.
 
   'time_horizon': .0, # Without planning, this has to be non-zero, to transfer reward from future to past.
 
-  'gradmax': 1., # Multiplier of planning via gradient.
+  'gradmax': 0., # Multiplier of planning via gradient.
   'gradmax_only_actions': False, # Where GradMax's gradient goes: only actions, or the whole state.
   'gradmax_pred_gradient': False, # Whether GradMax's gradient to state includes reward misprediction.
+  'gradmax_momentum': .99,
 
   'layers': 1, # Makes computations-over-time more important than reactions, and increases FPS.
   'nonlinearity': 'Softsign', # (With layers=1, this is only used in synthetic gradient.)
@@ -67,7 +68,7 @@ synth_grad = ns(N, N, ldl.LinDense, layer_count = layers + 1, Nonlinearity=nl, l
 transition = ldl.MGU(ns, N_ins, N, ldl.LinDense, layer_count=layers, Nonlinearity=nl, local_first=lf, device=dev, example_batch_shape=(2,), unique_dims=(), out_mult = hparams['out_mult'])
 from reinforcement_learning import GradMaximize, Return
 return_model = Return(ns(N, 1, ldl.LinDense, layer_count=layers, Nonlinearity=nl, local_first=lf, device=dev), time_horizon=hparams['time_horizon']) if hparams['time_horizon']>0 else None
-max_model = GradMaximize(ns(N, 1, ldl.LinDense, layer_count=layers, Nonlinearity=nl, local_first=lf, device=dev), strength=hparams['gradmax'], pred_gradient=hparams['gradmax_pred_gradient']) if hparams['gradmax']>0 else None
+max_model = GradMaximize(ns(N, 1, ldl.LinDense, layer_count=layers, Nonlinearity=nl, local_first=lf, device=dev), strength=hparams['gradmax'], pred_gradient=hparams['gradmax_pred_gradient'], momentum=hparams['gradmax_momentum']) if hparams['gradmax']>0 else None
 optim = getattr(torch.optim, hparams['optim'])([
   { 'params':[*params(transition, return_model, max_model)] },
   { 'params':[*params(synth_grad)], 'lr':hparams['synth_grad_lr'] },
@@ -134,5 +135,4 @@ webenv.webenv(
   #   (The defaults include a possibility of such a redirector.)
   webenv_path=we_p)
 
-# TODO: Re-run gradmax=1 and gradmax=10, now that we have momentum.
-# TODO: Catch more screenshots, and a smooth GIF if we can. In examples/README.md, describe this.
+# TODO: In examples/README.md, describe this.

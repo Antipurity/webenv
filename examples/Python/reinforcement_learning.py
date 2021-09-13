@@ -62,9 +62,7 @@ class GradMaximize(torch.nn.Module):
     # 10 minutes to implement. 5 minutes to debug (more like, run).
     self.update_momentum(self.reward_model, self.copy, self.momentum)
     lR = self.loss(self.reward_model(x if self.pred_gradient else x.detach()), reward)
-    print('                lR', self.reward_model(x.detach()).cpu().detach().numpy(), '    ', reward.cpu().detach().numpy()) # TODO: ...Why is it so inaccurate?
     lX = self.copy(x).sum() * self.strength
-    print('                         lX', lX.cpu().detach().numpy()) # TODO
     return lR - lX # Predict reward, & maximize reward prediction.
 
 
