@@ -315,8 +315,7 @@ To write new interfaces, look at the pre-existing interfaces.
         }
 
         const ext = require('path').join(__dirname, 'extension')
-        const profId = Math.random() * 16 | 0 // In case Chromiums overlap.
-        const dataDir = require('path').join(__dirname, 'puppeteer-chrome-profile', 'p'+profId)
+        const dataDir = require('path').join(__dirname, 'puppeteer-chrome-profile')
 
         // Remove folders that may be problematic for long-term stability. (Things never just work.)
         const fs = require('fs')

@@ -64,7 +64,7 @@ Direct formalizations of this are trivial: [AIXI](http://www.hutter1.net/ai/uaib
 The problem with search at runtime is that it is extremely inefficient in large search spaces (such as parameters of a neural network).    
 Rather than searching, it is more efficient to have searched: learning.    
 Stochastic gradient descent (SGD) and its variants are usually used for learning. It is ancient tech, but it still works well.    
-Alternatively, you can experiment with other ways-to-change, for example, Hebbian rules or HTM (Thousand Brains); do tell others how it went.
+Alternatively, you can experiment with other ways-to-change, for example, [Hebbian rules](https://en.wikipedia.org/wiki/Generalized_Hebbian_algorithm) or HTM (Thousand Brains); do tell others how it went.
 
 - **Awareness**.    
 If goals are intended to change, then it is better to not re-learn a model of the same world from scratch for each goal, but rather re-use the same one.    

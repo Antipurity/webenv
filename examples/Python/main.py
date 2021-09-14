@@ -134,5 +134,3 @@ webenv.webenv(
   #   One that won't mark the agent as a bot, and then it.
   #   (The defaults include a possibility of such a redirector.)
   webenv_path=we_p)
-
-# TODO: In examples/README.md, describe this.

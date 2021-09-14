@@ -16,7 +16,7 @@ Unimplemented: save/load; multiple agents with the same model (which would reduc
 
 If you ever woke up in the middle of the night to think, "damn, I **need** to know how to run this PyTorch example!" — well, you are in luck!
 
-First, make sure to have [Python](https://www.google.com/search?q=install+python) (90 MB) and [PyTorch](https://www.google.com/search?q=install+pytorch) (1.2 GB) installed.
+First, make sure to have [Python](https://www.google.com/search?q=install+python) (90 MB) and [PyTorch](https://www.google.com/search?q=install+pytorch) (1.2 GB, mostly due to CUDA) installed.
 
 Optionally, install [TensorBoard](https://www.google.com/search?q=install+tensorboard), to be able to create and view those loss plots. Pretty bad software though, would not recommend.
 
@@ -48,6 +48,8 @@ Here, predictions are on the right, delayed by a few frames. We used [Google's h
 <p style="text-align:center">
   <img src=images/noexplore-anim.gif>
 </p>
+
+(Looking at it makes you somewhat more aware of your own colorful patternful noise and fleeting afterimages near changed conditions, right? Why would those exist if not because of next-frame prediction?)
 
 The loss goes down somewhat, though exploration hardly does anything here.
 
