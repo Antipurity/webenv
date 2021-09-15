@@ -15,7 +15,7 @@ Setting up an infinite loop that allows useful learning in any situation is esse
 Using [NPM](https://www.npmjs.com/), install the `webenv` package:
 
 ```bash
-npm install -g webenv
+npm install -g webenv-ml
 ```
 
 Then, `require` it in JavaScript, as you commonly do in machine learning, and use it:
