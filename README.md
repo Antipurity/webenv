@@ -10,14 +10,23 @@ Agents interact with the Web by continuously receiving observations and sending 
 
 Setting up an infinite loop that allows useful learning in any situation is essential for the most interesting applications of intelligence. WebEnv provides a clean interface to the real world, while discouraging practices that act as barriers to learning.
 
+## Getting started
+
+Using [NPM](https://www.npmjs.com/), install the `webenv` package:
+
+```bash
+npm install -g webenv
+```
+
+Then, `require` it in JavaScript, as you commonly do in machine learning, and use it:
+
 ## Index
 
-- [Get started](#getting-started)
-- [Create your own agent, via copy-modify](examples/README.md)
-- [Choose the static interfaces](docs/INTERFACES.md)
-- [Choose additional ML datasets](tools/README.md)
-- [What counts as solving WebEnv](docs/AGENTS.md)
-- [Explanations of architectural decisions](docs/questionable.md)
+- [Create your own agent, via copy-modify](https://github.com/Antipurity/webenv/tree/master/examples)
+- [Choose the static interfaces](https://github.com/Antipurity/webenv/blob/master/docs/INTERFACES.md)
+- [Choose additional ML datasets](https://github.com/Antipurity/webenv/tree/master/tools)
+- [What counts as solving WebEnv](https://github.com/Antipurity/webenv/blob/master/docs/AGENTS.md)
+- [Explanations of architectural decisions](https://github.com/Antipurity/webenv/blob/master/docs/questionable.md)
 
 ## Features
 
@@ -48,11 +57,3 @@ No constraints to make learning easier. Brush against raw generality.
 - Web code is not native code. Without an explicit bridge, it is impossible to send actions to or receive non-video observations from native applications. (In exchange, we leverage greater control over what happens, currently through navigation and visual augmentations.)
 
 - You can get IP-banned by some websites for running bots. ([Follow ](https://www.w3.org/wiki/Write_Web_Crawler)[the etiquette.](http://www.robotstxt.org/guidelines.html))
-
-## Getting started
-
-TODO: Create a GitHub repo for this. `gh repo create webenv --public --license MIT -d "Extensible environment for training AGI"`
-
-TODO: Create & upload this as an NPM package, after installing it locally and verifying that it works (via copying the example: that's the only way to be sure).
-
-TODO: ...what, do we just say how to install it? Need to upload an NPM package for this first, right?

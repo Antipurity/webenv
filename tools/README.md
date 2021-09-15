@@ -23,9 +23,9 @@ In the end, you should see "OK".
 
 # Using
 
-Once finished, the installation process will tell the `file:` URL; use that.
+Once finished, the installation process will report the `file:` URL; use that.
 
-Alternatively, create an HTTP/S dataset server:
+Alternatively, launch an HTTP/S dataset server:
 
 ```bash
 npm explore webenv -- npm run serve-datasets

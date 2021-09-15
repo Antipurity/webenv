@@ -28,7 +28,7 @@ python main.py
 
 To stop it, press Ctrl+C, or pour lava on your computer. On stopping, exceptions are normal, though not during runtime (if there are, then you are seeing a bug; open an issue).
 
-If you want, modify hyperparameters in `main.py` (such as `tensorboard`), and/or copy this folder to another place and modify `webenv_path` at the bottom of `main.py` appropriately: if in a folder with the `webenv` NPM package installed, simply `webenv`.
+If you want, modify hyperparameters in `main.py` (such as `tensorboard`), and/or copy this folder to another place and modify `webenv_path` at the bottom of `main.py` appropriately: if in a folder with the `webenv` NPM package installed, simply `webenv_path = 'webenv'`.
 
 This marks the end of this tutorial.
 
@@ -49,7 +49,7 @@ Here, predictions are on the right, delayed by a few frames. We used [Google's h
   <img src=images/noexplore-anim.gif>
 </p>
 
-(Looking at it makes you somewhat more aware of your own colorful patternful noise and fleeting afterimages near changed conditions, right? Why would those exist if not because of next-frame prediction?)
+(Looking at it makes you somewhat more aware of your own colorful patternful noise and fleeting afterimages near changed conditions, right? Why would those exist if not because of next-frame prediction? Do not draw conclusions from overly-small models, though.)
 
 The loss goes down somewhat, though exploration hardly does anything here.
 
