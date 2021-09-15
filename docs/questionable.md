@@ -36,7 +36,8 @@ Browser > robot.
 
 To solve AGI is to solve philosophy. Luckily, it's pretty easy. Unluckily, the solution does not satisfy any egos that humans spent a lot of time building up, and so it is always instantly dismissed.
 
-If some thing [learns the world, can represent anything, can learn anything, and do it as efficiently as is reasonably possible](AGENTS.md) (and never ceases to exist). If you only consider the previous sentence rather than your intuitions, why *wouldn't* that thing be able to scale to the biggest concepts in human imagination, namely, general intelligence and the universe?
+If some thing [learns the world, can represent anything, can learn anything, and do it as efficiently as is reasonably possible](AGENTS.md) (and never ceases to exist). If you only consider the previous sentence rather than your intuitions, why *wouldn't* that thing be able to scale to the biggest concepts in human imagination, namely, general intelligence and the universe?    
+(Apart from "'can' does not imply 'will'", which is more of an implementation concern than a fundamental limitation.)
 
 Let us go through some AGI conceptions that I know, from both AI-experts and common-sense.
 
@@ -46,7 +47,7 @@ Let us go through some AGI conceptions that I know, from both AI-experts and com
 
 - [Combine all learning algorithms](https://singularitynet.io/): hard to argue that, when you can do everything, you are a general intelligence. But the formation of that "everything" was still caused by some optimizer (such as human needs), so, if you run a simple self-supervised-learning agent on all data, then it could learn all learning algorithms too. Compute+data is the answer.
 
-- [Intelligence = compression](http://prize.hutter1.net/): prediction is how well the world is copied internally with max re-use, so, compression. For example, stochastic gradient descent would zero-out gradient for uncorrelated circuits and encourage modification of relevant circuits, so it maximizes re-use. WebEnv is made for next-frame prediction on big data, along with RL.
+- [Intelligence = compression](http://prize.hutter1.net/): prediction is how well the world is copied internally with max re-use, so, compression. For example, [Hebbian rules](https://en.wikipedia.org/wiki/Generalized_Hebbian_algorithm) would sharpen correlations and thus [extract the direction of maximum variance](https://www.cs.cmu.edu/afs/cs/academic/class/15782-f06/slides/hebbpca.pdf); or, stochastic gradient descent would zero-out gradient for statistically independent circuits and sharpen relevant dependencies. Lack of re-use (simplicity) can be encouraged with techniques such as [dropout](https://jmlr.org/papers/volume15/srivastava14a/srivastava14a.pdf) or `x[N + random.randrange(len(x)-N):]`. WebEnv is made for next-frame prediction on big data, along with RL.
   - If we treat this angle more generously, it implies that agency could be learned from compressing own actions, so that a random walk through a largely-redundant space becomes a random walk through the most semantically meaningful space. WebEnv provides a largely-redundant space to walk through and compress.
   - If we treat it even more generously, agents should be able to compress everything including themselves, so that they could easily create agents equivalent to themselves, and self-replicate without self-replication mechanisms. Training ML models in the browser is rather unstable and minimal-functionality, mostly because Nvidia exists, and because GPUs are treated as a different world from CPUs. WebEnv is hardly ideal for learned self-replication.
 

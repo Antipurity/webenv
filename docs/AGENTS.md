@@ -80,7 +80,9 @@ Have to apply that compute, though. Both human-compute, making it a standard pra
 
 Not mentioned: exploration, which in a sense *maximizes* loss through actions in addition to minimizing it, to offset exploitation and sample possibilities more uniformly. Could be useful. Could be supplanted by intermittent random-page transitions. Unclear right now.
 
-Additionally, arbitrary-goals might be enough to learn a consistent world model, making next-frame prediction unnecessary. However, arbitrary-goals requires full human endorsement, prediction does not, and we at least have to start somewhere. Unclear right now.
+Moreover, some representation-simplicity encouragement such as [dropout](https://jmlr.org/papers/volume15/srivastava14a/srivastava14a.pdf) or `x[N + random.randrange(len(x)-N):]` could improve generalization. The narrative (4 words twice) was already too complex, no need for more details.
+
+Additionally, arbitrary-goals might be enough to learn a consistent world model, making next-frame prediction unnecessary. However, having arbitrary goals requires full human endorsement, prediction does not, and we at least have to start somewhere. Unclear right now.
 
 Furthermore, remember that your agents are only as secure as the hardware+software stack that they are built on, which is [very](https://cromwell-intl.com/cybersecurity/hardware.html) [unsafe](https://owasp.org/www-community/vulnerabilities/). Write secure code, people; if possible, isolate WebEnv itself in a VM.
 

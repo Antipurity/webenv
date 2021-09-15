@@ -12,13 +12,13 @@ Setting up an infinite loop that allows useful learning in any situation is esse
 
 ## Getting started
 
-Using [NPM](https://www.npmjs.com/), install the `webenv` package:
+Using [NPM](https://www.npmjs.com/), as you commonly do in machine learning, install the `webenv-ml` package:
 
 ```bash
 npm install -g webenv-ml
 ```
 
-Then, `require` it in JavaScript, as you commonly do in machine learning, and use it:
+Then, `require` it in JavaScript, or bridge to another language, and use it:
 
 ## Index
 
