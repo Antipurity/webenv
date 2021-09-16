@@ -36,8 +36,7 @@ Browser > robot.
 
 To solve AGI is to solve philosophy. Luckily, it's pretty easy. Unluckily, the solution does not satisfy any egos that humans spent a lot of time building up, and so it is always instantly dismissed.
 
-If some thing [learns the world, can represent anything, can learn anything, and do it as efficiently as is reasonably possible](AGENTS.md) (and never ceases to exist). If you only consider the previous sentence rather than your intuitions, why *wouldn't* that thing be able to scale to the biggest concepts in human imagination, namely, general intelligence and the universe?    
-(Apart from "'can' does not imply 'will'", which is more of an implementation concern than a fundamental limitation.)
+If some thing [learns the world, can represent anything, can learn anything, do it as efficiently as is reasonably possible, and will eventually learn and maximize everything quickly](AGENTS.md). If you only consider the previous sentence rather than your intuitions, why *wouldn't* that thing be able to scale to the biggest concepts in human imagination, namely, general intelligence and the universe?
 
 Let us go through some AGI conceptions that I know, from both AI-experts and common-sense.
 
