@@ -16,5 +16,8 @@
     el.textContent = url.slice(0, url.lastIndexOf('/'))
     document.body.appendChild(el)
   })
+
+  // Also cater to the weak-minded, by picking for them if they take too long.
+  setTimeout(() => location.href = urls[Math.random() * urls.length | 0], 10000)
 </script>
 </body>

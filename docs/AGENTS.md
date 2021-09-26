@@ -52,6 +52,7 @@ Recent research on fully general architectures that deal with scalability includ
 
 - Externally: everything that lives is created to die, and all behavior is designed to **change** to make a number go up (learning).    
 The line between optimization and change is blurry, because for every change, there exist numbers that go up. Still, an explicit optimizer is the best way to control behavior.    
+(A [Transformer](https://arxiv.org/abs/2103.03206) can be seen as an inductive bias toward mesa-optimization, since [it can be seen as differentiable choices](https://antipurity.github.io/conceptual#tutorial%20softmax). However, we have to secure gradient sources first.)    
 So, infinite optimization complexity. We will analyze it in the same way we've analyzed infinite behavior complexity.
 
 ## What it will do

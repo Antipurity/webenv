@@ -373,7 +373,7 @@ To write new interfaces, look at the pre-existing interfaces.
         const rlP = res.relink(...oldInters)
         let pP
         if (res.homepage)
-            // Browser crahes are far more frequent if we don't wait at least a bit.
+            // Browser crashes are far more frequent if we don't wait at least a bit.
             pP = Promise.race([
                 ...(await Promise.all([
                     _page.goto(res.homepage, {waitUntil:'domcontentloaded'}).then(() => res._cdp.send('Page.resetNavigationHistory')).catch(doNothing),
