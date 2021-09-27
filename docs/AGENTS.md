@@ -8,9 +8,9 @@ It is a two-parter: handling infinite data complexity, and handling infinite goa
 
 To be more precise:
 
-1. Do next-frame predictions so well that, in eternal absence of observations (such as on the Void 'dataset'), humans cannot distinguish predictions and real histories, through neither accuracy nor diversity, even in open-ended situations such as a programming language REPL. This requires a model of the world and the agent's role in it, useful for downstream tasks.
+1. Do next-frame predictions so well that, in eternal absence of observations (such as on the Void 'dataset'), humans cannot distinguish predictions and real histories, through neither accuracy nor diversity, even in open-ended situations such as a programming language REPL. Or at least be indistinguishable from human dreams. This requires a model of the world and the agent's role in it, useful for downstream tasks.
 
-2. Be able to quickly satisfy arbitrary user goals, especially those that are impossible to solve without a world model: extremely-sparse-reward tasks that are described with words, such as "get a university degree". Optimization for goals of many others is largely the same as being a society member, amortizes [deception risk](https://arxiv.org/abs/1906.01820) and turns it into self-determination, and propels an agent from a toy to a product.
+2. Be able to quickly satisfy arbitrary user goals, especially those that are impossible to solve without a world model: extremely-sparse-reward tasks that are described with words, such as "get a university degree". Optimization for goals of many others instead of only your own is: largely the same as being a society member, amortizes [deception risk](https://arxiv.org/abs/1906.01820) and turns it into self-determination, and propels an agent from a toy to a product.
 
 If you do not know where to begin solving these two, then this guidance is for you. (Mostly intended for ML models, true.)
 
@@ -52,7 +52,7 @@ Recent research on fully general architectures that deal with scalability includ
 
 - Externally: everything that lives is created to die, and all behavior is designed to **change** to make a number go up (learning).    
 The line between optimization and change is blurry, because for every change, there exist numbers that go up. Still, an explicit optimizer is the best way to control behavior.    
-(A [Transformer](https://arxiv.org/abs/2103.03206) can be seen as an inductive bias toward mesa-optimization, since [it can be seen as differentiable choices](https://antipurity.github.io/conceptual#tutorial%20softmax). However, we have to secure gradient sources first.)    
+(A [Transformer](https://arxiv.org/abs/2103.03206) can be seen as an inductive bias toward mesa-optimization, since [it can be seen as differentiable choices](https://antipurity.github.io/conceptual#tutorial%20softmax). However, we have to secure sources of change first.)    
 So, infinite optimization complexity. We will analyze it in the same way we've analyzed infinite behavior complexity.
 
 ## What it will do
@@ -63,7 +63,7 @@ Direct formalizations of this are trivial: [AIXI](http://www.hutter1.net/ai/uaib
 
 - **Speed**.    
 The problem with search at runtime is that it is extremely inefficient in large search spaces (such as parameters of a neural network).    
-Rather than searching, it is more efficient to have searched: learning.    
+Rather than searching from scratch each time, it is far more efficient to only search a bit and remember results: learning.    
 Stochastic gradient descent (SGD) and its variants are usually used for learning. It is ancient tech, but it still works well.    
 Alternatively, you can experiment with other ways-to-change, for example, [Hebbian rules](https://en.wikipedia.org/wiki/Generalized_Hebbian_algorithm) or HTM (Thousand Brains); do tell others how it went.
 
@@ -79,13 +79,13 @@ Learning a thing is more efficient than leaving it static. So what is the goal o
 Without spoiling the experience, WebEnv's `directScore(x)` can provide a goal distribution that is both complex enough to average out heuristics, and is aligned with humanity's interests.    
 Have to apply that compute, though. Both human-compute, making it a standard practice, and machine-compute, learning it.
 
-Not mentioned: exploration, which in a sense *maximizes* loss through actions in addition to minimizing it, to offset exploitation and sample possibilities more uniformly. Could be useful. Could be supplanted by intermittent random-page transitions. Unclear right now.
+Not mentioned: exploration, which in a sense *maximizes* loss through actions in addition to minimizing it, to offset exploitation and sample possibilities more uniformly. Could be useful. Could be supplanted by intermittent random-page transitions, and/or user-defined reward. Unclear right now.
 
-Moreover, some representation-simplicity encouragement such as [dropout](https://jmlr.org/papers/volume15/srivastava14a/srivastava14a.pdf) or `x[N + random.randrange(len(x)-N):]` could improve generalization. The narrative (4 words twice) was already too complex, no need for more details.
+Moreover, some representation-simplicity encouragement such as [dropout](https://jmlr.org/papers/volume15/srivastava14a/srivastava14a.pdf) or `x[random.randrange(len(x)):]` could improve generalization. The narrative (4 words twice) was already too complex, no need for more details.
 
-Additionally, arbitrary-goals might be enough to learn a consistent world model, making next-frame prediction unnecessary. However, having arbitrary goals requires full human endorsement, prediction does not, and we at least have to start somewhere. Unclear right now.
+Additionally, arbitrary-goals might be enough to learn a consistent world model, making next-frame prediction unnecessary. However, self-supervised learning builds the most stable yet accurate knowledge base for any goal to use, so, universe assimilator > general intelligence, probably. Unclear without compute and human endorsement of those arbitrary goals.
 
-Furthermore, remember that your agents are only as secure as the hardware+software stack that they are built on, which is [very](https://cromwell-intl.com/cybersecurity/hardware.html) [unsafe](https://owasp.org/www-community/vulnerabilities/). Write secure code, people; if possible, isolate WebEnv itself in a VM.
+Furthermore, remember that your agents are only as secure as the hardware+software stack that they are built on, which is [very ](https://cromwell-intl.com/cybersecurity/hardware.html)[unsafe](https://owasp.org/www-community/vulnerabilities/). Write secure code, people; if possible, isolate browsers launched by WebEnv in a VM or on another machine.
 
 ## Conclusion
 
