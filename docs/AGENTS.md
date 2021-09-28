@@ -1,5 +1,7 @@
 The term "AGI" includes literally everything under its umbrella, so to not get lost in infinite possibilities, an extremely keen sense of redundancies is required. Here, we outline the minimal AGI solution; see [Examples](../examples/README.md) for implementations.
 
+(The suggestions here are supported by well-known trends in machine learning: [learn by gradient descent](https://en.wikipedia.org/wiki/Gradient_descent); [use general-purpose architectures](https://deepmind.com/blog/article/building-architectures-that-can-handle-the-worlds-data); [have inputs and ](https://ai.facebook.com/blog/self-supervised-learning-the-dark-matter-of-intelligence/)[learn them](https://openai.com/blog/gpt-3-apps/); [have goals of outputs and ](https://deepmind.com/blog/article/alphazero-shedding-new-light-grand-games-chess-shogi-and-go)[learn ](https://deepmind.com/blog/article/generally-capable-agents-emerge-from-open-ended-play)[them](https://deepmind.com/blog/article/learning-through-human-feedback). Here, we argue that integrating these in one environment and agent is both necessary and sufficient for AGI.)
+
 ## Problem definition
 
 So, what counts as "solving" WebEnv?
