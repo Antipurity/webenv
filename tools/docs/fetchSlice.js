@@ -2,7 +2,7 @@
 async function fetchSlice(url, start = 0, end = null) {
   if (location.protocol !== 'file:') {
     const response = await fetch(url, {headers:{ Range:'bytes='+start+'-'+(end !== null ? end-1 : null) }})
-      return new Uint8Array(await response.arrayBuffer())
+    return new Uint8Array(await response.arrayBuffer())
   }
   if (typeof _fetchLocalFileSlice != ''+void 0) { // Use WebEnv.
       const bin = atob(await _fetchLocalFileSlice(url, start, end))

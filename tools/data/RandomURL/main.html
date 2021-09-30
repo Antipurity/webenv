@@ -1,0 +1,72 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset=utf-8>
+    <meta name=viewport content="width=device-width, initial-scale=1">
+    <title>Redirecting to a random Web page…</title>
+  </head>
+  <body>
+    <script>
+      go()
+      setInterval(go, 5000) // Just in case.
+      async function go() {
+        const line = await sampleLine('URL.txt')
+        document.body.textContent = line
+        location.href = line
+      }
+      async function sampleLine(file, windowSize = 512) {
+        const sz = await fileSize(file)
+        const start = Math.random() * (sz - windowSize) | 0
+        const data = await fetchSlice(file, start, start + windowSize)
+        const str = new TextDecoder().decode(data)
+        const lines = str.split('\n')
+        if (lines.length < 3) return sampleLine(file, windowSize * 2)
+        return lines[1]
+      }
+      async function fileSize(file, initialGuess = 100*2**30) {
+        // Provides an upper bound on `file` size.
+        //   Very approximate, but good enough for sampling.
+        let sz = initialGuess
+        while (sz && !(await fetchSlice(file, sz, sz+1))[0])
+          sz = sz/2 | 0
+        while ((await fetchSlice(file, sz, sz+1))[0])
+          sz = sz*2
+        return sz
+      }
+
+      async function fetchSlice(url, start = 0, end = null) {
+        if (location.protocol !== 'file:') {
+          const response = await fetch(url, {headers:{ Range:'bytes='+start+'-'+(end !== null ? end-1 : null) }})
+          return new Uint8Array(await response.arrayBuffer())
+        }
+        if (typeof _fetchLocalFileSlice != ''+void 0) { // Use WebEnv.
+            const bin = atob(await _fetchLocalFileSlice(url, start, end))
+            const data = new Uint8Array(bin.length)
+            for (let i = 0; i < data.length; ++i) data[i] = bin.charCodeAt(i)
+            return data
+        } else { // File API has .slice, so, if a dataset page is opened directly, ask for assistance.
+            if (!fetchSlice.fileCache) fetchSlice.fileCache = Object.create(null)
+            const cache = fetchSlice.fileCache
+            const file = cache[url] instanceof Promise ? (cache[url] = await cache[url]) : cache[url] || await (cache[url] = getFile(url))
+            return new Promise(resolve => {
+                const R = new FileReader
+                R.onload = () => resolve(new Uint8Array(R.result))
+                R.readAsArrayBuffer(file.slice(start, end !== null ? end : file.size))
+            })
+            function getFile(url) {
+                return new Promise(resolve => {
+                    addEventListener('click', function userActed() {
+                        removeEventListener('click', userActed)
+                        const el = document.createElement('input')
+                        el.type = 'file'
+                        if (url.lastIndexOf('.') >= 0) el.accept = url.slice(url.lastIndexOf('.'))
+                        el.onchange = () => resolve(el.files[0])
+                        el.click()
+                    })
+                })
+            }
+        }
+      }
+    </script>
+  </body>
+</html>

@@ -1,6 +1,6 @@
 // See https://the-eye.eu/public/AI/pile/
 
-const https = require('https'), fs = require('fs'), path = require('path')
+const https = require('https'), fs = require('fs')
 
 ;(async function() {
   try {

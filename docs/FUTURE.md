@@ -2,8 +2,6 @@ This document outlines what still needs to be done to reach MVP state (or the "r
 
 (These are breaking changes. After this, there shouldn't be any breaking changes.)
 
-- To make the training set uniform for all users, and lower the barrier to entry: `RandomWebPage`, using [the Common ](https://index.commoncrawl.org/)[Crawl Index](https://github.com/trivio/common_crawl_index). Probably best done as a dataset. For usability, only store status-200 URLs (uncompressed for random access), and allow users to choose to randomly drop URLs to get to a certain file size (500GB is a lot for a mere link storage).
-
 - Batch size > 1:
     - Modify `webenv.io`'s protocol: both send and receive the 4-byte index before each packet. The agent's job is then to read all indices (all are ints as small as possible, so the state store can just be a dense tensor), gather & compute & scatter, and write them in the same order that they arrived in; make the Python bridge do all that.
         - In addition, be able to send de-allocation events: 4-byte index, then `0xFFFFFFFF` for the read length, indicating that parameters can be reset. (In case memory re-use is undesired.)
@@ -34,4 +32,4 @@ This document outlines what still needs to be done to reach MVP state (or the "r
             - Directly link [microphone/camera/etc](https://developer.mozilla.org/en-US/docs/Web/API/Media_Streams_API) data;
             - An option to show `directScore` prediction through the action button's color.
 
-- An entertaining GIF in `README.md`, so that people's eyes don't glaze over from all that *text*.
+- An entertaining GIF in `README.md` (of an agent trained on `RandomURL` now that we have that), so that people's eyes don't glaze over from all that *text*.
