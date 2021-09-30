@@ -25,7 +25,7 @@ def webenv(agent, *interfaces, int_size=0, webenv_path='webenv', js_executor=js_
     A Python wrapper for creating and connecting to a local Web environment.
     Pass in the agent and all the interfaces. This will loop infinitely.
 
-    (This does not have an OpenAI-Gym-like interface, because that does not incorporate asynchronicity directly.)
+    (This does not have an OpenAI-Gym-like interface, because that makes asynchronicity less natural to implement, and assumes that sizes are static.)
 
     Arguments:
 
@@ -58,14 +58,18 @@ def webenv(agent, *interfaces, int_size=0, webenv_path='webenv', js_executor=js_
     async def step(reader, writer, readFuture):
         nonlocal prev_agent_call
         try:
-            obs, act_len = await _read_all(reader, int_size)
+            index, obs, act_len = await _read_all(reader, int_size)
+            # TODO: React to dealloc events (act_len==0xFFFFFFFF) properly (namely, by flushing the line to 0s).
             readFuture.set_result(None)
             prevW = prev_agent_call
             nextW = prev_agent_call = asyncio.Future()
-            pred, act = await agent(obs, act_len)
+            # TODO: Make agents handle the `index` (always 0 for now, but ideally, it would be a NumPy u32 array: the indices of observations).
+            pred, act = await agent(index, obs, act_len) # TODO: Also pass in the index. ...Or rather, we should collect as much info as we can each time, and ...
+            # TODO: How to restructure code so that reading happens always (or until a repeated index), and here we simply collect results into one tensor (and the index tensor)?
+            #   (…Can't use per-index queues because we want to be efficient... Or, wait, can we? No, we do want to read as much as is available each step... But maybe, this reading should put stuff into queues?)
             if asyncio.isfuture(prevW): await prevW # Ensure linear ordering of writes.
             nextW.set_result(None)
-            _write_all(writer, int_size, pred, act)
+            _write_all(writer, int_size, pred, act) # TODO: Slice out and write each index separately.
             # await _flush(writer, prev_flush_info) # Apparently, `asyncio`'s `.drain()` cannot be trusted to return. Maybe it's because we turned off buffering.
         except Exception as err:
             if not continue_on_errors: raise
@@ -91,10 +95,14 @@ def webenv(agent, *interfaces, int_size=0, webenv_path='webenv', js_executor=js_
                 print(err)
     asyncio.run(steps(cmd))
 async def _read_all(stream, int_size):
+    # TODO: Also read the u32 index.
+    index = await _read_u32(stream)
     obs = _decode(await _read_data(stream, int_size))
     # Bug: if there are too few observations (<4095), this fails to read `obs`'s length correctly.
     act_len = await _read_u32(stream)
-    return obs, act_len
+    # TODO: ...Actually, should read into queues while data is available or while queues are empty, and return `indices, obs, act_lens` (indices are keys, obs and act_lens are values/queues)…
+    #   TODO: How to pass in the "fail if not available" flag, and handle it properly, in a way that will not cause reads to get interleaved... ...Another event loop, which only fills queues?...
+    return index, obs, act_len
 def _write_all(stream, int_size, pred, act):
     if pred.dtype != np.float32:
         raise TypeError('Predictions should be a float32 array')

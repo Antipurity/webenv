@@ -970,10 +970,11 @@ function swapBytes(buf, bpe = 4) {
 
 
 
+// TODO: Update INTERFACES.md (by saying that protocol details are available in runtime docs).
 exports.io = docs(`\`webenv.io(intSize = 0)\`
 Makes the actual agent reside in another process, connected through standard IO. (Useful for isolation and parallelization.)
 
-Communication protocol details:
+Communication protocol details, simple for easy adoption:
 - Specify \`intSize\` to decrease precision and increase throughput: \`0\` if all values use float32, \`1\` if int8, \`2\` if int16.
     - To decode int8, \`v = x === -128 ? NaN : v / 127\`.
     - To encode int8, \`x = v !== v ? -128 : round(clamp(v, -1, 1) * 127)\`.
@@ -984,17 +985,20 @@ Communication protocol details:
     - (This allows the environment to perform all endianness conversions, simplifying the agent.)
 - Loop:
     - The agent receives:
-        - u32 observation length,
+        - u32 minimal stream index, // TODO: Send it. (Always 0 for now.)
+        - u32 observation length (0xFFFFFFFF to indicate that this stream has ended, and its index will be reused later),
         - then observation (that many values),
         - then u32 expected action length.
     - (The agent schedules a computation, which goes from observations to actions.)
         - (The agent should replace NaN observations with its own predictions of them. This is in-agent for differentiability.)
-    - The agent sends:
+    - In response, the agent sends:
+        - u32 stream index, // TODO: Receive it. (Do nothing with it for now.)
         - u32 prediction length (feel free to make this 0, which would disable its visualization),
         - then observation prediction (that many values),
         - then u32 action length,
         - then the action (that many values),
         - then flushes buffers to ensure sending.
+        (Mix up the response order if that is more efficient for you, but try not to. Never interleave individual messages unless you want a hang.)
         (Do not worry about matching requested lengths exactly, focus on throughput.)
         (Non-specified values are NaN, or 0 where NaN does not make sense.)
 `, function io(intSize = 0) {
@@ -1040,12 +1044,15 @@ Communication protocol details:
             let oldW = writeLock, thenW;
             writeLock = new Promise(f => thenW=f);  await oldW
             const to = process.stdout
+            // TODO: Write the index too (currently just 0, always).
             await writeArray(to, this.obsCoded = encodeInts(obs, this.obsCoded), bs)
             await writeToStream(to, act.length, bs, thens)
             thenW()
             // Read prediction then action, atomically.
             let oldR = readLock, thenR;
             readLock = new Promise(f => thenR=f);  await oldR
+            // TODO: Read the index too (currently, just fail if it's not 0).
+            //     Or rather, have per-index queues of pred+act, and a func that reads until an index has data.
             const predData = await readArray(cons, bs)
             const actData = await readArray(cons, bs)
             decodeInts(predData, pred), decodeInts(actData, act)

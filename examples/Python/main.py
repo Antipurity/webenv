@@ -7,6 +7,8 @@ import webenv
 
 import torch
 
+# Lots of hyperparams, so code is overly complex; pretend that non-picked `if` branches do not exist, at first.
+
 hparams = {
   'lr': .001,
   'optim': 'Adam', # https://pytorch.org/docs/stable/optim.html
@@ -64,11 +66,26 @@ ns = ldl.NormSequential
 nl = getattr(torch.nn, hparams['nonlinearity'])
 lf = hparams['ldl_local_first']
 layers = hparams['layers']
-synth_grad = ns(N, N, ldl.LinDense, layer_count = layers + 1, Nonlinearity=nl, local_first=lf, device=dev) if hparams['synth_grad'] else None
+
 transition = ldl.MGU(ns, N_ins, N, ldl.LinDense, layer_count=layers, Nonlinearity=nl, local_first=lf, device=dev, example_batch_shape=(2,), unique_dims=(), out_mult = hparams['out_mult'])
+
+if hparams['synth_grad']:
+  synth_grad = ns(N, N, ldl.LinDense, layer_count = layers + 1, Nonlinearity=nl, local_first=lf, device=dev)
+else:
+  synth_grad = None
 from reinforcement_learning import GradMaximize, Return
-return_model = Return(ns(N, 1, ldl.LinDense, layer_count=layers, Nonlinearity=nl, local_first=lf, device=dev), time_horizon=hparams['time_horizon']) if hparams['time_horizon']>0 else None
-max_model = GradMaximize(ns(N, 1, ldl.LinDense, layer_count=layers, Nonlinearity=nl, local_first=lf, device=dev), strength=hparams['gradmax'], pred_gradient=hparams['gradmax_pred_gradient'], momentum=hparams['gradmax_momentum']) if hparams['gradmax']>0 else None
+if hparams['time_horizon']>0:
+  return_model = Return(ns(N, 1, ldl.LinDense, layer_count=layers, Nonlinearity=nl, local_first=lf, device=dev), time_horizon=hparams['time_horizon'])
+else:
+  return_model = None
+if hparams['gradmax']>0:
+  max_model = GradMaximize(
+    ns(N, 1, ldl.LinDense, layer_count=layers, Nonlinearity=nl, local_first=lf, device=dev),
+    strength=hparams['gradmax'],
+    pred_gradient=hparams['gradmax_pred_gradient'],
+    momentum=hparams['gradmax_momentum'])
+else:
+  max_model = None
 optim = getattr(torch.optim, hparams['optim'])([
   { 'params':[*params(transition, return_model, max_model)] },
   { 'params':[*params(synth_grad)], 'lr':hparams['synth_grad_lr'] },
@@ -106,7 +123,9 @@ def loss(pred, got, obs, act_len):
   if max_model is not None:
     # Do not consider internal state as actions.
     if hparams['gradmax_only_actions']:
-      act_only = torch.cat((pred[:-act_len].detach(), pred[-act_len:])) if act_len > 0 else pred.detach()
+      # (Lazy: if streams are wildly different in action length, then gradients are inconsistent.)
+      acts = max(act_len) if isinstance(act_len, list) else act_len
+      act_only = torch.cat((pred[:-acts].detach(), pred[-acts:])) if acts > 0 else pred.detach()
     else:
       act_only = pred
     L = L + max_model(act_only, Return.detach())
@@ -116,7 +135,7 @@ def output(state, obs, act_len): # Add previous frame to next, if needed.
     state = state + recurrent.webenv_merge(state, obs, 0.)
   return recurrent.webenv_slice(state, obs, act_len)
 agent = recurrent.recurrent(
-  (N,), loss=loss, optimizer=optim,
+  (1,N), loss=loss, optimizer=optim,
   unroll_length=hparams['unroll_length'], synth_grad=synth_grad,
   input = getattr(recurrent, 'webenv_' + hparams['merge_obs']),
   output=output,
@@ -129,8 +148,9 @@ we_p = os.path.join(os.path.dirname(os.path.realpath(__file__)), '..', '..', 'we
 webenv.webenv(
   agent,
   'we.defaults',
-  '"https://www.google.com/"',
+  # '"https://www.google.com/"', # TODO
+  '"about:blank"',
   # Note: ideally, the homepage would be a random website redirector.
-  #   One that won't mark the agent as a bot, and then it.
-  #   (The defaults include a possibility of such a redirector.)
+  #   One that won't mark the agent as a bot.
+  #   (The defaults include a possibility of such a redirector. However, please use the RandomURL dataset.)
   webenv_path=we_p)
