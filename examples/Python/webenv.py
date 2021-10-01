@@ -9,7 +9,7 @@ import numpy as np
 
 
 
-continue_on_errors = True
+continue_on_errors = False
 
 
 
@@ -34,7 +34,7 @@ def webenv(agent, *interfaces, int_size=0, webenv_path='webenv', js_executor=js_
     To stop this web env, `raise` an exception.
 
     - `interfaces`: a list of either strings (which are put as-is as JS code, where `we` is the webenv module) or structured args.
-    Args are a convenience: numbers and bools are put as-is, strings are escaped unless at the top-level, arrays become function calls (with the first string item being the unescaped function to call), dicts become objects.
+    Args are a convenience: numbers and bools and strings are put as-is (JS strings must be quoted again), arrays become function calls (with the first string item being the unescaped function to call), dicts become objects.
 
     - `int_size`: increase throughput at the cost of precision. `0` communicates through float32, `1` through int8, `2` through int16. Do not specify `we.io(X)` manually.
 
@@ -53,77 +53,80 @@ def webenv(agent, *interfaces, int_size=0, webenv_path='webenv', js_executor=js_
         raise TypeError('Int size must be 0 (float32) or 1 (int8) or 2 (int16)')
     code = _js_code_for_interfaces(interfaces, int_size, webenv_path)
     cmd = js_executor(code)
-    prev_agent_call = None
-    prev_flush_info = [None]
-    async def step(reader, writer, readFuture):
-        nonlocal prev_agent_call
+    prev_write = [None] # A lock, to only do one write at a time.
+    prev_flush_info = [None] # A lock on flushes. (Effectively unused.)
+    read_streams = {} # index → asyncio.Queue
+    async def read(reader):
+        # Receive index & observations & action-length packets, and put it into `read_streams`.
+        while True:
+            index = await _read_u32(reader)
+            obs = _decode(await _read_data(reader, int_size))
+            # Bug: if there are too few observations (<4095), this fails to read `obs`'s length correctly.
+            #   Just provide more observations, why fix it.
+            act_len = await _read_u32(reader)
+            if index not in read_streams:
+                read_streams[index] = asyncio.Queue(64)
+            await read_streams[index].put((obs, act_len))
+            read_streams['any'].put_nowait(None)
+    async def step(writer, read_lock):
+        # Read from `read_streams`, call `agent`, and write what we did.
         try:
-            index, obs, act_len = await _read_all(reader, int_size)
-            # TODO: React to dealloc events (act_len==0xFFFFFFFF) properly (namely, by flushing the line to 0s).
-            readFuture.set_result(None)
-            prevW = prev_agent_call
-            nextW = prev_agent_call = asyncio.Future()
-            # TODO: Make agents handle the `index` (always 0 for now, but ideally, it would be a NumPy u32 array: the indices of observations).
-            pred, act = await agent(index, obs, act_len) # TODO: Also pass in the index. ...Or rather, we should collect as much info as we can each time, and ...
-            # TODO: How to restructure code so that reading happens always (or until a repeated index), and here we simply collect results into one tensor (and the index tensor)?
-            #   (…Can't use per-index queues because we want to be efficient... Or, wait, can we? No, we do want to read as much as is available each step... But maybe, this reading should put stuff into queues?)
+            indices, obs, act_len = [], [], []
+            while True:
+                for i, queue in read_streams.items():
+                    if i == 'any': continue
+                    if queue.empty(): continue # Only process available data.
+                    item = queue.get_nowait()
+                    read_streams['any'].get_nowait()
+                    if item[1] == 0xFFFFFFFF: continue # Just ignore dealloc events.
+                    indices.append([i])
+                    obs.append(item[0])
+                    act_len.append(item[1])
+                if len(obs): break
+                # If all streams are empty, wait for the next item.
+                await read_streams['any'].get()
+                read_streams['any'].put_nowait(None)
+            indices = np.array(indices, dtype=np.int64)
+            preds, acts = await agent(read_lock, indices, obs, act_len)
+            prevW = prev_write[0]
+            nextW = prev_write[0] = asyncio.Future()
+            _write_all(writer, int_size, indices, preds, acts)
+            # await _flush(writer, prev_flush_info) # Apparently, `asyncio`'s `.drain()` cannot be trusted to return. Maybe it's because we turned off buffering.
             if asyncio.isfuture(prevW): await prevW # Ensure linear ordering of writes.
             nextW.set_result(None)
-            _write_all(writer, int_size, pred, act) # TODO: Slice out and write each index separately.
-            # await _flush(writer, prev_flush_info) # Apparently, `asyncio`'s `.drain()` cannot be trusted to return. Maybe it's because we turned off buffering.
         except Exception as err:
+            read_lock.set_result(None)
             if not continue_on_errors: raise
             print(err)
     async def steps(cmd):
         P = asyncio.subprocess.PIPE
         proc = await asyncio.create_subprocess_shell(cmd, stdin=P, stdout=P)
-        proc.stdin.transport.set_write_buffer_limits(0, 0) # Turn off buffering. (We only have 3 writes per message, so a buffer won't help us.)
+        # Turn off buffering. (Only 5 writes per message, so a buffer might not help much anyway.)
+        proc.stdin.transport.set_write_buffer_limits(0, 0)
         reader, writer = proc.stdout, proc.stdin
         _write_u32(writer, 0x01020304)
         await _flush(writer, prev_flush_info)
         counter = 0
+        read_streams['any'] = asyncio.Queue()
+        asyncio.create_task(read(reader))
         while True:
             try:
-                read = asyncio.Future()
-                asyncio.create_task(step(reader, writer, read))
+                read_lock = asyncio.Future()
+                asyncio.create_task(step(writer, read_lock))
                 if counter % 1000 == 0:
                     gc.collect()
-                await read
+                await read_lock
                 counter = counter + 1
             except Exception as err:
                 if not continue_on_errors: raise
                 print(err)
     asyncio.run(steps(cmd))
-async def _read_all(stream, int_size):
-    # TODO: Also read the u32 index.
-    index = await _read_u32(stream)
-    obs = _decode(await _read_data(stream, int_size))
-    # Bug: if there are too few observations (<4095), this fails to read `obs`'s length correctly.
-    act_len = await _read_u32(stream)
-    # TODO: ...Actually, should read into queues while data is available or while queues are empty, and return `indices, obs, act_lens` (indices are keys, obs and act_lens are values/queues)…
-    #   TODO: How to pass in the "fail if not available" flag, and handle it properly, in a way that will not cause reads to get interleaved... ...Another event loop, which only fills queues?...
-    return index, obs, act_len
-def _write_all(stream, int_size, pred, act):
-    if pred.dtype != np.float32:
-        raise TypeError('Predictions should be a float32 array')
-    if act.dtype != np.float32:
-        raise TypeError('Actions should be a float32 array')
-    _write_data(stream, _encode(pred, int_size))
-    _write_data(stream, _encode(act, int_size))
-async def _flush(stream, prev_flush):
-    # `stream.drain()` can only be called one at a time, so we await the previous flush.
-    prev = prev_flush[0]
-    fut = prev_flush[0] = asyncio.Future()
-    if prev is not None: await prev
-    await stream.drain()
-    fut.set_result(None)
+
 async def _read_n(stream, n):
     return await stream.readexactly(n)
 async def _read_u32(stream):
     bytes = await _read_n(stream, 4)
     return int.from_bytes(bytes, sys.byteorder)
-def _write_u32(stream, x):
-    stream.write(x.to_bytes(4, sys.byteorder))
 async def _read_data(stream, int_size = 0):
     # Length then data.
     len = await _read_u32(stream)
@@ -131,10 +134,30 @@ async def _read_data(stream, int_size = 0):
     bytes = await _read_n(stream, byteCount)
     dtype = np.float32 if int_size == 0 else np.int8 if int_size == 1 else np.int16
     return np.frombuffer(bytes, dtype)
+
+def _write_u32(stream, x):
+    stream.write(x.to_bytes(4, sys.byteorder))
 def _write_data(stream, data):
     # Length then data. Don't forget to flush afterwards.
     _write_u32(stream, data.size)
     stream.write(data.tobytes())
+def _write_all(stream, int_size, indices, preds, acts):
+    # indices/pred/act equal-size lists (or int64 NumPy array, for indices).
+    for i in range(len(preds)):
+        index, pred, act = indices[i], preds[i], acts[i]
+        if pred.dtype != np.float32 or act.dtype != np.float32:
+            raise TypeError('Predictions & actions must be float32 arrays')
+        _write_u32(stream, int(index.item()))
+        _write_data(stream, _encode(pred, int_size))
+        _write_data(stream, _encode(act, int_size))
+async def _flush(stream, prev_flush):
+    # `stream.drain()` can only be called one at a time, so we await the previous flush.
+    prev = prev_flush[0]
+    fut = prev_flush[0] = asyncio.Future()
+    if prev is not None: await prev
+    await stream.drain()
+    fut.set_result(None)
+
 def _decode(ints):
     if ints.dtype == np.float32:
         return ints
@@ -161,12 +184,10 @@ def _js_code_for_interfaces(inters, int_size, webenv_path):
     code = code + ")"
     return code
 def _js_code_for_args(a):
-    if isinstance(a, int) or isinstance(a, float):
+    if isinstance(a, int) or isinstance(a, float) or isinstance(a, str):
         return str(a)
     if isinstance(a, bool):
         return 'true' if a else 'false'
-    if isinstance(a, str):
-        return "`" + a.replace("`", "\\`") + "`"
     if isinstance(a, list):
         if not isinstance(a[0], str):
             raise TypeError('Interfaces can only call JS-string functions')

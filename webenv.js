@@ -404,7 +404,7 @@ To write new interfaces, look at the pre-existing interfaces.
                 const results = _allocArray(res._agentInds.length).fill()
                 for (let i = 0; i < results.length; ++i)
                     try { results[i] = res._all[res._agentInds[i]].agent(...res._agentArgs[i]) }
-                    catch (err) {} // Unlink on exception.
+                    catch (err) { console.error(err) } // Unlink on exception.
                 for (let i = 0; i < results.length; ++i)
                     if (results[i] instanceof Promise)
                         try { results[i] = await results[i] }
@@ -970,7 +970,6 @@ function swapBytes(buf, bpe = 4) {
 
 
 
-// TODO: Update INTERFACES.md (by saying that protocol details are available in runtime docs).
 exports.io = docs(`\`webenv.io(intSize = 0)\`
 Makes the actual agent reside in another process, connected through standard IO. (Useful for isolation and parallelization.)
 
@@ -985,14 +984,14 @@ Communication protocol details, simple for easy adoption:
     - (This allows the environment to perform all endianness conversions, simplifying the agent.)
 - Loop:
     - The agent receives:
-        - u32 minimal stream index, // TODO: Send it. (Always 0 for now.)
-        - u32 observation length (0xFFFFFFFF to indicate that this stream has ended, and its index will be reused later),
+        - u32 stream index (minimal, so it can be used to index into a dense vector of stream states),
+        - u32 observation length,
         - then observation (that many values),
-        - then u32 expected action length.
+        - then u32 expected action length (0xFFFFFFFF to indicate that this stream has ended, and its index will be reused later).
     - (The agent schedules a computation, which goes from observations to actions.)
         - (The agent should replace NaN observations with its own predictions of them. This is in-agent for differentiability.)
     - In response, the agent sends:
-        - u32 stream index, // TODO: Receive it. (Do nothing with it for now.)
+        - u32 stream index,
         - u32 prediction length (feel free to make this 0, which would disable its visualization),
         - then observation prediction (that many values),
         - then u32 action length,
@@ -1035,24 +1034,35 @@ Communication protocol details, simple for easy adoption:
             else
                 throw new Error('Bad magic number:', magic)
             process.stdout.on('drain', onDrain)
+            process.stdout.on('error', doNothing) // Ignore "other end has closed" errors.
             initialized = true
+        },
+        async deinit(page, state) {
+            // Send a dealloc event.
+            let oldW = writeLock, thenW;
+            writeLock = new Promise(f => thenW=f);  await oldW
+            const to = process.stdout, bs = this.byteswap
+            await writeToStream(to, 0, bs, thens) // TODO: Write the real index, once we know those.
+            await writeToStream(to, 0, bs, thens)
+            await writeToStream(to, 0xFFFFFFFF, bs, thens)
+            thenW()
         },
         async agent(obs, pred, act) {
             // Write observation, atomically.
             if (!initialized) return true
-            const bs = this.byteswap
             let oldW = writeLock, thenW;
             writeLock = new Promise(f => thenW=f);  await oldW
-            const to = process.stdout
-            // TODO: Write the index too (currently just 0, always).
+            const to = process.stdout, bs = this.byteswap
+            await writeToStream(to, 0, bs, thens) // TODO: Write the real index, once we know those.
             await writeArray(to, this.obsCoded = encodeInts(obs, this.obsCoded), bs)
             await writeToStream(to, act.length, bs, thens)
             thenW()
             // Read prediction then action, atomically.
             let oldR = readLock, thenR;
             readLock = new Promise(f => thenR=f);  await oldR
-            // TODO: Read the index too (currently, just fail if it's not 0).
-            //     Or rather, have per-index queues of pred+act, and a func that reads until an index has data.
+            const index = (await readFromStream(readBytes, 1, Uint32Array, bs))[0]
+            if (index !== 0) // TODO: To receive pred+act per-stream, read pred+act into queues as they arrive, and here, take an item from the queue, waiting until available.
+                throw new Error('Got a non-zero stream index: ' + index)
             const predData = await readArray(cons, bs)
             const actData = await readArray(cons, bs)
             decodeInts(predData, pred), decodeInts(actData, act)
@@ -1113,8 +1123,10 @@ function writeToStream(stream, data, byteswap = false, thens) {
     if (byteswap) data = data.slice()
     const buf = Buffer.from(data.buffer, data.byteOffset, data.byteLength)
     byteswap && swapBytes(buf, data.constructor.BYTES_PER_ELEMENT)
+    if (!stream.UNCORK)
+        stream.UNCORK = () => stream.uncork()
     stream.cork()
-    process.nextTick(() => stream.uncork())
+    process.nextTick(stream.UNCORK)
     if (!stream.write(buf) && thens) // If wrote too much, wait until the stream is drained.
         return new Promise(then => thens.push(then))
 }

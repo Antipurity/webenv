@@ -36,7 +36,7 @@ hparams = {
   'out_mult': 1.1, # 1.1 makes predicting pure black/white in MGU easier.
 
   'console': True,
-  'tensorboard': True,
+  'tensorboard': False, # TODO: True
 }
 relevant_hparams = ['lr', 'gradmax', 'unroll_length', 'nonlinearity'] # To be included in the run's name.
 
@@ -105,7 +105,7 @@ i = 0
 def loss(pred, got, obs, act_len):
   global i;  i += 1
   if hparams['merge_obs'] == 'concat': # Un-concat if needed.
-    got = got[pred.shape[-1]:].detach()
+    got = got[..., pred.shape[-1]:].detach()
     if add_input_on_concat:
       pred = pred + recurrent.webenv_merge(torch.zeros_like(pred), obs, 0.)
   L = obs_loss(pred, got) / hparams['loss_divisor']
@@ -125,15 +125,15 @@ def loss(pred, got, obs, act_len):
     if hparams['gradmax_only_actions']:
       # (Lazy: if streams are wildly different in action length, then gradients are inconsistent.)
       acts = max(act_len) if isinstance(act_len, list) else act_len
-      act_only = torch.cat((pred[:-acts].detach(), pred[-acts:])) if acts > 0 else pred.detach()
+      act_only = torch.cat((pred[..., :-acts].detach(), pred[..., -acts:])) if acts > 0 else pred.detach()
     else:
       act_only = pred
     L = L + max_model(act_only, Return.detach())
   return L
-def output(state, obs, act_len): # Add previous frame to next, if needed.
+def output(lock, state, obs, act_len): # Add previous frame to next, if needed.
   if hparams['merge_obs'] == 'concat' and add_input_on_concat:
     state = state + recurrent.webenv_merge(state, obs, 0.)
-  return recurrent.webenv_slice(state, obs, act_len)
+  return recurrent.webenv_slice(lock, state, obs, act_len)
 agent = recurrent.recurrent(
   (1,N), loss=loss, optimizer=optim,
   unroll_length=hparams['unroll_length'], synth_grad=synth_grad,

@@ -14,7 +14,7 @@ def webenv_add(state, obs_t, pad_with=np.nan):
   return torch.where(torch.isnan(padded), state, state + padded)
 def webenv_merge(state, obs_t, pad_with=np.nan):
   """
-  Merges WebEnv observations into internal state, properly ignoring holes (NaNs).
+  Merges (writes) WebEnv observations into internal state, properly ignoring holes (NaNs).
 
   Note that this overwrites predictions, so the model cannot access them. If you want your model to know both real and predicted numbers, use `input=webenv_concat` in `recurrent`.
   """
@@ -32,7 +32,7 @@ def webenv_concat(state, obs_t):
 
 
 # Output.
-async def webenv_slice(state, obs, act_len):
+async def webenv_slice(lock, state, obs, act_len):
   """
   Turns two PyTorch state tensors (pre-step and pre-output) (and what WebEnv received: observations and action lengths) into post-step state and lists of predictions and actions, asynchronously.
   """
@@ -42,7 +42,7 @@ async def webenv_slice(state, obs, act_len):
     preds, acts = [], []
     for i in range(len(obs)):
       # Slice obs and actions from ends. (Reverse actions for stability.)
-      pred_t = state[i, 0:min(max_slice, obs.shape[-1])]
+      pred_t = state[i, 0:min(max_slice, obs[i].shape[-1])]
       act_t = state[i, max_slice - min(max_slice, act_len[i]):max_slice].flip(-1)
       # Asynchronously copy to CPU.
       pred = torch.zeros_like(pred_t, layout=torch.strided, device='cpu', memory_format=torch.contiguous_format)
@@ -51,6 +51,7 @@ async def webenv_slice(state, obs, act_len):
       act.copy_(act_t, non_blocking=True)
       preds.append(pred)
       acts.append(act)
+    lock.set_result(None)
     # Wait until all GPU→CPU copies are done, then return lists of predictions and actions.
     event = torch.cuda.Event()
     event.record()
@@ -140,16 +141,16 @@ def recurrent(
     unroll_index = 0
     unroll_loss = 0
     unrolls = 0
-    async def step(indices, obs, *args):
+    async def step(lock, indices, obs, *args):
       # Step.
       nonlocal start_state, state, unroll_index, unroll_loss, unrolls
       if indices == 0:
         indices = np.array([[0]], dtype=np.int64)
       obs_t = list_to_torch(obs, device)
       state2 = gather(state, indices)
-      prev_state = state2
-      state2 = input(state2, obs_t)
-      unroll_loss = unroll_loss + loss(prev_state, state2.detach(), obs_t, *args) # Prev frame predicts this one.
+      prev_state2 = state2
+      state2 = input(prev_state2, obs_t)
+      unroll_loss = unroll_loss + loss(prev_state2, state2.detach(), obs_t, *args) # Prev frame predicts this one.
       state2 = transition(state2)
       state = scatter(state, indices, state2)
       unroll_index += 1
@@ -171,7 +172,7 @@ def recurrent(
           optimizer.zero_grad()
         start_state = state = state.detach().requires_grad_(True)
         unroll_index = 0
-      return await output(state, obs, *args)
+      return await output(lock, state, obs, *args)
     return step
   return rec
 def list_to_torch(xs, device):
@@ -209,8 +210,11 @@ if __name__ == '__main__':
       (1,N), device=device, optimizer=optim, unroll_length=2, synth_grad=synth,
     )(transition)
 
+    import time
+    start = time.time()
     for i in range(n):
-      preds, acts = await stream(0, obs, [0])
+      preds, acts = await stream(asyncio.Future(), 0, obs, [0])
       with torch.no_grad():
         print('L1:', np.nansum(np.abs(preds[0] - obs)))
+    print('Time:', time.time() - start, 's')
   asyncio.run(test(5000, 'cuda'))

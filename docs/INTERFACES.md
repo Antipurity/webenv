@@ -323,34 +323,11 @@ webenv.io()
 webenv.io(intSize = 0)
 ```
 
-Makes the actual agent reside in another process than this environment, connected through standard IO.
+Makes the actual agent reside in another process than this environment, connected through standard IO through a very simple protocol.
 
-Useful for isolation and parallelization.
+Useful for isolation, parallelization, and bridging to other languages.
 
-Communication protocol details:
-- Specify `intSize` to decrease precision and increase throughput: `0` if all values use float32, `1` if int8, `2` if int16.
-    - To decode int8, `v = x === -128 ? NaN : v / 127`.
-    - To encode int8, `x = v !== v ? -128 : round(clamp(v, -1, 1) * 127)`.
-    - To decode int16, `v = x === -32768 ? NaN : x / 32767`.
-    - To encode int16, `x = v !== v ? -32768 : round(clamp(v, -1, 1) * 32767)`.
-- Here, "environment" means this process, "agent" means the controlling process that receives its observations and feeds it (predictions and) actions.
-- At init, the agent sends the magic u32 number `0x01020304`.
-    - (This allows the environment to perform all endianness conversions, simplifying the agent.)
-- Loop:
-    - The agent receives:
-        - u32 observation length,
-        - then observation (that many values),
-        - then u32 expected action length.
-    - (The agent schedules a computation, which goes from observations to actions.)
-        - (The agent should replace NaN observations with its own predictions of them. This is in-agent for differentiability.)
-    - The agent sends:
-        - u32 prediction length (feel free to make this 0, which would disable its visualization),
-        - then observation prediction (that many values),
-        - then u32 action length,
-        - then the action (that many values),
-        - then flushes buffers to ensure sending.
-        (Do not worry about matching requested lengths exactly, focus on throughput.)
-        (Non-specified values are NaN, or 0 where NaN does not make sense.)
+For protocol details, refer to runtime documentation: `require('webenv').io.docs`. (In short, agents get stream-index and observations and action-length, and send stream-index and predictions and actions. No compression.)
 
 ```js
 webenv.fps(fps = 30)

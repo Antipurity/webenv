@@ -1,6 +1,6 @@
-# WebEnv
+## WebEnv
 
-An extensible machine learning environment for training general intelligence: learn an understanding of the world, then accomplish user-defined tasks with it.
+Turn the most widely-used data interchange format (the Web) into a numeric interface (Env) for training general intelligence: learn a rich understanding of the world, then accomplish user-defined tasks with it.
 
 Agents interact with the Web by continuously receiving observations and sending actions.
 - Reward is decided dynamically, if ever. Agents ought to be self-supervised and/or integrated with human life.
