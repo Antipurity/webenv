@@ -2,10 +2,11 @@
 
 
 
-const puppeteer = require('puppeteer')
+const performance = require('perf_hooks').performance
 
 const Observations = Float32Array
 
+// TODO: Remake docs so that they say that this accepts streams, not interfaces directly (though it can accept streams too, for simplicity).
 exports.init = docs(`Function. Pass in numeric interfaces, receive a promise.
 The extensible creator of numeric Web interfaces, for machine learning: a truly general environment for AGI.
 
@@ -14,15 +15,6 @@ All other members of this module either are such interfaces (such as \`webenv.de
     Some are mostly observations, some are mostly actions, some are mostly agents (connecting observations to actions).
     Agents are called in a loop, which maximizes throughput.
 
-The result is a promise for the environment, which is an object with:
-- \`relink(...interfaces)\`: changes interfaces at run-time. Agents might get confused. (Prefer \`result.relink(MODIFY(result._all))\` to remembering the initial interfaces, to handle dynamic links.)
-- \`reads:Number\`: how many observations are available as floats.
-- \`writes:Number\`: how many actions are available as floats.
-- Low-level:
-    - \`read()=>Promise<Observations>\`: returns observations as -1…1 32-bit floats, NaN where not provided.
-    - \`write(Actions)=>Promise<void>\`: accepts the numeric actions, and performs them.
-- \`close()=>Promise<void>\`: ends this session.
-
 Ideally, you should not treat observations/actions as anything other than vectors of approximately -1..1 32-bit floats. (Not necessarily square, not necessarily an image. Very likely multimodal.)
 
 To write new interfaces, look at the pre-existing interfaces.
@@ -30,279 +22,24 @@ To write new interfaces, look at the pre-existing interfaces.
     - \`.settings\` (an object with \`homepage\` and/or \`simultaneousSteps\`);
     - \`.init(page, env)=>state\`, \`.deinit(page, state)\` (not called on browser relaunching);
     - \`.reads:Number\`, \`.read(env, page, state, obs)\` (modify \`obs\` in-place, do not read);
-        - \`.observerInput(page, state)=>obsInput\`,
-        - \`.observer(obsInput, video:{grab(x,y,w,h)=>pixels}, audio:{grab(sampleN=2048, sampleRate=44100)=>samples}, obsOutput)\` (before reading, these are collected from an extension, -1…1);
     - \`.writes:Number\`, \`.write(page, state, pred, act)\` (\`pred\` can predict the next read \`obs\`; do read from \`act\` and act on that, do not write);
     - \`.agent(obs, pred, act)=>continues\` (return false to unlink the agent) (to prevent torn writes, there should only be one agent);
     - \`priority:Number\` (for example, interfaces that read actions at write-time have priority of -1, to always go after action-fillers);
-    - \`visState(page, state)=>vState\` (the result must be JSON-serializable, sent once at init-time), \`.visualize(obs, pred, elem, vState)\` (serialized into web-views to visualize data there, so write the function out fully).
     All functions are potentially asynchronous, and will be \`await\`ed if needed.
 `, async function init(...interfaces) {
-    // *Probably* don't need customization for the language, since it hardly even does anything.
-    const lang = 'en-US,en'
 
-    let stall = null // When we're re-launching a browser, this is a promise.
+    // TODO: Change `read`, `init`, `deinit`, `write`, `agent` to accept not env/page/whatever, but only the stream state (which includes all that, in a readable manner).
+    const env = Object.create(null)
+    // TODO: Have `.reinit(...streams)`, which is called on start and whenever.
+    // TODO: Have `.close()`, which closes every stream.
+    env.stream = await streamPrototype.open(env, relaunch)
+    return env
 
-    class ObsNumber {
-        // A number that estimates some other number, independent of context (unlike a NN).
-        constructor(x, momentum = .99) { this.x = +x, this.m = +momentum }
-        valueOf() { return this.x }
-        set(x) { return this.x = this.m * this.x + (1 - this.m) * Math.max(-this.x, Math.min(x, this.x*2)) }
-    }
-    const performance = require('perf_hooks').performance
-    const lowball = .95
-    // TODO: What goes in the `stream` object? Publically, { reads, writes, settings; env, browser, page, cdp; read, write, close }? (And, literally everything private that was on `env` goes here, doesn't it?)
-    const res = {
-        settings: Object.create(null),
-        _all:null, _allState:[],
-        reads:0, writes:0,
-        _lastStepEnd:performance.now(),
-        _period:new ObsNumber(0), // Actual time between two consecutive steps.
-        _stepsNow:0, // Throughput is maximized by lowballing time-between-steps, but without too many steps at once.
-        async read() {
-            // It might happen that a new read might get scheduled before an old one is finished.
-            //   For these cases, make sure to only not modify internal buffers between `await`s, only modify in synchronous code.
-            if (this._killed) throw new Error('Cannot read from a closed environment')
-            relaunchIfNeeded()
-            if (!this.reads) return
-            // Collect extension-side observer results, then webenv-side reads.
-            try {
-                // Call observers. The extension will call `gotObserverData` for future frames.
-                //   (No `await`: the observer stream is a bit delayed, for lower latency.)
-                const obsInputs = _allocArray(this._observerIndices.length)
-                for (let i = 0; i < this._observerIndices.length; ++i) {
-                    const inAll = this._observerIndices[i], o = this._all[inAll]
-                    if (o && typeof o.observerInput == 'function')
-                        obsInputs[i] = o.observerInput(this._page, this._allState[inAll])
-                    else obsInputs[i] = undefined
-                }
-                if (this._extPage.isClosed()) return
-                this._extPage.evaluate(ins => void setTimeout(readObservers, 0, ins), obsInputs).catch(doNothing)
-                // Defer observations to interfaces.
-                const inds = this._obsInds, p = this._page, a = this._all, s = this._allState
-                const obs = this._obsSlice
-                const tmp = _allocArray(0)
-                for (let i = 0; i < inds.length; ++i) {
-                    const j = inds[i], r = a[j].read(this, p, s[j], obs[i])
-                    if (r instanceof Promise) tmp.push(r)
-                }
-                // Await all promises at once.
-                for (let i = 0; i < tmp.length; ++i) await tmp[i]
-                _allocArray(tmp)
-                return this._obsFloats
-            } catch (err) { if (!stall) throw err }
-        },
-        async write(acts) {
-            if (this._killed) throw new Error('Cannot write to a closed environment')
-            relaunchIfNeeded()
-            if (!this.writes) return
-            // Copy acts to our buffer.
-            if (!(acts instanceof Observations))
-                throw new Error('Expected a float array')
-            if (acts.length !== this.writes)
-                throw new Error(`Expected ${this.writes} actions but got ${acts.length}`)
-            try {
-                if (acts !== this._actFloats) this._actFloats.set(acts)
-                // Defer actions to interfaces.
-                const inds = this._actInds, p = this._page, a = this._all, s = this._allState
-                const pred = this._predSlice, act = this._actSlice
-                const tmp = _allocArray(0)
-                for (let i = 0; i < inds.length; ++i) {
-                    if (!a[inds[i]]) return
-                    const r = a[inds[i]].write(p, s[inds[i]], pred[i], act[i])
-                    if (r instanceof Promise) tmp.push(r)
-                }
-                // Await all promises at once.
-                for (let i = 0; i < tmp.length; ++i) await tmp[i]
-                _allocArray(tmp)
-                // Return nothing, apart from a promise.
-            } catch (err) { if (!stall) throw err }
-        },
-        async relink(...interfaces) {
-            // Remember where old interfaces were.
-            const oldIndices = new Map
-            if (this._all)
-                for (let i = 0; i < this._all.length; ++i)
-                    oldIndices.set(this._all[i], i)
-
-            // Flatten the interface tree.
-            const all = [], indices = new Map
-            async function track(o) {
-                if (o instanceof Promise) o = await o
-                if (Array.isArray(o)) return o.forEach(track)
-                if (!o || typeof o != 'object') throw new Error('All must be webenv interfaces')
-                all.push(o)
-            }
-            await track(interfaces, 0)
-            // Respect priorities, but do not shuffle needlessly.
-            for (let i = 0; i < all.length; ++i) {
-                if (indices.has(all[i])) throw new Error('Repeated interface')
-                indices.set(all[i], i)
-            }
-            all.sort((a,b) => ((b.priority || 0) - (a.priority || 0)) || (indices.get(a) - indices.get(b)))
-            const rInds = [], wInds = [], agentInds = [], allState = []
-            for (let i = 0; i < all.length; ++i) {
-                const o = all[i]
-                if (typeof o.read == 'function') rInds.push(i)
-                if (typeof o.write == 'function') wInds.push(i)
-                if (typeof o.agent == 'function') agentInds.push(i)
-            }
-
-            // Initialize the new, move state of both old and new, and deinitialize the old.
-            //   Also listen to settings.
-            let reads = 0, writes = 0
-            const allReadOffsets = [], allWriteOffsets = []
-            const seen = new Set
-            for (let i = 0; i < all.length; ++i) {
-                const o = all[i], prev = oldIndices.get(o)
-                seen.add(o)
-                if (typeof o.init == 'function')
-                    allState[i] = prev === undefined ? o.init(this._page, res) : this._allState[prev]
-                allReadOffsets[i] = reads, allWriteOffsets[i] = writes
-                if (typeof o.reads == 'number') {
-                    if (o.reads < 0 || o.reads !== o.reads>>>0)
-                        throw new Error('Bad input count: '+o.reads)
-                    reads += o.reads
-                }
-                if (typeof o.writes == 'number') {
-                    if (o.writes < 0 || o.writes !== o.writes>>>0)
-                        throw new Error('Bad output count: '+o.writes)
-                    writes += o.writes
-                }
-                if (o.settings && typeof o.settings == 'object')
-                    Object.assign(this.settings, o.settings)
-            }
-            for (let i = 0; i < all.length; ++i)
-                if (allState[i] instanceof Promise)
-                    allState[i] = await allState[i]
-            if (this._all) {
-                const p = this._page, a = this._all, s = this._allState
-                const tmp = _allocArray(0)
-                for (let i = 0; i < a.length; ++i) {
-                    if (seen.has(a[i]) || typeof a[i].deinit != 'function') continue
-                    const r = a[i].deinit(p, s[i])
-                    if (r instanceof Promise) tmp.push(r)
-                }
-                // Await all promises at once.
-                for (let i = 0; i < tmp.length; ++i) await tmp[i]
-                _allocArray(tmp)
-            }
-
-            // Relink extension-side observers.
-            const observerIndices = _allocArray(0)
-            const observers = _allocArray(0)
-            for (let i = 0; i < all.length; ++i) {
-                const o = all[i]
-                if (typeof o.observer == 'function' || typeof o.observer == 'string')
-                    observerIndices.push(i),
-                    observers.push({read:''+o.observer, offset:allReadOffsets[i], length:o.reads || 0})
-            }
-            const w = this.width || 0
-            const h = this.height || 0
-            await this._extPage.evaluate((o,w,h) => updateObservers(o,w,h), observers, w, h)
-
-            // Resize observations/actions.
-            //   (Technically, could move obs/pred/act to new correct positions, but why?)
-            const obsFloats = new Observations(reads)
-            const predFloats = new Observations(reads)
-            const actFloats = new Observations(writes)
-            obsFloats.fill(NaN), predFloats.fill(NaN), actFloats.fill(NaN)
-
-            // Pre-compute observation/action slices.
-            const obsSlice = new Array(rInds.length).fill()
-            const predSlice = new Array(rInds.length).fill()
-            const bpe = Observations.BYTES_PER_ELEMENT
-            const _ = undefined
-            for (let i = 0; i < rInds.length; ++i) {
-                const nr = allReadOffsets[rInds[i]]
-                const r = all[rInds[i]].reads
-                obsSlice[i] = r !== _ ? new Observations(obsFloats.buffer, nr * bpe, r) : obsFloats
-            }
-            const actSlice = new Array(wInds.length).fill()
-            for (let i = 0; i < wInds.length; ++i) {
-                const nr = allReadOffsets[wInds[i]], nw = allWriteOffsets[wInds[i]]
-                const r = all[wInds[i]].reads, w = all[wInds[i]].writes
-                predSlice[i] = r !== _ ? new Observations(predFloats.buffer, nr * bpe, r) : predFloats
-                actSlice[i] = w !== _ ? new Observations(actFloats.buffer, nw * bpe, w) : actFloats
-            }
-
-            // Pre-compute agent args.
-            const agentArgs = new Array(agentInds.length).fill()
-            for (let i = 0; i < agentInds.length; ++i) {
-                const j = agentInds[i], bpe = Observations.BYTES_PER_ELEMENT
-                const o = all[j], r = allReadOffsets[j], w = allWriteOffsets[j]
-                const args = [] // obs, pred, act
-                args.push(typeof o.reads == 'number' ? new Observations(obsFloats.buffer, r * bpe, o.reads) : obsFloats)
-                args.push(typeof o.reads == 'number' ? new Observations(predFloats.buffer, r * bpe, o.reads) : predFloats)
-                args.push(typeof o.writes == 'number' ? new Observations(actFloats.buffer, w * bpe, o.writes) : actFloats)
-                agentArgs[i] = args
-            }
-
-            // Schedule the interpreter loop if there are now agents.
-            const looped = !!(this._agentInds && this._agentInds.length)
-            const looping = !!agentInds.length
-            if (!this._stepsNow && !looped && looping)
-                ++this._stepsNow, setTimeout(step, 0)
-
-            // Finalize what we computed here.
-            this.reads = reads, this.writes = writes
-            this._allReadOffsets = allReadOffsets, this._allWriteOffsets = allWriteOffsets
-            this._all = all, this._obsInds = rInds, this._actInds = wInds, this._agentInds = agentInds, this._allState = allState
-            this._observerIndices = observerIndices
-            this._obsFloats = obsFloats
-            this._predFloats = predFloats, this._actFloats = actFloats
-            this._obsSlice = obsSlice, this._predSlice = predSlice
-            this._actSlice = actSlice
-            this._agentArgs = agentArgs
-        },
-        _killed:false,
-        async close() {
-            if (this._killed) return
-            clearInterval(watchdogCheckId)
-            this._killed = true
-            const p = this._page, a = this._all, s = this._allState
-            const tmp = _allocArray(0)
-            for (let i = 0; i < a.length; ++i) {
-                const r = typeof a[i].deinit == 'function' ? a[i].deinit(p, s[i]) : null
-                if (r instanceof Promise) tmp.push(r)
-            }
-            // Await all promises at once.
-            for (let i = 0; i < tmp.length; ++i) await tmp[i]
-            _allocArray(tmp)
-            // Close the browser.
-            await this._browser.close()
-            // Return nothing, apart from a promise.
-        },
-    }
-    // This watchdog timer is easier than fixing rare-hang-on-navigation bugs.
-    const watchdogCheckId = setInterval(() => {
-        if (performance.now()-res._lastStepEnd < 20000) return
-        retry()
-    }, 20000)
-    const unlink = new Set
-    await retry()
-    return res
-    function relaunchIfNeeded() {
-        if (res._killed) return
-        if (!res._browser || res._browser.isConnected() && !res._page.isClosed()) return
-        if (stall) return // No double-relaunching please.
-        return retry()
-    }
-    async function retry(n = 32, func = relaunch, arg = res) { // Only for `func=relaunch`.
-        let then, prevStall = stall;  stall = new Promise(t => then = t);  await prevStall
-        try {
-            for (let i = 1; i < n; ++i)
-                try { return await func(arg) }
-                catch (err) { console.error('launch error', err) }
-            return await func(arg)
-        } catch (err) { res && res._browser && res._browser.close();  throw err }
-        finally { then(), stall = null }
-    }
-    async function relaunch(res) {
+    async function relaunch() {
         // Close the previous browser.
-        if (res._browser) {
-            const b = res._browser
-            res._browser = null
+        if (this.browser) {
+            const b = this.browser
+            this.browser = null
             await b.close()
         }
 
@@ -315,10 +52,11 @@ To write new interfaces, look at the pre-existing interfaces.
             const path = require('path').join(dataDir, ...p)
             return new Promise(then => fs.rm(path, { force:true, recursive:true }, then))
         }
-        await Promise.all([rm('Crashpad', 'reports'), rm('BrowserMetrics'), rm('ShaderCache')])
+        await Promise.all([rm('Crashpad', 'reports'), rm('BrowserMetrics'), rm('ShaderCache', 'GPUCache'), rm('ShaderCache')])
 
         // Open the new browser.
-        const _browser = res._browser = await puppeteer.launch({
+        const puppeteer = require('puppeteer')
+        const browser = this.browser = await puppeteer.launch({
             headless:false,
             defaultViewport:null,
             waitForInitialPage:false,
@@ -328,7 +66,7 @@ To write new interfaces, look at the pre-existing interfaces.
                 '--load-extension=' + ext,
                 '--disable-extensions-except=' + ext,
                 '--whitelisted-extension-id=clmfcdjojibdkmjpbfbddhjiolfjhcgn',
-                '--lang='+lang,
+                '--lang='+this.lang,
                 '--disable-notifications',
                 '--user-data-dir=' + dataDir,
                 '--allow-profiles-outside-user-dir',
@@ -338,128 +76,52 @@ To write new interfaces, look at the pre-existing interfaces.
                 '--disable-gpu',
             ],
         })
-        const _page = res._page = await _browser.newPage()
-        _page.on('error', err => { throw err })
-        closeAllPagesExcept(_browser, _page)
-        const langParts = lang.split(',')
+        const page = this.page = await browser.newPage()
+        if (!page) throw new Error('Puppeteer returned null')
+        page.on('error', err => { throw err })
+        closeAllPagesExcept(browser, page)
+        const langParts = this.lang.split(',')
         ;[ // Thanks, async/await, very helpful for efficiency via parallelization. (Sarcasm.)
-            res._cdp,
-            res._chromeWidth,
-            res._chromeHeight,
-            res._extPage,
+            this.cdp,
+            this._chromeWidth, // TODO: ...Where are these used, apart from `viewport`? And can we not (rather, can we make `viewport` perform that for us)? ...Too lazy.
+            this._chromeHeight,
+            this.extensionPage,
         ] = await Promise.all([
-            _page.target().createCDPSession(),
-            _page.evaluate(() => outerWidth - innerWidth),
-            _page.evaluate(() => outerHeight - innerHeight),
-            _browser.waitForTarget(t => t.type() === 'background_page' && t._targetInfo.title === 'capture').then(t => t.page()),
-            _page.setUserAgent(''),
-            _page.evaluateOnNewDocument(langParts => {
+            page.target().createCDPSession(),
+            page.evaluate(() => outerWidth - innerWidth),
+            page.evaluate(() => outerHeight - innerHeight),
+            browser.waitForTarget(t => t.type() === 'background_page' && t._targetInfo.title === 'capture').then(t => t.page()),
+            page.setUserAgent(''),
+            page.evaluateOnNewDocument(langParts => {
                 Object.defineProperty(navigator, 'language', { value:langParts[0] })
                 Object.defineProperty(navigator, 'languages', { value:langParts })
             }, langParts),
-            _page.setExtraHTTPHeaders({ 'Accept-Language': langParts[langParts.length-1] }),
+            page.setExtraHTTPHeaders({ 'Accept-Language': langParts[langParts.length-1] }),
         ])
-        const oldInters = res._all || interfaces
-        res._all = [] // Call all initializers again, to re-attach event listeners.
-        res._agentInds = [] // Re-launch the step loop if we have agents.
-        const efP = res._extPage.exposeFunction('gotObserverData', gotObserverData)
-        await res.relink(...oldInters)
-        let pP
-        if (res.settings.homepage && res.settings.homepage !== 'about:blank')
+        const oldInters = this._all || interfaces
+        interfaces = null
+        this._all = [] // Call all initializers again, to re-attach event listeners.
+        this._agentInds = [] // Re-launch the step loop if we have agents.
+        await this.relink(...oldInters)
+        if (this.settings.homepage && this.settings.homepage !== 'about:blank')
             // Browser crashes are far more frequent if we don't wait at least a bit.
-            pP = Promise.race([
-                ...(await Promise.all([
-                    _page.goto(res.settings.homepage, {waitUntil:'domcontentloaded'}).then(() => res._cdp.send('Page.resetNavigationHistory')).catch(doNothing),
-                    res._cdp.send('Page.resetNavigationHistory').catch(doNothing),
-                ])),
+            await Promise.race([
+                Promise.all([
+                    page.goto(this.settings.homepage, {waitUntil:'domcontentloaded'}).then(() => this.cdp.send('Page.resetNavigationHistory')).catch(doNothing),
+                    this.cdp.send('Page.resetNavigationHistory').catch(doNothing),
+                ]),
                 new Promise(then => setTimeout(then, 10000)),
             ])
-        await efP, await pP
-        res._lastStepEnd = performance.now()
-    }
-    async function step() {
-        // Read, think, write.
-        // Each agent takes f32 observations (to read) and predictions and actions (to write).
-        // It returns a promise, which must resolve to `true`, else its loop will stop.
-        try {
-            if (res._killed) return
-            relaunchIfNeeded()
-            if (!res._agentInds.length) return
-
-            // Don't schedule too many steps at once. If all die, end-of-step will schedule anyway.
-            if (res._stepsNow < res.settings.simultaneousSteps)
-                ++res._stepsNow, setTimeout(step, Math.max(0, +res._period * lowball))
-
-            try {
-                await res.read()
-
-                const results = _allocArray(res._agentInds.length).fill()
-                for (let i = 0; i < results.length; ++i)
-                    try { results[i] = res._all[res._agentInds[i]].agent(...res._agentArgs[i]) }
-                    catch (err) { console.error(err) } // Unlink on exception.
-                for (let i = 0; i < results.length; ++i)
-                    if (results[i] instanceof Promise)
-                        try { results[i] = await results[i] }
-                        catch (err) { results[i] = undefined } // Unlink on exception.
-                for (let i = 0; i < results.length; ++i)
-                    if (!results[i])
-                        unlink.add(res._all[res._agentInds[i]])
-                _allocArray(results)
-
-                await res.write(res._actFloats)
-            } catch (err) {
-                if (!stall) console.error(err)
-            } finally {
-                // Unlink the agents that do not want to live on.
-                if (unlink.size) {
-                    let prevStall = stall;  stall = res.relink(res._all.filter(o => !unlink.has(o))), unlink.clear();  await prevStall
-                    prevStall = stall;  stall = null;  await prevStall
-                }
-            }
-
-            res._period.set(performance.now() - res._lastStepEnd)
-            res._lastStepEnd = performance.now()
-        } finally {
-            --res._stepsNow
-
-            // Don't let the fire die out.
-            //   (If +res._period is too low, this trigger can get hit, and stall the pipeline.)
-            //   (If +res._period is mostly accurate, there should be a steady stream of new-steps.)
-            if (!res._stepsNow)
-                ++res._stepsNow, setTimeout(step, Math.max(0, +res._period * lowball))
-        }
-    }
-    function _allocArray(a) {
-        // _allocArray(length)⇒array; _allocArray(array) de-allocates it.
-        // Don't make mistakes: double-free or use-after-free.
-        if (!_allocArray.free) _allocArray.free = []
-        if (typeof a == 'number' && a === a>>>0) { // Allocate.
-            const arr = _allocArray.free.length ? _allocArray.free.pop() : []
-            arr.length = a
-            return arr
-        }
-        if (!Array.isArray(a)) throw new Error("Expected array length or an array")
-        a.length = 0
-        if (_allocArray.free.length > 100) return // Prevent madness.
-        _allocArray.free.push(a)
-    }
-    function gotObserverData(b64) {
-        // Yeah, sure, u16 per color per pixel is 2× the inefficiency. But. Audio.
-        const obsBuf = Buffer.from(b64 || '', 'base64') // Int16; decode into floats.
-        const obsLen = obsBuf.byteLength / Int16Array.BYTES_PER_ELEMENT | 0
-        decodeInts(new Int16Array(obsBuf.buffer, obsBuf.byteOffset, obsLen), res._obsFloats)
+        this._lastStepEnd = performance.now()
     }
 })
-async function closeAllPagesExcept(browser, page) {
-    const bad = browser.targets().filter(t => t.type() === 'page' && t !== page.target()).map(t => t.page())
-    for (let p of bad) (await p).close().catch(doNothing)
-}
 
 
 
-exports.viewport = docs(`Sets viewport size on init.
-Pass in a JS object with at least \`{ width:640, height:480 }\`, or nothing.
-The same as https://pptr.dev/#?product=Puppeteer&version=v5.2.1&show=api-pagesetviewportviewport`, function viewport(opt = {}) {
+// TODO: ...Can this be a part of `.settings`, so that we overwhelm users less...
+exports.viewport = docs(`\`webenv.viewport(opt)\`
+Sets viewport size on init.
+Pass in a JS object with at least \`{ width:640, height:480 }\` (https://pptr.dev/#?product=Puppeteer&version=v5.2.1&show=api-pagesetviewportviewport), or nothing.`, function viewport(opt = {}) {
     if (!opt || typeof opt != 'object') throw new Error('Not an object')
     if (opt.width == null) opt.width = 640
     if (opt.height == null) opt.height = 480
@@ -467,13 +129,14 @@ The same as https://pptr.dev/#?product=Puppeteer&version=v5.2.1&show=api-pageset
         boundsArgs:null, prevPage:null,
         async init(page, env) {
             // Resize browser window (for tab capture), and set viewport.
+            if (!env.cdp) return
             if (env.width && env.width !== opt.width || env.height && env.height !== opt.height)
                 throw new Error('Can only have one viewport')
             env.width = opt.width
             env.height = opt.height
-            const targetId = (await env._cdp.send('Target.getTargets')).targetInfos[0].targetId
-            const windowId = (await env._cdp.send('Browser.getWindowForTarget', {targetId})).windowId
-            await env._cdp.send('Browser.setWindowBounds', this.boundsArgs = {
+            const targetId = (await env.cdp.send('Target.getTargets')).targetInfos[0].targetId
+            const windowId = (await env.cdp.send('Browser.getWindowForTarget', {targetId})).windowId
+            await env.cdp.send('Browser.setWindowBounds', this.boundsArgs = {
                 bounds: {
                     width: env.width + env._chromeWidth,
                     height: env.height + env._chromeHeight,
@@ -483,8 +146,9 @@ The same as https://pptr.dev/#?product=Puppeteer&version=v5.2.1&show=api-pageset
             return page.setViewport(opt)
         },
         read(env, page, state, obs) {
+            if (!env.cdp) return
             if (this.prevPage !== page || Math.random() < .01)
-                env._cdp.send('Browser.setWindowBounds', this.boundsArgs).catch(doNothing)
+                env.cdp.send('Browser.setWindowBounds', this.boundsArgs).catch(doNothing)
             this.prevPage = page
         },
     }
@@ -527,7 +191,7 @@ exports.image = docs(`Observations of the whole viewport; each pixel R/G/B is a 
 Provide a mask color (0xRRGGBB) to mask exact matches, or \`null\` to disable that. Non-black-and-white masks may get distorted by video compression, and thus become unusable.
 Slloooooooow.
 `, function image(maskColor = 0xfafafa) {
-    return {
+    return [observers, {
         init(page, env) {
             this.width = env.width, this.height = env.height
             this.reads = this.width * this.height * 3
@@ -549,7 +213,7 @@ Slloooooooow.
         },
         visState(page, state) { return state },
         visualize:visualizePageScreenshot,
-    }
+    }]
 })
 
 
@@ -601,10 +265,10 @@ Provide a mask color (0xRRGGBB) to mask exact matches, or \`null\` to disable th
 (A moving viewpoint acts as a crop of the image. And since web pages are typically consistent, this acts as the well-known augmentation for training visual models: two crops of the same image should have a very similar representation. No zooming like electromagnetic sensors in 3D environments get for free, though.)
 `, function imageRect(width = 100, height = width, quantize = 1, maskColor = 0xfafafa) {
     let env
-    return {
+    return [observers, {
         reads: width * height * 3,
         init(page, e) { env = e },
-        observerInput(page, state) {
+        observerInput(page, state) { // TODO: ...Observer input is only per-frame because we have mouseX/mouseY, isn't it... If we make it in-extension, we can make it at-init, right? (And pass in `stream` instead of `page`.) But we do want to use CDP to dispatch mouse events if we can, so, maybe both (but still have a less expensive way to send observer data than JSON-serialized objects full of constants)...
             let x = page.mouseX || 0, y = page.mouseY || 0
             x -= x % quantize, y -= y % quantize
             return { x, y, w:width, h:height, mask:maskColor, maxW: env.width, maxH:env.height }
@@ -624,7 +288,7 @@ Provide a mask color (0xRRGGBB) to mask exact matches, or \`null\` to disable th
         },
         visState(page, state) { return { width, height } },
         visualize:visualizePageScreenshot,
-    }
+    }]
 })
 
 
@@ -645,7 +309,7 @@ Provide a mask color (0xRRGGBB) to mask exact matches, or \`null\` to disable th
     const points = getFoveatedCoords(radius, numPoints, RNG, density) // (x<<16) | y
     const closestPoint = invertFoveatedCoords(radius, points)
     let env
-    return {
+    return [observers, {
         reads: numPoints * 3,
         init(page, e) { env = e },
         observerInput(page, state) {
@@ -726,7 +390,7 @@ Provide a mask color (0xRRGGBB) to mask exact matches, or \`null\` to disable th
                 return Math.round(((x !== x ? nan : x) + 1) * (255/2))
             }
         },
-    }
+    }]
     function getFoveatedCoords(radius, numPoints, RNG, density) {
         if (numPoints > Math.PI * radius*radius / 2)
             throw new Error('More points than the radius can reasonably allow')
@@ -784,7 +448,7 @@ exports.audio = docs(`\`webenv.audio(samples = 2048, sampleRate = 44100)\`
 Observations of most-recent audio data, as \`samples\` interleaved-channel numbers in -1..1, \`sampleRate\` numbers per second per channel.
 To calculate \`samples\`, divide \`sampleRate\` by the expected frames-per-second and multiply by how many channels there are (2), then round up to the nearest power-of-2.
 `, function imageRect(samples = 2048, sampleRate = 44100) {
-    return {
+    return [observers, {
         reads: samples,
         observerInput(page, state) { return { samples, sampleRate } },
         observer: function(input, video, audio, obs) {
@@ -798,7 +462,7 @@ To calculate \`samples\`, divide \`sampleRate\` by the expected frames-per-secon
             elem.textContent = `Volume: ${(-20 * Math.log(1 / Math.sqrt(sumSqr))).toFixed(2)} dB`
             elem.style.fontFamily = 'monospace'
         },
-    }
+    }]
 })
 
 
@@ -807,6 +471,9 @@ exports.webView = docs(`\`webenv.webView(port = 1234, httpsOptions = null, path 
 Allows visualizing the observation streams as they are read, by opening \`localhost:1234/path\` or similar in a browser.
 Optionally, specify key and certificate in \`httpsOptions\`: https://nodejs.org/en/knowledge/HTTP/servers/how-to-create-a-HTTPS-server/
 To prevent others from seeing observations, use random characters as \`path\`.
+Other interfaces may define:
+- \`visState(page, state)=>vState\` (the result must be JSON-serializable, sent once at init-time),
+- \`.visualize(obs, pred, elem, vState)\` (serialized into web-views to visualize data there, so write the function out fully, not as \`{f(){}}\`).
 `, function webView(port = 1234, httpsOptions = null, path = '') {
     const http = require('http'), https = require('https')
     const server = !httpsOptions ? (f => http.createServer(f)) : (f => https.createServer(httpsOptions, f))
@@ -832,7 +499,7 @@ To prevent others from seeing observations, use random characters as \`path\`.
                             'Cache-Control': 'no-cache',
                             Connection: 'keep-alive',
                         })
-                        sendRelink(env, env._page, this.connections) // TODO: Should know a better way to get the page.
+                        sendRelink(env, env.page, this.connections) // TODO: Only pass in the stream.
                     } else res.statusCode = 404
                 })
                 return new Promise(then => this.server.listen(port, then))
@@ -847,7 +514,7 @@ To prevent others from seeing observations, use random characters as \`path\`.
             const to = this.connections
             if (!to.length) return
             if (this.interfaces !== env._all) {
-                sendRelink(env, page, to)
+                sendRelink(env, page, to) // TODO: Only pass in the stream.
                 this.interfaces = env._all
             }
             sendObservation(obs, this.lastPred, to)
@@ -861,12 +528,12 @@ To prevent others from seeing observations, use random characters as \`path\`.
             this.lastPred = empty ? null : pred
         },
     }
-    function sendRelink(env, page, to) {
+    function sendRelink(env, page, to) { // TODO: Only pass in the stream.
         let end = 0
         for (let inter of env._all)
             if (typeof inter.reads == 'number')
                 end += inter.reads
-        const vis = createExtendJS(page, env._all, env._allState, end)
+        const vis = createExtendJS(page, env._all, env._allState, end) // TODO: Only pass in the stream.
         to.forEach(res => res.write(`event:relink\ndata:${vis}\n\n`))
     }
     function sendObservation(obs, pred, to) {
@@ -909,8 +576,9 @@ function decode(str, into) {
 ${endian}
 `
     }
-    function createExtendJS(page, inters, states, end) {
+    function createExtendJS(page, inters, states, end) { // TODO: Only accept in the stream.
         // Return the function body, which accepts `state` and `root` to fill them.
+        if (!inters || !states) return ''
         let n = 0
         const visInits = [], visualizers = []
         let start = 0
@@ -1200,7 +868,7 @@ In a page, \`directLink(PageAgent, Inputs = 0, Outputs = 0)\` will return (a pro
                     },
                     agent(obs, pred, act) { return continues }, // Ensure that steps always happen.
                     async write(page, state, pred, act) {
-                        if (env._page !== page) continues = false
+                        if (env.page !== page) continues = false
                         if (!continues) return
                         if (page.isClosed()) return
                         // Call the page-agent with our action, to get observation.
@@ -1434,6 +1102,8 @@ exports.triggers.randomInCache = docs(`\`webenv.triggers([webenv.triggers.random
 Navigates to a random previously-visited URL (most of the time), which is preserved in cache.
 Must only be used with \`webenv.filter\`, with a string \`cache\` path.
 
+(A bit useless with the RandomURL dataset.)
+
 (This is a very open-ended action. If the agent's loss averages outcomes, then predictions with this trigger would be quite gray and nonsensical; make sure to maximize plausibility instead, so particular outcomes don't get penalized.)
 `, async function(page, env) {
     if (typeof page.cache !== 'string') throw new Error('But there is no .cache')
@@ -1549,10 +1219,10 @@ Exposes all mouse-related actions.
     function mouseButton(env, button, pressed) {
         // `page.mouse.down(...)`/`.up(...)` have proven unreliable, so, CDP.
         if (pressed) curButtons |= button
-        env._cdp.send('Input.dispatchMouseEvent', {
+        env,cdp && env.cdp.send('Input.dispatchMouseEvent', {
             type: 'mouseReleased',
-            x: env._page.mouseX,
-            y: env._page.mouseY,
+            x: env.page.mouseX, // TODO: ...Should set these on `env` directly. (Or maybe, be performed in extension... No, wait, if we have CDP, then we should really use CDP instead of JS for mouse eventes. ...But then, we won't be able to make observer inputs at-init, since we'll have to send mouse position each time, won't we... Quite the conundrum.)
+            y: env.page.mouseY,
             button: button===1 ? 'left' : button===2 ? 'right' : button===4 ? 'middle' : 'none',
             buttons: curButtons,
             clickCount: 1,
@@ -1610,16 +1280,17 @@ This does not change video playback speed, but does control when JS timeouts fir
     }
     return {
         init(page, env) {
-            env._cdp.on('Emulation.virtualTimeBudgetExpired', resolveFrame)
-            return env
+            env.cdp && env.cdp.on('Emulation.virtualTimeBudgetExpired', resolveFrame)
+            return env // TODO: No result.
         },
         deinit(page, state) { // TODO: Make `deinit` pass in the env. (We really need it here.) (Also, maybe, clean up the per-stream state, don't just make it `page`; maybe make it a clean interface, with .env and .page and .cdp, so that we don't have too many args everywhere.)
-            state._cdp.off('Emulation.virtualTimeBudgetExpired', resolveFrame)
+            state.cdp && state.cdp.off('Emulation.virtualTimeBudgetExpired', resolveFrame)
         },
         async read(env, page, state, obs) {
+            if (!env.cdp) return
             // Break pipelining if frames are taking too long.
             const p = prevFrame;  prevFrame = new Promise(then => prevThen = then);  p && (await p)
-            env._cdp.send('Emulation.setVirtualTimePolicy', {
+            env.cdp.send('Emulation.setVirtualTimePolicy', {
                 policy:'advance', budget
             }).catch(doNothing)
         },
@@ -1797,14 +1468,15 @@ In particular, this:
 - To prevent infinite loops and/or heavy memory thrashing, if \`timeout\` (seconds) is non-zero: periodically checks whether JS takes too long to execute, and if so, re-launches the browser.
 `, function(timeout = 10, deleteCookies = true) {
     const performance = require('perf_hooks').performance
-    let Env = null, lastStamp = performance.now(), intervalID = null, readyState = 'void'
+    let Stream = null, lastStamp = performance.now(), intervalID = null, readyState = 'void'
     return {
         async init(page, env) {
-            Env = env // For events.
-            await env._cdp.send('Page.enable')
-            await env._cdp.send('Page.setDownloadBehavior', { behavior:'deny' }) // Deprecated, but so much better.
-            env._cdp.send('Page.setAdBlockingEnabled', { enabled:true })
-            env._browser.on('targetcreated', onNewTarget)
+            if (!env.cdp || !env.browser) return
+            Stream = env // For events.
+            await env.cdp.send('Page.enable')
+            await env.cdp.send('Page.setDownloadBehavior', { behavior:'deny' }) // Deprecated, but so much better.
+            env.cdp.send('Page.setAdBlockingEnabled', { enabled:true })
+            env.browser.on('targetcreated', onNewTarget)
             page.on('dialog', onDialog)
             page.on('popup', onPopup)
             let expectedEnv = env
@@ -1818,31 +1490,33 @@ In particular, this:
             })()
             deleteCookies && page.on('load', noCookies)
             deleteCookies && page.on('framenavigated', noCookies)
-            clearInterval(intervalID), intervalID = setInterval(maybeCloseBrowser, timeout/2, env)
+            clearInterval(intervalID), intervalID = setInterval(maybeCloseBrowser, timeout*(1000/2), env)
             readyState = 'initialized'
             return env // TODO: This is only for deinit.
         },
-        async deinit(page, state) { // TODO: Pass in the env explicitly. And accept it here.
+        async deinit(page, state) { // TODO: Pass in the env explicitly. And accept it here, don't go through `state`.
             const env = state
+            if (!env.cdp || !env.browser) return
             clearInterval(intervalID), intervalID = null
             deleteCookies && page.off('framenavigated', noCookies)
             deleteCookies && page.off('load', noCookies)
             page.off('popup', onPopup)
             page.off('dialog', onDialog)
-            env._browser.off('targetcreated', onNewTarget)
-            env._cdp.send('Page.setAdBlockingEnabled', { enabled:false })
-            await env._cdp.send('Page.disable')
+            env.browser.off('targetcreated', onNewTarget)
+            env.cdp.send('Page.setAdBlockingEnabled', { enabled:false })
+            await env.cdp.send('Page.disable')
         },
         read(env, page, state, obs) {
-            if (env._page.isClosed()) return lastStamp = performance.now()
-            if (Math.random() > .1 && performance.now() - lastStamp < timeout*(1000/2)) return
+            if (!env.cdp || !env.browser) return
+            if (env.page.isClosed() || !env.browser.isConnected())
+                return lastStamp = performance.now()
+            if (!(Math.random() < .01) && performance.now() - lastStamp < timeout*(1000/2)) return
             // Discard console entries, and try to evaluate some JS;
             //   if it takes too long, re-launch the browser.
             //   (Re-launching can spam the console with unhandled promise rejection warnings.)
-            if (!env || env._page.isClosed() || !env._browser.isConnected()) return
-            env._cdp.send('Runtime.discardConsoleEntries').catch(doNothing)
+            env.cdp.send('Runtime.discardConsoleEntries').catch(doNothing)
             if (timeout)
-                env._page.evaluate(() => 0).then(() => lastStamp = performance.now()).catch(doNothing)
+                env.page.evaluate(() => 0).then(() => lastStamp = performance.now()).catch(doNothing)
             if (readyState === 'initialized') readyState = 'ready'
         },
     }
@@ -1850,7 +1524,7 @@ In particular, this:
         if (!timeout || readyState !== 'ready' || performance.now() - lastStamp <= timeout*1000) return
         readyState = 'void'
         lastStamp = performance.now()
-        env && env._browser && env._browser.isConnected() && env._browser.close()
+        env && env.browser && env.browser.isConnected() && env.browser.close()
     }
     function onPopup(newPage) {
         // A new tab opens up.
@@ -1858,7 +1532,7 @@ In particular, this:
         const newURL = newPage.url()
         newPage.close()
         try {
-            Env._page && newURL && Env._page.goto(newURL, {waitUntil:'domcontentloaded'}).catch(doNothing)
+            Stream.page && newURL && Stream.page.goto(newURL, {waitUntil:'domcontentloaded'}).catch(doNothing)
         } catch (err) { console.error('Bad URL of a popup:', newURL) }
     }
     function onDialog(dial) {
@@ -1867,14 +1541,15 @@ In particular, this:
         dial.dismiss()
     }
     async function noCookies() {
-        if (!Env._page || Env._page.isClosed()) return
+        if (!Stream.page || Stream.page.isClosed()) return
         try {
-            await Env._page.deleteCookie(...(await Env._page.cookies()))
+            await Stream.page.deleteCookie(...(await Stream.page.cookies()))
         } catch (err) {}
     }
     function onNewTarget() {
         lastStamp = performance.now()
-        closeAllPagesExcept(Env._browser, Env._page)
+        if (!Stream.browser) return
+        closeAllPagesExcept(Stream.browser, Stream.page)
     }
 })
 function doNothing() {}
@@ -1892,13 +1567,16 @@ See this object's properties for examples of \`functions\`.
     return {
         priority:1,
         async init(page, env) {
-            this.env = env
-            this.script = (await this.env._cdp.send('Page.addScriptToEvaluateOnNewDocument', {
+            if (!env.cdp) return // TODO: This is way too useful to not be used in user-extensions, so, figure out how to.
+            this.script = (await env.cdp.send('Page.addScriptToEvaluateOnNewDocument', {
                 source, worldName:'webenvJS',
             })).identifier
+            return env // TODO: Remove.
         },
         deinit(page, state) {
-            this.env._cdp.send('Page.removeScriptToEvaluateOnNewDocument', { identifier: this.script })
+            if (!env.cdp) return
+            const env = state // TODO: Ugh.
+            env.cdp.send('Page.removeScriptToEvaluateOnNewDocument', { identifier: this.script })
         },
     }
 })
@@ -2172,12 +1850,6 @@ async function fetchSlice(url, start = 0, end = null) {
 
 
 
-exports.mainPage = docs(`\`webenv.mainPage(url)\`
-The URL that is navigated-to whenever the browser re/launches.
-`, x => x)
-
-
-
 exports.userAgent = docs(`\`webenv.userAgent(agent = 'WebEnv agent <https://github.com/Antipurity/webenv>')\`
 Specifies the User-Agent string.
 Identify yourself and include contact information to overcome some of the prejudice against bots on the Web: https://www.w3.org/wiki/Bad_RDF_Crawlers
@@ -2200,11 +1872,393 @@ These include:
 
 
 
-// TODO: Extract all `observer` functionality into one non-exported object here, in `read`.
-const observers = {
-    // TODO: What, do we store observer indices on env? ...But `read` has no access to env...
-    // TODO: Make `read` accept not only page/state/obs, but env/page/state/obs.
-    //   TODO: Make the users of `read` which used to preserve `env` via `state` just not do that.
+const observers = docs(`The shared interface for extension-side video and audio grabbing.
+
+May be replaced by ALL observations coming from the extension. And through WebRTC, not CDP. And with properly-varying bytes-per-value.
+
+Other interfaces that want this must define:
+- \`.observerInput(page, state)=>obsInput\`,
+- \`.observer(obsInput, video:{grab(x,y,w,h)=>pixels}, audio:{grab(sampleN=2048, sampleRate=44100)=>samples}, obsOutput)\`;
+`, {
+    key: Symbol('observers'),
+    init(page, env) {
+        if (!env.extensionPage) return
+        env.extensionPage.exposeFunction('gotObserverData', gotObserverData)
+        function gotObserverData(b64) {
+            // Yeah, sure, u16 per color per pixel is 2× the inefficiency. But. Audio.
+            const obsBuf = Buffer.from(b64 || '', 'base64') // Int16; decode into floats.
+            const obsLen = obsBuf.byteLength / Int16Array.BYTES_PER_ELEMENT | 0
+            decodeInts(new Int16Array(obsBuf.buffer, obsBuf.byteOffset, obsLen), env._obsFloats)
+            // TODO: ...But what do we do about non-observer data becoming overwritten... Maybe not care, since having observers at all is temporary, and ALL observations will soon be provided by the extension...
+        }
+    },
+    async read(env, page, st, obs) {
+        if (!env.page || !env.extensionPage) return
+        const state = env[this.key] || (env[this.key] = Object.create(null))
+        if (state.all !== env._all) {
+            // Relink extension-side observers.
+            state.all = env._all
+            state.obsInds = []
+            const observers = []
+            for (let i = 0; i < env._all.length; ++i) {
+                const o = env._all[i]
+                if (typeof o.observer == 'function' || typeof o.observer == 'string')
+                    state.obsInds.push(i),
+                    observers.push({read:''+o.observer, offset:env._allReadOffsets[i], length:o.reads || 0})
+            }
+            const w = env.width || 0
+            const h = env.height || 0
+            await env.extensionPage.evaluate((o,w,h) => updateObservers(o,w,h), observers, w, h)
+        }
+        const obsInds = state.obsInds
+        // Call observers. The extension will call `gotObserverData` for future frames.
+        //   (No `await`: the observer stream is delayed by at least a frame, to not stall.)
+        const inputs = new Array(obsInds.length)
+        for (let i = 0; i < obsInds.length; ++i) {
+            const inAll = obsInds[i], o = env._all[inAll]
+            if (o && typeof o.observerInput == 'function')
+                inputs[i] = o.observerInput(env.page, env._allState[inAll])
+            else inputs[i] = undefined
+        }
+        if (env.extensionPage.isClosed()) return
+        env.extensionPage.evaluate(ins => void setTimeout(readObservers, 0, ins), inputs).catch(doNothing)
+    },
+})
+
+
+
+// `Object.freeze`ing this would have been good, if it didn't prevent children from defining their own `lang` and such.
+const streamPrototype = docs(`This encapsulates all information about one stream of data.
+
+To create a new stream from this prototype, use the factory function \`.open(env, relaunch = null)\`.
+
+The result is a promise for the environment, which is an object with:
+- \`relink(...interfaces)\`: changes interfaces at run-time. Agents might get confused, since they likely rely on positions. (Prefer \`result.relink(MODIFY(result._all))\` to remembering the initial interfaces, to handle dynamic links.)
+- \`reads:Number\`: how many observations are available as floats.
+- \`writes:Number\`: how many actions are available as floats.
+- Low-level:
+    - \`read()=>Promise<Observations>\`: returns observations as -1…1 32-bit floats, NaN where not provided.
+    - \`write(Actions)=>Promise<void>\`: accepts the numeric actions, and performs them.
+- \`close()=>Promise<void>\`: ends this stream. \`env\` is not notified.
+`, {
+    // Public interface.
+    env: null,
+    reads: 0,
+    writes: 0,
+    settings: null,
+    // May always remain null, if using a non-Puppeteer backend.
+    browser: null, page: null, cdp: null, extensionPage: null,
+
+    // Parameters.
+    lang: 'en-US,en',
+    lowball: .95,
+    maxRelaunchAttempts: 32,
+
+    async open(env, relaunch = null) {
+        // JS classes are boring.
+        const res = Object.create(this)
+        res._relaunch = relaunch
+        // Public interface. (More efficient to set this to defaults than to have many object shapes.)
+        res.env = env
+        res.reads = 0, res.writes = 0
+        res.settings = Object.create(null)
+        res.browser = null, res.page = null, res.cdp = null, res.extensionPage = null
+        // Private state.
+        res._stall = null // A promise when a `relaunch` is in progress.
+        res._unlink = new Set
+        res._watchdogCheckId = setInterval(() => { // This watchdog timer is easier than fixing rare-hang-on-navigation bugs.
+            if (performance.now()-res._lastStepEnd < 15000) return
+            res._relaunchRetrying()
+        }, 30000)
+        res._lastStepEnd = performance.now() // For measuring time between steps.
+        res._period = new class ObsNumber { // Measuring time between steps.
+            // A number that estimates some other number, independent of context (unlike a NN).
+            constructor(x, momentum = .99) { this.x = +x, this.m = +momentum }
+            valueOf() { return this.x }
+            set(x) { return this.x = this.m * this.x + (1 - this.m) * Math.max(-this.x, Math.min(x, this.x*2)) }
+        }(0)
+        res._stepsNow = 0 // Throughput is maximized by lowballing time-between-steps, but without too many steps at once.
+        res._killed = false // `.close()` will set this to true.
+        await res._relaunchRetrying()
+        return res
+    },
+    async read() {
+        // Collect webenv-side reads.
+        // It might happen that a new read might get scheduled before an old one is finished.
+        //   For these cases, make sure to only not modify internal buffers between `await`s, only modify in synchronous code.
+        if (this._killed) throw new Error('Cannot read from a closed environment')
+        this._relaunchIfNeeded()
+        if (!this.reads) return
+        try {
+            // Defer observations to interfaces.
+            const inds = this._obsInds, p = this.page, a = this._all, s = this._allState
+            const obs = this._obsSlice
+            const tmp = this._allocArray(0)
+            for (let i = 0; i < inds.length; ++i) {
+                const j = inds[i], r = a[j].read(this, p, s[j], obs[i])
+                if (r instanceof Promise) tmp.push(r)
+            }
+            // Await all promises at once.
+            for (let i = 0; i < tmp.length; ++i) await tmp[i]
+            this._allocArray(tmp)
+            return this._obsFloats
+        } catch (err) { if (!this._stall) throw err }
+    },
+    async write(acts) {
+        if (this._killed) throw new Error('Cannot write to a closed environment')
+        this._relaunchIfNeeded()
+        if (!this.writes) return
+        // Copy acts to our buffer.
+        if (!(acts instanceof Observations))
+            throw new Error('Expected a float array')
+        if (acts.length !== this.writes)
+            throw new Error(`Expected ${this.writes} actions but got ${acts.length}`)
+        try {
+            if (acts !== this._actFloats) this._actFloats.set(acts)
+            // Defer actions to interfaces.
+            const inds = this._actInds, p = this.page, a = this._all, s = this._allState
+            const pred = this._predSlice, act = this._actSlice
+            const tmp = this._allocArray(0)
+            for (let i = 0; i < inds.length; ++i) {
+                if (!a[inds[i]]) return
+                const r = a[inds[i]].write(p, s[inds[i]], pred[i], act[i])
+                if (r instanceof Promise) tmp.push(r)
+            }
+            // Await all promises at once.
+            for (let i = 0; i < tmp.length; ++i) await tmp[i]
+            this._allocArray(tmp)
+            // Return nothing, apart from a promise.
+        } catch (err) { if (!this._stall) throw err }
+    },
+    async relink(...interfaces) {
+        // Remember where old interfaces were.
+        const oldIndices = new Map
+        if (this._all)
+            for (let i = 0; i < this._all.length; ++i)
+                oldIndices.set(this._all[i], i)
+
+        // Flatten the interface tree.
+        const all = [], indices = new Map
+        async function track(o) {
+            if (o instanceof Promise) o = await o
+            if (Array.isArray(o)) return o.forEach(track)
+            if (!o || typeof o != 'object') throw new Error('All must be webenv interfaces')
+            if (indices.has(o)) return // De-duplicate.
+            indices.set(o, all.length)
+            all.push(o)
+        }
+        await track(interfaces, 0)
+        // Respect priorities, but do not shuffle needlessly.
+        all.sort((a,b) => ((b.priority || 0) - (a.priority || 0)) || (indices.get(a) - indices.get(b)))
+        const rInds = [], wInds = [], agentInds = [], allState = []
+        for (let i = 0; i < all.length; ++i) {
+            const o = all[i]
+            if (typeof o.read == 'function') rInds.push(i)
+            if (typeof o.write == 'function') wInds.push(i)
+            if (typeof o.agent == 'function') agentInds.push(i)
+        }
+
+        // Initialize the new, move state of both old and new, and deinitialize the old.
+        //   Also listen to settings.
+        let reads = 0, writes = 0
+        const allReadOffsets = [], allWriteOffsets = []
+        const seen = new Set
+        for (let i = 0; i < all.length; ++i) {
+            const o = all[i], prev = oldIndices.get(o)
+            seen.add(o)
+            if (typeof o.init == 'function')
+                allState[i] = prev === undefined ? o.init(this.page, this) : this._allState ? this._allState[prev] : undefined
+            allReadOffsets[i] = reads, allWriteOffsets[i] = writes
+            if (typeof o.reads == 'number') {
+                if (o.reads < 0 || o.reads !== o.reads>>>0)
+                    throw new Error('Bad input count: '+o.reads)
+                reads += o.reads
+            }
+            if (typeof o.writes == 'number') {
+                if (o.writes < 0 || o.writes !== o.writes>>>0)
+                    throw new Error('Bad output count: '+o.writes)
+                writes += o.writes
+            }
+            if (o.settings && typeof o.settings == 'object')
+                Object.assign(this.settings, o.settings)
+        }
+        for (let i = 0; i < all.length; ++i)
+            if (allState[i] instanceof Promise)
+                allState[i] = await allState[i]
+        if (this._all) {
+            const p = this.page, a = this._all, s = this._allState
+            const tmp = this._allocArray(0)
+            for (let i = 0; i < a.length; ++i) {
+                if (seen.has(a[i]) || typeof a[i].deinit != 'function') continue
+                const r = a[i].deinit(p, s[i])
+                if (r instanceof Promise) tmp.push(r)
+            }
+            // Await all promises at once.
+            for (let i = 0; i < tmp.length; ++i) await tmp[i]
+            this._allocArray(tmp)
+        }
+
+        // Resize observations/actions.
+        //   (Technically, could move obs/pred/act to new correct positions, but why?)
+        const obsFloats = new Observations(reads)
+        const predFloats = new Observations(reads)
+        const actFloats = new Observations(writes)
+        obsFloats.fill(NaN), predFloats.fill(NaN), actFloats.fill(NaN)
+
+        // Pre-compute observation/action slices.
+        const obsSlice = new Array(rInds.length).fill()
+        const predSlice = new Array(rInds.length).fill()
+        const bpe = Observations.BYTES_PER_ELEMENT
+        const _ = undefined
+        for (let i = 0; i < rInds.length; ++i) {
+            const nr = allReadOffsets[rInds[i]]
+            const r = all[rInds[i]].reads
+            obsSlice[i] = r !== _ ? new Observations(obsFloats.buffer, nr * bpe, r) : obsFloats
+        }
+        const actSlice = new Array(wInds.length).fill()
+        for (let i = 0; i < wInds.length; ++i) {
+            const nr = allReadOffsets[wInds[i]], nw = allWriteOffsets[wInds[i]]
+            const r = all[wInds[i]].reads, w = all[wInds[i]].writes
+            predSlice[i] = r !== _ ? new Observations(predFloats.buffer, nr * bpe, r) : predFloats
+            actSlice[i] = w !== _ ? new Observations(actFloats.buffer, nw * bpe, w) : actFloats
+        }
+
+        // Pre-compute agent args.
+        const agentArgs = new Array(agentInds.length).fill()
+        for (let i = 0; i < agentInds.length; ++i) {
+            const j = agentInds[i], bpe = Observations.BYTES_PER_ELEMENT
+            const o = all[j], r = allReadOffsets[j], w = allWriteOffsets[j]
+            const args = [] // obs, pred, act
+            args.push(typeof o.reads == 'number' ? new Observations(obsFloats.buffer, r * bpe, o.reads) : obsFloats)
+            args.push(typeof o.reads == 'number' ? new Observations(predFloats.buffer, r * bpe, o.reads) : predFloats)
+            args.push(typeof o.writes == 'number' ? new Observations(actFloats.buffer, w * bpe, o.writes) : actFloats)
+            agentArgs[i] = args
+        }
+
+        // Schedule the interpreter loop if there are now agents.
+        const looped = !!(this._agentInds && this._agentInds.length)
+        const looping = !!agentInds.length
+        if (!this._stepsNow && !looped && looping)
+            ++this._stepsNow, setTimeout(this._step, 0, this)
+
+        // Finalize what we computed here.
+        this.reads = reads, this.writes = writes
+        this._allReadOffsets = allReadOffsets, this._allWriteOffsets = allWriteOffsets
+        this._all = all, this._obsInds = rInds, this._actInds = wInds, this._agentInds = agentInds, this._allState = allState
+        this._obsFloats = obsFloats
+        this._predFloats = predFloats, this._actFloats = actFloats
+        this._obsSlice = obsSlice, this._predSlice = predSlice
+        this._actSlice = actSlice
+        this._agentArgs = agentArgs
+    },
+    async close() {
+        if (this._killed) return
+        clearInterval(this._watchdogCheckId)
+        this._killed = true
+        const p = this.page, a = this._all, s = this._allState
+        if (a) {
+            const tmp = this._allocArray(0)
+            for (let i = 0; i < a.length; ++i) {
+                const r = typeof a[i].deinit == 'function' ? a[i].deinit(p, s[i]) : null
+                if (r instanceof Promise) tmp.push(r)
+            }
+            // Await all promises at once.
+            for (let i = 0; i < tmp.length; ++i) await tmp[i]
+            this._allocArray(tmp)
+        }
+        // Close the browser.
+        if (this.browser) await this.browser.close()
+        // Return nothing, apart from a promise.
+    },
+    _relaunchIfNeeded() {
+        if (typeof this._relaunch != 'function') return
+        if (this._killed) return
+        if (!this.browser || this.browser.isConnected() && !this.page.isClosed()) return
+        if (this._stall) return // No double-relaunching please.
+        return this._relaunchRetrying()
+    },
+    async _relaunchRetrying(n = this.maxRelaunchAttempts) {
+        if (typeof this._relaunch != 'function') return
+        let then, prevStall = this._stall;  this._stall = new Promise(t => then = t);  await prevStall
+        try {
+            for (let i = 1; i < n; ++i)
+                try { return await this._relaunch() }
+                catch (err) { console.error('launch error', err) }
+            return await this._relaunch()
+        } catch (err) { this.browser && this.browser.close();  throw err }
+        finally { then(), this._stall = null }
+    },
+    async _step(res) {
+        // Read, think, write.
+        // Each agent takes f32 observations (to read) and predictions and actions (to write).
+        // It returns a promise, which must resolve to `true`, else its loop will stop.
+        try {
+            if (res._killed) return
+            res._relaunchIfNeeded()
+            if (!res._agentInds.length) return
+
+            // Don't schedule too many steps at once. If all die, end-of-step will schedule anyway.
+            if (res._stepsNow < res.settings.simultaneousSteps)
+                ++res._stepsNow, setTimeout(res._step, Math.max(0, +res._period * res.lowball), res)
+
+            try {
+                await res.read()
+
+                const results = res._allocArray(res._agentInds.length).fill()
+                for (let i = 0; i < results.length; ++i)
+                    try { results[i] = res._all[res._agentInds[i]].agent(...res._agentArgs[i]) }
+                    catch (err) { console.error(err) } // Unlink on exception.
+                for (let i = 0; i < results.length; ++i)
+                    if (results[i] instanceof Promise)
+                        try { results[i] = await results[i] }
+                        catch (err) { results[i] = undefined } // Unlink on exception.
+                for (let i = 0; i < results.length; ++i)
+                    if (!results[i])
+                        res._unlink.add(res._all[res._agentInds[i]])
+                res._allocArray(results)
+
+                await res.write(res._actFloats)
+            } catch (err) {
+                if (!res._stall) console.error(err)
+                // Do not let exceptions kill us.
+            } finally {
+                // Unlink the agents that do not want to live on.
+                if (res._unlink.size) {
+                    let prevStall = res._stall;  res._stall = res.relink(res._all.filter(o => !res._unlink.has(o))), res._unlink.clear();  await prevStall
+                    prevStall = res._stall;  res._stall = null;  await prevStall
+                }
+            }
+
+            res._period.set(performance.now() - res._lastStepEnd)
+            res._lastStepEnd = performance.now()
+        } finally {
+            --res._stepsNow
+
+            // Don't let the fire die out.
+            //   (If +res._period is too low, this trigger can get hit, and stall the pipeline.)
+            //   (If +res._period is mostly accurate, there should be a steady stream of new-steps.)
+            if (!res._stepsNow)
+                ++res._stepsNow, setTimeout(res._step, Math.max(0, +res._period * res.lowball), res)
+        }
+    },
+    _allocArray:function fn(a) {
+        // this._allocArray(length)⇒array; this._allocArray(array) de-allocates it.
+        // Don't make mistakes: double-free or use-after-free.
+        if (!fn.free) fn.free = []
+        if (typeof a == 'number' && a === a>>>0) { // Allocate.
+            const arr = fn.free.length ? fn.free.pop() : []
+            arr.length = a
+            return arr
+        }
+        if (!Array.isArray(a)) throw new Error("Expected array length or an array")
+        a.length = 0
+        if (fn.free.length > 32) return // Prevent madness.
+        fn.free.push(a)
+    },
+})
+async function closeAllPagesExcept(browser, page) {
+    const bad = browser.targets().filter(t => t.type() === 'page' && t !== page.target()).map(t => t.page())
+    for (let p of bad) (await p).close().catch(doNothing)
 }
 
 

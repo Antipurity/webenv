@@ -3,8 +3,9 @@ This document outlines what still needs to be done to reach MVP state (or the "r
 (These are breaking changes. After this, there shouldn't be any breaking changes.)
 
 - Batch size > 1:
+    - Clean up cruft: to prevent torn writes to observations, `read` must also receive a promise-returning func, which resolves once this step's reads are ended (returned or called this func).
     - Extract all observation+action stuff from `webenv` to a dictionary on `webenv`.
-        - Clean up cruft: observers (data from extension) should be an interface, which fills others' spots on read (having cached observer indices, invalidated when env._all changes). Should deduplicate interface objects, so that there is only one whenever we include an image/audio interface.
+        - Clean up interfaces of interfaces: make `read`, `init`, `deinit`, `write`, `agent` accept not env/page/whatever, but only the stream state (which includes all that, in a readable manner).
         - Relaunch individually when a connection is lost.
         - Make every spot's read+step+write cycle independent from all others (with the timing initialized from others if possible): this is the easiest-to-implement option. (As long as we don't get torn writes to `webenv.io` or `webenv.remote`, we're good. Parallel processing on the agent side (rather than serial) should discourage resource starvation.)
         - Make `webenv.io` actually send streams per-spot.

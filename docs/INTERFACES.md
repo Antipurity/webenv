@@ -295,12 +295,6 @@ Must only be used with `webenv.filter(...)`, with a string `cache` path.
 These vacuous interfaces can be very useful for certain needs.
 
 ```js
-webenv.mainPage(url)
-```
-
-The URL that is navigated-to whenever the browser re/launches.
-
-```js
 webenv.webView()
 webenv.webView(port = 1234, httpsOptions = null, path = '')
 ```
@@ -310,6 +304,8 @@ Allows visualizing the observation streams as they are read, by opening `localho
 To use HTTPS instead of HTTP, [specify key and certificate](https://nodejs.org/en/knowledge/HTTP/servers/how-to-create-a-HTTPS-server/) in `httpsOptions`.
 
 To prevent others from seeing observations, use random characters as `path`. Not extremely secure, but visualization is not exactly a safety-critical application.
+
+See runtime docs `require('webenv').webView.docs` for details on how interfaces declare themselves viewable.
 
 ```js
 webenv.filter()
