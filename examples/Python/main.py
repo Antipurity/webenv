@@ -148,9 +148,11 @@ we_p = os.path.join(os.path.dirname(os.path.realpath(__file__)), '..', '..', 'we
 webenv.webenv(
   agent,
   'we.defaults',
-  # '"https://www.google.com/"', # TODO
-  '"about:blank"',
-  # Note: ideally, the homepage would be a random website redirector.
+  [
+    'we.settings',
+    '{ homepage:"about:blank" }', # TODO: https://www.google.com/
+  ],
+  # Note: ideally, the homepage would be a redirector to random websites.
   #   One that won't mark the agent as a bot.
-  #   (The defaults include a possibility of such a redirector. However, please use the RandomURL dataset.)
+  #   (Install & use the RandomURL dataset if you can. No pre-existing website is good enough.)
   webenv_path=we_p)

@@ -1,5 +1,4 @@
-// This was pretty easy, coded in 8 days.
-//   +3 days of debugging.
+// To go to a particular interface, search for `exports.XXXXX =`.
 
 
 
@@ -7,15 +6,15 @@ const puppeteer = require('puppeteer')
 
 const Observations = Float32Array
 
-exports.init = docs(`Function. Pass in numeric interfaces (and optionally the homepage at the end), receive a promise.
+exports.init = docs(`Function. Pass in numeric interfaces, receive a promise.
 The extensible creator of numeric Web interfaces, for machine learning: a truly general environment for AGI.
 
-Without interfaces, this is next to useless.
+Without interfaces, this is useless.
 All other members of this module either are such interfaces (such as \`webenv.defaults\`) or create them.
     Some are mostly observations, some are mostly actions, some are mostly agents (connecting observations to actions).
     Agents are called in a loop, which maximizes throughput.
 
-The result is a promise for an object with:
+The result is a promise for the environment, which is an object with:
 - \`relink(...interfaces)\`: changes interfaces at run-time. Agents might get confused. (Prefer \`result.relink(MODIFY(result._all))\` to remembering the initial interfaces, to handle dynamic links.)
 - \`reads:Number\`: how many observations are available as floats.
 - \`writes:Number\`: how many actions are available as floats.
@@ -24,21 +23,22 @@ The result is a promise for an object with:
     - \`write(Actions)=>Promise<void>\`: accepts the numeric actions, and performs them.
 - \`close()=>Promise<void>\`: ends this session.
 
-Ideally, you should not treat observations/actions as anything other than vectors of approximately -1..1 32-bit floats. (Not necessarily square, not necessarily an image. Likely multimodal.)
+Ideally, you should not treat observations/actions as anything other than vectors of approximately -1..1 32-bit floats. (Not necessarily square, not necessarily an image. Very likely multimodal.)
 
 To write new interfaces, look at the pre-existing interfaces.
     An interface is an object (or an array of interfaces) that may define:
+    - \`.settings\` (an object with \`homepage\` and/or \`simultaneousSteps\`);
     - \`.init(page, env)=>state\`, \`.deinit(page, state)\` (not called on browser relaunching);
-    - \`.reads:Number\`, \`.read(page, state, obs)\` (modify \`obs\` in-place);
+    - \`.reads:Number\`, \`.read(page, state, obs)\` (modify \`obs\` in-place, do not read);
         - \`.observerInput(page, state)=>obsInput\`,
         - \`.observer(obsInput, video:{grab(x,y,w,h)=>pixels}, audio:{grab(sampleN=2048, sampleRate=44100)=>samples}, obsOutput)\` (before reading, these are collected from an extension, -1…1);
-    - \`.writes:Number\`, \`.write(page, state, pred, act)\` (\`pred\` can predict the next read \`obs\`; do read from \`act\` and act on that);
-    - \`.agent(obs, pred, act)=>continues\` (return false to unlink the agent);
+    - \`.writes:Number\`, \`.write(page, state, pred, act)\` (\`pred\` can predict the next read \`obs\`; do read from \`act\` and act on that, do not write);
+    - \`.agent(obs, pred, act)=>continues\` (return false to unlink the agent) (to prevent torn writes, there should only be one agent);
     - \`priority:Number\` (for example, interfaces that read actions at write-time have priority of -1, to always go after action-fillers);
     - \`visState(page, state)=>vState\` (the result must be JSON-serializable, sent once at init-time), \`.visualize(obs, pred, elem, vState)\` (serialized into web-views to visualize data there, so write the function out fully).
     All functions are potentially asynchronous, and will be \`await\`ed if needed.
 `, async function init(...interfaces) {
-    // *Probably* don't need customization for the language, since it hardly even works.
+    // *Probably* don't need customization for the language, since it hardly even does anything.
     const lang = 'en-US,en'
 
     let stall = null // When we're re-launching a browser, this is a promise.
@@ -50,10 +50,9 @@ To write new interfaces, look at the pre-existing interfaces.
         set(x) { return this.x = this.m * this.x + (1 - this.m) * Math.max(-this.x, Math.min(x, this.x*2)) }
     }
     const performance = require('perf_hooks').performance
-    let maxStepsNow = 16 // Controlled by WEBENV_SIMULTANEOUS_STEPS.
     const lowball = .95
     const res = {
-        homepage: interfaces.find(x => typeof x == 'string'),
+        settings: Object.create(null),
         _all:null, _allState:[],
         reads:0, writes:0,
         _lastStepEnd:performance.now(),
@@ -62,7 +61,7 @@ To write new interfaces, look at the pre-existing interfaces.
         async read() {
             // It might happen that a new read might get scheduled before an old one is finished.
             //   For these cases, make sure to only not modify internal buffers between `await`s, only modify in synchronous code.
-            if (this._closed) throw new Error('Cannot read from a closed environment')
+            if (this._killed) throw new Error('Cannot read from a closed environment')
             relaunchIfNeeded()
             if (!this.reads) return
             // Collect extension-side observer results, then webenv-side reads.
@@ -93,7 +92,7 @@ To write new interfaces, look at the pre-existing interfaces.
             } catch (err) { if (!stall) throw err }
         },
         async write(acts) {
-            if (this._closed) throw new Error('Cannot write to a closed environment')
+            if (this._killed) throw new Error('Cannot write to a closed environment')
             relaunchIfNeeded()
             if (!this.writes) return
             // Copy acts to our buffer.
@@ -129,7 +128,6 @@ To write new interfaces, look at the pre-existing interfaces.
             const all = [], indices = new Map
             async function track(o) {
                 if (o instanceof Promise) o = await o
-                if (typeof o == 'string') return res.homepage = o
                 if (Array.isArray(o)) return o.forEach(track)
                 if (!o || typeof o != 'object') throw new Error('All must be webenv interfaces')
                 all.push(o)
@@ -150,7 +148,7 @@ To write new interfaces, look at the pre-existing interfaces.
             }
 
             // Initialize the new, move state of both old and new, and deinitialize the old.
-            //   Also listen to WEBENV_SIMULTANEOUS_STEPS.
+            //   Also listen to settings.
             let reads = 0, writes = 0
             const allReadOffsets = [], allWriteOffsets = []
             const seen = new Set
@@ -170,8 +168,8 @@ To write new interfaces, look at the pre-existing interfaces.
                         throw new Error('Bad output count: '+o.writes)
                     writes += o.writes
                 }
-                if (typeof o.WEBENV_SIMULTANEOUS_STEPS == 'number')
-                    maxStepsNow = o.WEBENV_SIMULTANEOUS_STEPS >>> 0
+                if (o.settings && typeof o.settings == 'object')
+                    Object.assign(this.settings, o.settings)
             }
             for (let i = 0; i < all.length; ++i)
                 if (allState[i] instanceof Promise)
@@ -263,11 +261,11 @@ To write new interfaces, look at the pre-existing interfaces.
             this._actSlice = actSlice
             this._agentArgs = agentArgs
         },
-        _closed:false,
+        _killed:false,
         async close() {
-            if (this._closed) return
+            if (this._killed) return
             clearInterval(watchdogCheckId)
-            this._closed = true
+            this._killed = true
             const p = this._page, a = this._all, s = this._allState
             const tmp = _allocArray(0)
             for (let i = 0; i < a.length; ++i) {
@@ -291,7 +289,7 @@ To write new interfaces, look at the pre-existing interfaces.
     await retry()
     return res
     function relaunchIfNeeded() {
-        if (res._closed) return
+        if (res._killed) return
         if (!res._browser || res._browser.isConnected() && !res._page.isClosed()) return
         if (stall) return // No double-relaunching please.
         return retry()
@@ -370,19 +368,19 @@ To write new interfaces, look at the pre-existing interfaces.
         const oldInters = res._all || interfaces
         res._all = [] // Call all initializers again, to re-attach event listeners.
         res._agentInds = [] // Re-launch the step loop if we have agents.
-        const rlP = res.relink(...oldInters)
+        const efP = res._extPage.exposeFunction('gotObserverData', gotObserverData)
+        await res.relink(...oldInters)
         let pP
-        if (res.homepage)
+        if (res.settings.homepage && res.settings.homepage !== 'about:blank')
             // Browser crashes are far more frequent if we don't wait at least a bit.
             pP = Promise.race([
                 ...(await Promise.all([
-                    _page.goto(res.homepage, {waitUntil:'domcontentloaded'}).then(() => res._cdp.send('Page.resetNavigationHistory')).catch(doNothing),
+                    _page.goto(res.settings.homepage, {waitUntil:'domcontentloaded'}).then(() => res._cdp.send('Page.resetNavigationHistory')).catch(doNothing),
                     res._cdp.send('Page.resetNavigationHistory').catch(doNothing),
                 ])),
                 new Promise(then => setTimeout(then, 10000)),
             ])
-        await res._extPage.exposeFunction('gotObserverData', gotObserverData)
-        await rlP, await pP
+        await efP, await pP
         res._lastStepEnd = performance.now()
     }
     async function step() {
@@ -390,12 +388,12 @@ To write new interfaces, look at the pre-existing interfaces.
         // Each agent takes f32 observations (to read) and predictions and actions (to write).
         // It returns a promise, which must resolve to `true`, else its loop will stop.
         try {
-            if (res._closed) return
+            if (res._killed) return
             relaunchIfNeeded()
             if (!res._agentInds.length) return
 
             // Don't schedule too many steps at once. If all die, end-of-step will schedule anyway.
-            if (res._stepsNow < maxStepsNow)
+            if (res._stepsNow < res.settings.simultaneousSteps)
                 ++res._stepsNow, setTimeout(step, Math.max(0, +res._period * lowball))
 
             try {
@@ -1209,7 +1207,7 @@ In a page, \`directLink(PageAgent, Inputs = 0, Outputs = 0)\` will return (a pro
                         const obsSource = this.queue.shift()
                         overwriteArray(obs, obsSource)
                     },
-                    agent(obs, pred, act) { return continues },
+                    agent(obs, pred, act) { return continues }, // Ensure that steps always happen.
                     async write(page, state, pred, act) {
                         if (env._page !== page) continues = false
                         if (!continues) return
@@ -1277,8 +1275,7 @@ If \`relative\` is not \`0\`, the agent meanders its action instead of jumping c
     const derivatives = []
     return {
         priority:1,
-        agent(obs, pred, act) { return true },
-        write(page, state, pred, act) {
+        agent(obs, pred, act) {
             if (!relative)
                 for (let i = 0; i < act.length; ++i)
                     act[i] = Math.random()*2-1
@@ -1407,8 +1404,8 @@ For example: \`webenv.triggers([page => page.goto('https://www.youtube.com/watch
 exports.triggers.homepage = docs(`\`webenv.triggers([webenv.triggers.homepage])\`
 Back to homepage, please.
 `, function(page, env) {
-    page.mouseX = env.width/2 | 0, page.mouseY = env.height/2 | 0
-    return page.goto(env.homepage, {waitUntil:'domcontentloaded'}).catch(doNothing)
+    page.mouseX = env.width/2 | 0, page.mouseY = env.height/2 | 0 // Center the mouse too.
+    return page.goto(env.settings.homepage || 'about:blank', {waitUntil:'domcontentloaded'}).catch(doNothing)
 })
 
 
@@ -2189,10 +2186,10 @@ The URL that is navigated-to whenever the browser re/launches.
 
 
 
-exports.userAgent = docs(`\`webenv.userAgent(agent = 'WebEnv')\`
+exports.userAgent = docs(`\`webenv.userAgent(agent = 'WebEnv agent <https://github.com/Antipurity/webenv>')\`
 Specifies the User-Agent string.
 Identify yourself and include contact information to overcome some of the prejudice against bots on the Web: https://www.w3.org/wiki/Bad_RDF_Crawlers
-`, function(agent = 'WebEnv') {
+`, function(agent = 'WebEnv agent <https://github.com/Antipurity/webenv>') {
     return {
         init(page, env) {
             return page.setExtraHTTPHeaders({ 'User-Agent': agent })
@@ -2202,10 +2199,12 @@ Identify yourself and include contact information to overcome some of the prejud
 
 
 
-exports.simultaneousSteps = docs(`\`webenv.simultaneousSteps(n = 16)\`
-Overrides how many steps WebEnv is allowed to run at once (at most).
-Set this to \`1\` to fully synchronize on each step, which makes visualization nicer but introduces stalling.
-`, function(n = 16) { return { WEBENV_SIMULTANEOUS_STEPS:n } })
+exports.settings = docs(`\`webenv.settings(settings)\`
+Defines settings.
+These include:
+- \`homepage='about:blank'\`: the URL to open a browser window to. (For example, set it to the RandomURL dataset.)
+- \`simultaneousSteps=16\`: how many steps are allowed to run at once (at most). Set to \`1\` to fully synchronize on each step, which makes visualization nicer but introduces a lot of stalling.
+`, function(settings) { return settings.homepage, { settings } })
 
 
 
@@ -2235,5 +2234,4 @@ exports.defaults = [
         [exports.triggers.goBack, exports.triggers.randomLink],
         null,
         { maxAtOnce:1, cooldown:3600 }),
-    'http://random.whatsmyip.org/',
 ]

@@ -9,7 +9,7 @@ This document outlines what still needs to be done to reach MVP state (or the "r
         - Make every spot's read+step+write cycle independent from all others (with the timing initialized from others if possible): this is the easiest-to-implement option. (As long as we don't get torn writes to `webenv.io` or `webenv.remote`, we're good. Parallel processing on the agent side (rather than serial) should discourage resource starvation.)
         - Make `webenv.io` actually send streams per-spot.
         - Make `webenv.webView` actually `<select>` the stream to view, via sub-URLs.
-    - Extra streams: have `webenv.browser(...interfaces)`, which allocates a stream for itself and does what `webenv` used to. If non-stream interfaces are present at top-level, wrap them in a browser, for convenience.
+    - Extra streams: have `webenv.browser(...interfaces)`, which allocates a stream for itself and does what `webenv` used to. If non-stream interfaces are present at top-level, wrap them in a browser, for convenience (via making inner browsers bubble up, so that the top-level can just wrap its args in `webenv.browser`).
     - Make the Capture extension communicate through a Web Socket rather than CDP (gaining speed via not having to communicate through JSON+base64), AND be fully responsible for all/most reads via `remoteRead`, AND for all/most writes via `remoteWrite`.
         - Isolate all `page.` and `._cdp` uses, in `read` and `write` and triggers, and replace as many as we can with in-extension `remoteRead` and `remoteWrite` versions.
             - There is no way to send `.isTrusted` events in JS, so, if a CDP channel is available for keyboard & mouse events, must use that instead of in-extension presses+clicks.

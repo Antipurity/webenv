@@ -18,7 +18,7 @@ This creates a strong and independent environment that runs by itself.
 - `await env.relink(...interfaces)`: changes the basic interfaces dynamically.
 - `await env.close()`: kills the environment.
 
-Read the rest of this document for the available interfaces.
+Read the rest of this document for the available interfaces, and/or the runtime documentation `require('webenv').init.docs` for details.
 
 You may want to write your own agent. Base it on `webenv.randomAgent()`:
 
@@ -33,15 +33,25 @@ webenv.init(
 )
 ```
 
-Alternatively, for an out-of-the-box interface solution, simply include `webenv.defaults` and the homepage URL and the agent, and be done with this documentation.
+Alternatively, to think out of the box, simply include `webenv.defaults` and `webenv.settings({homepage:'…'})` and the agent, and be done with this documentation.
 
 # Essentials
 
 Always include these.
 
+```js
+webenv.settings({ ……… })
+```
+
+Defines settings.
+
+These include:
+
+- `homepage='about:blank'`: the URL to open a browser window to. (For example, set it to the RandomURL dataset.)
+- `simultaneousSteps=16`: how many steps are allowed to run at once (at most). Set to `1` to fully synchronize on each step, which makes visualization nicer but introduces a lot of stalling.
 
 ```js
-webenv.userAgent(agent = 'WebEnv')
+webenv.userAgent(agent = 'WebEnv agent <https://github.com/Antipurity/webenv>')
 ```
 
 Specifies the User-Agent string.
@@ -376,14 +386,6 @@ Some DOM-aware image augmentations: random [transforms](https://developer.mozill
 
 (This makes every frame very open-ended, since augmentations can happen at any time. Losses that average outcomes would blur all predictions, unlike GANs.)
 
-```js
-webenv.simultaneousSteps(n = 16)
-```
-
-Overrides how many steps WebEnv is allowed to run at once (at most).
-
-Set this to `1` to fully synchronize on each step, which makes visualization nicer but introduces stalling.
-
 # Defaults
 
 ```js
@@ -391,7 +393,7 @@ webenv.defaults = [
     webenv.stability(),
     webenv.directLink(),
     webenv.directScore(),
-    webenv.userAgent(), // WebEnv, no contact info
+    webenv.userAgent(), // 'WebEnv agent <https://github.com/Antipurity/webenv>'; please override
     webenv.fetchSlice(),
     webenv.webView(),
     webenv.filter(null, 'cached'),
@@ -409,7 +411,6 @@ webenv.defaults = [
         [webenv.triggers.goBack, webenv.triggers.randomLink],
         null,
         { maxAtOnce:1, cooldown:3600 }),
-    'http://random.whatsmyip.org/', // Has anti-bot protection, so, unsuitable for ML; please contribute a better entry point.
 ]
 ```
 
