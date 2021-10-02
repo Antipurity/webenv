@@ -4,7 +4,7 @@ This document outlines what still needs to be done to reach MVP state (or the "r
 
 - Batch size > 1:
     - Extract all observation+action stuff from `webenv` to a dictionary on `webenv`.
-        - Clean up cruft: observers (data from extension) should be an interface, which fills others' spots on read. Should deduplicate interface objects, so that there is only one whenever we include an image/audio interface.
+        - Clean up cruft: observers (data from extension) should be an interface, which fills others' spots on read (having cached observer indices, invalidated when env._all changes). Should deduplicate interface objects, so that there is only one whenever we include an image/audio interface.
         - Relaunch individually when a connection is lost.
         - Make every spot's read+step+write cycle independent from all others (with the timing initialized from others if possible): this is the easiest-to-implement option. (As long as we don't get torn writes to `webenv.io` or `webenv.remote`, we're good. Parallel processing on the agent side (rather than serial) should discourage resource starvation.)
         - Make `webenv.io` actually send streams per-spot.
@@ -27,7 +27,8 @@ This document outlines what still needs to be done to reach MVP state (or the "r
             - Allow viewing observations+predictions, exactly like `webenv.webView` does;
             - Draw predictions in-page, via canvases that are only non-transparent where the observation is `NaN` (best if these are not observed, but video capturing APIs don't allow that, so, make this an option);
             - Cut out a DOM element, to draw predictions on top of it;
-            - Directly link [microphone/camera/etc](https://developer.mozilla.org/en-US/docs/Web/API/Media_Streams_API) data;
+            - Directly link [microphone/camera/etc](https://developer.mozilla.org/en-US/docs/Web/API/Media_Streams_API) data (play audio-only data in-page, to re-use a data channel that agents should already understand);
+            - An option to (try to) disable navigation, via https://stackoverflow.com/questions/821011/prevent-a-webpage-from-navigating-away-using-javascript when all else fails;
             - An option to show `directScore` prediction through the action button's color.
 
 - An entertaining GIF in `README.md` (of an agent trained on `RandomURL` now that we have that), so that people's eyes don't glaze over from all that *text*.

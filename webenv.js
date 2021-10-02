@@ -29,7 +29,7 @@ To write new interfaces, look at the pre-existing interfaces.
     An interface is an object (or an array of interfaces) that may define:
     - \`.settings\` (an object with \`homepage\` and/or \`simultaneousSteps\`);
     - \`.init(page, env)=>state\`, \`.deinit(page, state)\` (not called on browser relaunching);
-    - \`.reads:Number\`, \`.read(page, state, obs)\` (modify \`obs\` in-place, do not read);
+    - \`.reads:Number\`, \`.read(env, page, state, obs)\` (modify \`obs\` in-place, do not read);
         - \`.observerInput(page, state)=>obsInput\`,
         - \`.observer(obsInput, video:{grab(x,y,w,h)=>pixels}, audio:{grab(sampleN=2048, sampleRate=44100)=>samples}, obsOutput)\` (before reading, these are collected from an extension, -1…1);
     - \`.writes:Number\`, \`.write(page, state, pred, act)\` (\`pred\` can predict the next read \`obs\`; do read from \`act\` and act on that, do not write);
@@ -51,6 +51,7 @@ To write new interfaces, look at the pre-existing interfaces.
     }
     const performance = require('perf_hooks').performance
     const lowball = .95
+    // TODO: What goes in the `stream` object? Publically, { reads, writes, settings; env, browser, page, cdp; read, write, close }? (And, literally everything private that was on `env` goes here, doesn't it?)
     const res = {
         settings: Object.create(null),
         _all:null, _allState:[],
@@ -82,7 +83,7 @@ To write new interfaces, look at the pre-existing interfaces.
                 const obs = this._obsSlice
                 const tmp = _allocArray(0)
                 for (let i = 0; i < inds.length; ++i) {
-                    const r = a[inds[i]].read(p, s[inds[i]], obs[i])
+                    const j = inds[i], r = a[j].read(this, p, s[j], obs[i])
                     if (r instanceof Promise) tmp.push(r)
                 }
                 // Await all promises at once.
@@ -201,18 +202,11 @@ To write new interfaces, look at the pre-existing interfaces.
             await this._extPage.evaluate((o,w,h) => updateObservers(o,w,h), observers, w, h)
 
             // Resize observations/actions.
-            //   (Technically, could move observations to correct positions, but why?)
+            //   (Technically, could move obs/pred/act to new correct positions, but why?)
             const obsFloats = new Observations(reads)
             const predFloats = new Observations(reads)
             const actFloats = new Observations(writes)
             obsFloats.fill(NaN), predFloats.fill(NaN), actFloats.fill(NaN)
-            for (let i = 0, reads = 0, writes = 0; i < all.length; ++i) {
-                const o = all[i]
-                if (typeof o.reads == 'number')
-                    reads += o.reads
-                if (typeof o.writes == 'number')
-                    writes += o.writes
-            }
 
             // Pre-compute observation/action slices.
             const obsSlice = new Array(rInds.length).fill()
@@ -470,12 +464,11 @@ The same as https://pptr.dev/#?product=Puppeteer&version=v5.2.1&show=api-pageset
     if (opt.width == null) opt.width = 640
     if (opt.height == null) opt.height = 480
     return {
-        env:null, boundsArgs:null, prevPage:null,
+        boundsArgs:null, prevPage:null,
         async init(page, env) {
             // Resize browser window (for tab capture), and set viewport.
             if (env.width && env.width !== opt.width || env.height && env.height !== opt.height)
                 throw new Error('Can only have one viewport')
-            this.env = env
             env.width = opt.width
             env.height = opt.height
             const targetId = (await env._cdp.send('Target.getTargets')).targetInfos[0].targetId
@@ -489,9 +482,9 @@ The same as https://pptr.dev/#?product=Puppeteer&version=v5.2.1&show=api-pageset
             })
             return page.setViewport(opt)
         },
-        read(page, state, obs) {
-            if (this.prevPage !== page || Math.random() < .1)
-                this.env._cdp.send('Browser.setWindowBounds', this.boundsArgs).catch(doNothing)
+        read(env, page, state, obs) {
+            if (this.prevPage !== page || Math.random() < .01)
+                env._cdp.send('Browser.setWindowBounds', this.boundsArgs).catch(doNothing)
             this.prevPage = page
         },
     }
@@ -508,7 +501,7 @@ Also useful for not confusing agents when removing interfaces by not shifting ot
         actCount = obsCount.writes || 0, obsCount = obsCount.reads || 0
     return {
         reads: obsCount,
-        read(page, state, obs) { obs.fill(value) },
+        read(env, page, state, obs) { obs.fill(value) },
         writes: actCount,
     }
 })
@@ -522,7 +515,7 @@ Agents might use this to compensate for latency.
     let lastAct = null // No queue. Observation is always the most-recent action.
     return {
         reads: count,
-        read(page, state, obs) { lastAct && obs.set(lastAct) },
+        read(env, page, state, obs) { lastAct && obs.set(lastAct) },
         writes: count,
         write(page, state, pred, act) { lastAct = act },
     }
@@ -821,10 +814,8 @@ To prevent others from seeing observations, use random characters as \`path\`.
         connections:[],
         server:null,
         end:0, interfaces:null,
-        env:null,
         lastPred:null, // Not perfectly synchronized like a queue would be, but who cares. Sync requires copies anyway, so, too slow.
         init(page, env) {
-            this.env = env
             if (!this.server) {
                 this.server = server((req, res) => {
                     if (req.url === '/'+path) {
@@ -841,7 +832,7 @@ To prevent others from seeing observations, use random characters as \`path\`.
                             'Cache-Control': 'no-cache',
                             Connection: 'keep-alive',
                         })
-                        sendRelink.call(this, this.env._page, this.connections)
+                        sendRelink(env, env._page, this.connections) // TODO: Should know a better way to get the page.
                     } else res.statusCode = 404
                 })
                 return new Promise(then => this.server.listen(port, then))
@@ -852,12 +843,12 @@ To prevent others from seeing observations, use random characters as \`path\`.
             return new Promise(then => server.close(then))
         },
         priority:-1,
-        read(page, state, obs) {
+        read(env, page, state, obs) {
             const to = this.connections
             if (!to.length) return
-            if (this.interfaces !== this.env._all) {
-                sendRelink.call(this, page, to)
-                this.interfaces = this.env._all
+            if (this.interfaces !== env._all) {
+                sendRelink(env, page, to)
+                this.interfaces = env._all
             }
             sendObservation(obs, this.lastPred, to)
         },
@@ -870,12 +861,12 @@ To prevent others from seeing observations, use random characters as \`path\`.
             this.lastPred = empty ? null : pred
         },
     }
-    function sendRelink(page, to) {
+    function sendRelink(env, page, to) {
         let end = 0
-        for (let inter of this.env._all)
+        for (let inter of env._all)
             if (typeof inter.reads == 'number')
                 end += inter.reads
-        const vis = createExtendJS(page, this.env._all, this.env._allState, end)
+        const vis = createExtendJS(page, env._all, env._allState, end)
         to.forEach(res => res.write(`event:relink\ndata:${vis}\n\n`))
     }
     function sendObservation(obs, pred, to) {
@@ -1201,7 +1192,7 @@ In a page, \`directLink(PageAgent, Inputs = 0, Outputs = 0)\` will return (a pro
                     reads:outs,
                     writes:ins,
                     init(page, env) { initialized && (continues = false), initialized = true },
-                    async read(page, state, obs) {
+                    async read(env, page, state, obs) {
                         if (!continues) return
                         if (!this.queue.length) return
                         const obsSource = this.queue.shift()
@@ -1579,7 +1570,7 @@ Provides an observation of the time between frames, relative to the expected-Fra
     let prevFrame = performance.now()
     return {
         reads:1,
-        read(page, state, obs) {
+        read(env, page, state, obs) {
             const nextFrame = performance.now()
             const duration = (nextFrame - prevFrame) - 1 / fps
             obs[0] = Math.max(-1, Math.min(duration / maxMs, 1))
@@ -1620,17 +1611,17 @@ This does not change video playback speed, but does control when JS timeouts fir
     return {
         init(page, env) {
             env._cdp.on('Emulation.virtualTimeBudgetExpired', resolveFrame)
-            return env._cdp
+            return env
         },
-        deinit(page, state) {
-            state.off('Emulation.virtualTimeBudgetExpired', resolveFrame)
+        deinit(page, state) { // TODO: Make `deinit` pass in the env. (We really need it here.) (Also, maybe, clean up the per-stream state, don't just make it `page`; maybe make it a clean interface, with .env and .page and .cdp, so that we don't have too many args everywhere.)
+            state._cdp.off('Emulation.virtualTimeBudgetExpired', resolveFrame)
         },
-        async read(page, state, obs) {
-            if (prevFrame) await prevFrame // Break pipelining if frames are taking too long.
-            state.send('Emulation.setVirtualTimePolicy', {
+        async read(env, page, state, obs) {
+            // Break pipelining if frames are taking too long.
+            const p = prevFrame;  prevFrame = new Promise(then => prevThen = then);  p && (await p)
+            env._cdp.send('Emulation.setVirtualTimePolicy', {
                 policy:'advance', budget
             }).catch(doNothing)
-            return prevFrame = new Promise(then => prevThen = then)
         },
     }
 })
@@ -1806,10 +1797,10 @@ In particular, this:
 - To prevent infinite loops and/or heavy memory thrashing, if \`timeout\` (seconds) is non-zero: periodically checks whether JS takes too long to execute, and if so, re-launches the browser.
 `, function(timeout = 10, deleteCookies = true) {
     const performance = require('perf_hooks').performance
-    let env = null, lastStamp = performance.now(), intervalID = null, state = 'void'
+    let Env = null, lastStamp = performance.now(), intervalID = null, readyState = 'void'
     return {
-        async init(page, E) {
-            env = E
+        async init(page, env) {
+            Env = env // For events.
             await env._cdp.send('Page.enable')
             await env._cdp.send('Page.setDownloadBehavior', { behavior:'deny' }) // Deprecated, but so much better.
             env._cdp.send('Page.setAdBlockingEnabled', { enabled:true })
@@ -1827,10 +1818,12 @@ In particular, this:
             })()
             deleteCookies && page.on('load', noCookies)
             deleteCookies && page.on('framenavigated', noCookies)
-            clearInterval(intervalID), intervalID = setInterval(maybeKillBrowser, timeout/2)
-            state = 'initialized'
+            clearInterval(intervalID), intervalID = setInterval(maybeCloseBrowser, timeout/2, env)
+            readyState = 'initialized'
+            return env // TODO: This is only for deinit.
         },
-        async deinit(page, state) {
+        async deinit(page, state) { // TODO: Pass in the env explicitly. And accept it here.
+            const env = state
             clearInterval(intervalID), intervalID = null
             deleteCookies && page.off('framenavigated', noCookies)
             deleteCookies && page.off('load', noCookies)
@@ -1839,9 +1832,8 @@ In particular, this:
             env._browser.off('targetcreated', onNewTarget)
             env._cdp.send('Page.setAdBlockingEnabled', { enabled:false })
             await env._cdp.send('Page.disable')
-            env = null
         },
-        read(page, state, obs) {
+        read(env, page, state, obs) {
             if (env._page.isClosed()) return lastStamp = performance.now()
             if (Math.random() > .1 && performance.now() - lastStamp < timeout*(1000/2)) return
             // Discard console entries, and try to evaluate some JS;
@@ -1851,12 +1843,12 @@ In particular, this:
             env._cdp.send('Runtime.discardConsoleEntries').catch(doNothing)
             if (timeout)
                 env._page.evaluate(() => 0).then(() => lastStamp = performance.now()).catch(doNothing)
-            if (state === 'initialized') state = 'ready'
+            if (readyState === 'initialized') readyState = 'ready'
         },
     }
-    function maybeKillBrowser() {
-        if (!timeout || state !== 'ready' || performance.now() - lastStamp <= timeout*1000) return
-        state = 'void'
+    function maybeCloseBrowser(env) {
+        if (!timeout || readyState !== 'ready' || performance.now() - lastStamp <= timeout*1000) return
+        readyState = 'void'
         lastStamp = performance.now()
         env && env._browser && env._browser.isConnected() && env._browser.close()
     }
@@ -1866,7 +1858,7 @@ In particular, this:
         const newURL = newPage.url()
         newPage.close()
         try {
-            env._page && newURL && env._page.goto(newURL, {waitUntil:'domcontentloaded'}).catch(doNothing)
+            Env._page && newURL && Env._page.goto(newURL, {waitUntil:'domcontentloaded'}).catch(doNothing)
         } catch (err) { console.error('Bad URL of a popup:', newURL) }
     }
     function onDialog(dial) {
@@ -1875,14 +1867,14 @@ In particular, this:
         dial.dismiss()
     }
     async function noCookies() {
-        if (!env._page || env._page.isClosed()) return
+        if (!Env._page || Env._page.isClosed()) return
         try {
-            await env._page.deleteCookie(...(await env._page.cookies()))
+            await Env._page.deleteCookie(...(await Env._page.cookies()))
         } catch (err) {}
     }
     function onNewTarget() {
         lastStamp = performance.now()
-        closeAllPagesExcept(env._browser, env._page)
+        closeAllPagesExcept(Env._browser, Env._page)
     }
 })
 function doNothing() {}
@@ -2031,7 +2023,7 @@ Args:
     return {
         priority: 999999999,
         reads: hidden ? undefined : 1,
-        read(page, state, obs) {
+        read(env, page, state, obs) {
             const v = scoreSum / scoreNum // NaN if no scores since the last frame.
             scoreSum = scoreNum = 0
             const u = page.url()
@@ -2205,6 +2197,15 @@ These include:
 - \`homepage='about:blank'\`: the URL to open a browser window to. (For example, set it to the RandomURL dataset.)
 - \`simultaneousSteps=16\`: how many steps are allowed to run at once (at most). Set to \`1\` to fully synchronize on each step, which makes visualization nicer but introduces a lot of stalling.
 `, function(settings) { return settings.homepage, { settings } })
+
+
+
+// TODO: Extract all `observer` functionality into one non-exported object here, in `read`.
+const observers = {
+    // TODO: What, do we store observer indices on env? ...But `read` has no access to env...
+    // TODO: Make `read` accept not only page/state/obs, but env/page/state/obs.
+    //   TODO: Make the users of `read` which used to preserve `env` via `state` just not do that.
+}
 
 
 
