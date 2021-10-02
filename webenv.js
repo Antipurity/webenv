@@ -18,21 +18,19 @@ All other members of this module either are such interfaces (such as \`webenv.de
 Ideally, you should not treat observations/actions as anything other than vectors of approximately -1..1 32-bit floats. (Not necessarily square, not necessarily an image. Very likely multimodal.)
 
 To write new interfaces, look at the pre-existing interfaces.
-    An interface is an object (or an array of interfaces) that may define:
-    - \`.settings\` (an object with \`homepage\` and/or \`simultaneousSteps\`);
-    - \`.init(page, env)=>state\`, \`.deinit(page, state)\` (not called on browser relaunching);
-    - \`.reads:Number\`, \`.read(env, page, state, obs)\` (modify \`obs\` in-place, do not read);
-    - \`.writes:Number\`, \`.write(page, state, pred, act)\` (\`pred\` can predict the next read \`obs\`; do read from \`act\` and act on that, do not write);
-    - \`.agent(obs, pred, act)=>continues\` (return false to unlink the agent) (to prevent torn writes, there should only be one agent);
+    An interface is an object (or an array of interfaces, for convenience) that may define:
+    - \`.settings\` (see \`webenv.settings\`);
+    - \`.init(stream)\`, \`.deinit(stream)\` (neither is called on browser relaunching, except on new/removed interfaces);
+    - \`.reads:Number\`, \`.read(stream, obs)\` (modify \`obs\` in-place, do not read);
+    - \`.writes:Number\`, \`.write(stream, pred, act)\` (\`pred\` can predict the next read \`obs\`; do read from \`act\` and act on that, do not write);
+    - \`.agent(stream, obs, pred, act)=>continues\` (return false to unlink the agent) (to prevent torn writes, there should only be one agent);
     - \`priority:Number\` (for example, interfaces that read actions at write-time have priority of -1, to always go after action-fillers);
     All functions are potentially asynchronous, and will be \`await\`ed if needed.
 `, async function init(...interfaces) {
-
-    // TODO: Change `read`, `init`, `deinit`, `write`, `agent` to accept not env/page/whatever, but only the stream state (which includes all that, in a readable manner).
     const env = Object.create(null)
     // TODO: Have `.reinit(...streams)`, which is called on start and whenever.
     // TODO: Have `.close()`, which closes every stream.
-    env.stream = await streamPrototype.open(env, relaunch)
+    env.streams = { 0: await streamPrototype.open(env, relaunch) }
     return env
 
     async function relaunch() {
@@ -127,29 +125,29 @@ Pass in a JS object with at least \`{ width:640, height:480 }\` (https://pptr.de
     if (opt.height == null) opt.height = 480
     return {
         boundsArgs:null, prevPage:null,
-        async init(page, env) {
+        async init(stream) {
             // Resize browser window (for tab capture), and set viewport.
-            if (!env.cdp) return
-            if (env.width && env.width !== opt.width || env.height && env.height !== opt.height)
+            if (!stream.cdp) return
+            if (stream.width && stream.width !== opt.width || stream.height && stream.height !== opt.height)
                 throw new Error('Can only have one viewport')
-            env.width = opt.width
-            env.height = opt.height
-            const targetId = (await env.cdp.send('Target.getTargets')).targetInfos[0].targetId
-            const windowId = (await env.cdp.send('Browser.getWindowForTarget', {targetId})).windowId
-            await env.cdp.send('Browser.setWindowBounds', this.boundsArgs = {
+                stream.width = opt.width
+            stream.height = opt.height
+            const targetId = (await stream.cdp.send('Target.getTargets')).targetInfos[0].targetId
+            const windowId = (await stream.cdp.send('Browser.getWindowForTarget', {targetId})).windowId
+            await stream.cdp.send('Browser.setWindowBounds', this.boundsArgs = {
                 bounds: {
-                    width: env.width + env._chromeWidth,
-                    height: env.height + env._chromeHeight,
+                    width: stream.width + stream._chromeWidth,
+                    height: stream.height + stream._chromeHeight,
                 },
                 windowId,
             })
-            return page.setViewport(opt)
+            return stream.page.setViewport(opt)
         },
-        read(env, page, state, obs) {
-            if (!env.cdp) return
-            if (this.prevPage !== page || Math.random() < .01)
-                env.cdp.send('Browser.setWindowBounds', this.boundsArgs).catch(doNothing)
-            this.prevPage = page
+        read(stream, obs) {
+            if (!stream.cdp) return
+            if (this.prevPage !== stream.page || Math.random() < .01)
+                stream.cdp.send('Browser.setWindowBounds', this.boundsArgs).catch(doNothing)
+            this.prevPage = stream.page
         },
     }
 })
@@ -165,7 +163,7 @@ Also useful for not confusing agents when removing interfaces by not shifting ot
         actCount = obsCount.writes || 0, obsCount = obsCount.reads || 0
     return {
         reads: obsCount,
-        read(env, page, state, obs) { obs.fill(value) },
+        read(stream, obs) { obs.fill(value) },
         writes: actCount,
     }
 })
@@ -179,9 +177,9 @@ Agents might use this to compensate for latency.
     let lastAct = null // No queue. Observation is always the most-recent action.
     return {
         reads: count,
-        read(env, page, state, obs) { lastAct && obs.set(lastAct) },
+        read(stream, obs) { lastAct && obs.set(lastAct) },
         writes: count,
-        write(page, state, pred, act) { lastAct = act },
+        write(stream, pred, act) { lastAct = act },
     }
 })
 
@@ -192,13 +190,11 @@ Provide a mask color (0xRRGGBB) to mask exact matches, or \`null\` to disable th
 Slloooooooow.
 `, function image(maskColor = 0xfafafa) {
     return [observers, {
-        init(page, env) {
-            this.width = env.width, this.height = env.height
-            this.reads = this.width * this.height * 3
-            return { width:this.width, height:this.height }
+        init(stream) {
+            this.reads = stream.width * stream.height * 3
         },
         reads:'computed',
-        observerInput(page, state) { return { w:this.width, h:this.height, mask:maskColor } },
+        observerInput(stream) { return { w:stream.width, h:stream.height, mask:maskColor } },
         observer: function(input, video, audio, obs) {
             const d = video.grab(0, 0, input.w, input.h, input.w, input.h)
             const maskColor = input.mask
@@ -211,7 +207,7 @@ Slloooooooow.
                 obs[to++] = masked ? NaN : (2*B - 255) / 255
             }
         },
-        visState(page, state) { return state },
+        visState(stream) { return { width:stream.width, height:stream.height } },
         visualize:visualizePageScreenshot,
     }]
 })
@@ -264,14 +260,12 @@ Provide a mask color (0xRRGGBB) to mask exact matches, or \`null\` to disable th
 
 (A moving viewpoint acts as a crop of the image. And since web pages are typically consistent, this acts as the well-known augmentation for training visual models: two crops of the same image should have a very similar representation. No zooming like electromagnetic sensors in 3D environments get for free, though.)
 `, function imageRect(width = 100, height = width, quantize = 1, maskColor = 0xfafafa) {
-    let env
     return [observers, {
         reads: width * height * 3,
-        init(page, e) { env = e },
-        observerInput(page, state) { // TODO: ...Observer input is only per-frame because we have mouseX/mouseY, isn't it... If we make it in-extension, we can make it at-init, right? (And pass in `stream` instead of `page`.) But we do want to use CDP to dispatch mouse events if we can, so, maybe both (but still have a less expensive way to send observer data than JSON-serialized objects full of constants)...
-            let x = page.mouseX || 0, y = page.mouseY || 0
+        observerInput(stream) { // TODO: ...Observer input is only per-frame because we have mouseX/mouseY, isn't it... If we make it in-extension, we can make it at-init, right? (And pass in `stream` instead of `page`.) But we do want to use CDP to dispatch mouse events if we can, so, maybe both (but still have a less expensive way to send observer data than JSON-serialized objects full of constants)...
+            let x = stream.page.mouseX || 0, y = stream.page.mouseY || 0
             x -= x % quantize, y -= y % quantize
-            return { x, y, w:width, h:height, mask:maskColor, maxW: env.width, maxH:env.height }
+            return { x, y, w:width, h:height, mask:maskColor, maxW: stream.width, maxH:stream.height }
         },
         observer: function(input, video, audio, obs) {
             const x = input.x - ((input.w / 2) | 0), y = input.y - ((input.h / 2) | 0)
@@ -286,7 +280,7 @@ Provide a mask color (0xRRGGBB) to mask exact matches, or \`null\` to disable th
                 obs[to++] = masked ? NaN : (2*B - 255) / 255
             }
         },
-        visState(page, state) { return { width, height } },
+        visState(stream) { return { width, height } },
         visualize:visualizePageScreenshot,
     }]
 })
@@ -308,14 +302,12 @@ Provide a mask color (0xRRGGBB) to mask exact matches, or \`null\` to disable th
     const diam = 2*radius
     const points = getFoveatedCoords(radius, numPoints, RNG, density) // (x<<16) | y
     const closestPoint = invertFoveatedCoords(radius, points)
-    let env
     return [observers, {
         reads: numPoints * 3,
-        init(page, e) { env = e },
-        observerInput(page, state) {
-            let x = page.mouseX || 0, y = page.mouseY || 0
+        observerInput(stream) {
+            let x = stream.page.mouseX || 0, y = stream.page.mouseY || 0
             x -= x % quantize, y -= y % quantize
-            return { x, y, w:diam, h:diam, mask:maskColor, maxW: env.width, maxH: env.height }
+            return { x, y, w:diam, h:diam, mask:maskColor, maxW: stream.width, maxH: stream.height }
         },
         observer: (''+function observeFovea(input, video, audio, obs) {
             if (!observeFovea.invert) { // Prepare data, if not prepared already.
@@ -350,7 +342,7 @@ Provide a mask color (0xRRGGBB) to mask exact matches, or \`null\` to disable th
                 to += 3
             }
         }).replace('INVERT_FOVEA', '`' + JSON.stringify(Array.from(closestPoint)) + '`'),
-        visState(page, state) { return Array.from(closestPoint) },
+        visState(stream) { return Array.from(closestPoint) },
         // JSON doesn't even transmit u32 data.
         // I made a better data format a few times, but it's easier to use built-ins.
         visualize:function visualizePageFovea(obs, pred, elem, closestPoint) {
@@ -450,12 +442,12 @@ To calculate \`samples\`, divide \`sampleRate\` by the expected frames-per-secon
 `, function imageRect(samples = 2048, sampleRate = 44100) {
     return [observers, {
         reads: samples,
-        observerInput(page, state) { return { samples, sampleRate } },
+        observerInput(stream) { return { samples, sampleRate } },
         observer: function(input, video, audio, obs) {
             // A copy, but this is small-time compared to `webenv.image(...)`.
             obs.set(audio.grab(input.samples, input.sampleRate))
         },
-        visState(page, state) { return sampleRate },
+        visState(stream) { return sampleRate },
         visualize:function(obs, pred, elem, vState) {
             let sumSqr = 0
             for (let i=0; i < obs.length; ++i) sumSqr += obs[i] * obs[i]
@@ -472,7 +464,7 @@ Allows visualizing the observation streams as they are read, by opening \`localh
 Optionally, specify key and certificate in \`httpsOptions\`: https://nodejs.org/en/knowledge/HTTP/servers/how-to-create-a-HTTPS-server/
 To prevent others from seeing observations, use random characters as \`path\`.
 Other interfaces may define:
-- \`visState(page, state)=>vState\` (the result must be JSON-serializable, sent once at init-time),
+- \`.visState(stream)=>vState\` (the result must be JSON-serializable, sent once at init-time),
 - \`.visualize(obs, pred, elem, vState)\` (serialized into web-views to visualize data there, so write the function out fully, not as \`{f(){}}\`).
 `, function webView(port = 1234, httpsOptions = null, path = '') {
     const http = require('http'), https = require('https')
@@ -482,7 +474,7 @@ Other interfaces may define:
         server:null,
         end:0, interfaces:null,
         lastPred:null, // Not perfectly synchronized like a queue would be, but who cares. Sync requires copies anyway, so, too slow.
-        init(page, env) {
+        init(stream) {
             if (!this.server) {
                 this.server = server((req, res) => {
                     if (req.url === '/'+path) {
@@ -499,27 +491,27 @@ Other interfaces may define:
                             'Cache-Control': 'no-cache',
                             Connection: 'keep-alive',
                         })
-                        sendRelink(env, env.page, this.connections) // TODO: Only pass in the stream.
+                        sendRelink(stream, this.connections)
                     } else res.statusCode = 404
                 })
                 return new Promise(then => this.server.listen(port, then))
             }
         },
-        deinit(page, state) {
+        deinit(stream) {
             const server = this.server;  this.server = null
             return new Promise(then => server.close(then))
         },
         priority:-1,
-        read(env, page, state, obs) {
+        read(stream, obs) {
             const to = this.connections
             if (!to.length) return
-            if (this.interfaces !== env._all) {
-                sendRelink(env, page, to) // TODO: Only pass in the stream.
-                this.interfaces = env._all
+            if (this.interfaces !== stream._all) {
+                sendRelink(stream, to)
+                this.interfaces = stream._all
             }
             sendObservation(obs, this.lastPred, to)
         },
-        write(page, state, pred, act) {
+        write(stream, pred, act) {
             // Remember prediction to send later, unless it's all-zeros|NaN.
             if (!pred) return
             let empty = true
@@ -528,12 +520,12 @@ Other interfaces may define:
             this.lastPred = empty ? null : pred
         },
     }
-    function sendRelink(env, page, to) { // TODO: Only pass in the stream.
+    function sendRelink(stream, to) {
         let end = 0
-        for (let inter of env._all)
+        for (let inter of stream._all)
             if (typeof inter.reads == 'number')
                 end += inter.reads
-        const vis = createExtendJS(page, env._all, env._allState, end) // TODO: Only pass in the stream.
+        const vis = createExtendJS(stream, stream._all, end)
         to.forEach(res => res.write(`event:relink\ndata:${vis}\n\n`))
     }
     function sendObservation(obs, pred, to) {
@@ -576,9 +568,9 @@ function decode(str, into) {
 ${endian}
 `
     }
-    function createExtendJS(page, inters, states, end) { // TODO: Only accept in the stream.
+    function createExtendJS(stream, inters, end) {
         // Return the function body, which accepts `state` and `root` to fill them.
-        if (!inters || !states) return ''
+        if (!inters) return ''
         let n = 0
         const visInits = [], visualizers = []
         let start = 0
@@ -588,7 +580,7 @@ ${endian}
         visInits.push(`state.PRED=new ${Observations.name}(${end})`)
         visInits.push(`state.PRED_BYTES=new Uint8Array(state.PRED.buffer, state.PRED.byteOffset, state.PRED.byteLength)`)
         for (let i = 0; i < inters.length; ++i) {
-            const inter = inters[i], state = states[i]
+            const inter = inters[i]
             if (typeof inter.reads == 'number') start += inter.reads
             if (typeof inter.visualize != 'function') continue
             const elem = 'state.v'+n++, vState = 'state.v'+n++
@@ -596,8 +588,8 @@ ${endian}
             visInits.push(`${elem}=root.appendChild(document.createElement('div'))`)
             if (inter.visState !== undefined) {
                 const f = inter.visState
-                const v = JSON.stringify(typeof f == 'function' ? f.call(inter, page, state) : f)
-                visInits.push(`${vState}=JSON.parse(\`${v.replace(/`/g, '``')}\`)`)
+                const v = JSON.stringify(typeof f == 'function' ? f(stream) : f)
+                visInits.push(`${vState}=JSON.parse(\`${v.replace(/`/g, '\\`')}\`)`)
             } else visInits.push(`${vState}=undefined`)
             const r = inter.reads || 0, realStart = start - r
             visInits.push(`${obs}=new ${Observations.name}(state.OBS.buffer, state.OBS.byteOffset + ${realStart*bpe}, ${r})`)
@@ -657,11 +649,13 @@ Communication protocol details, simple for easy adoption:
         (Mix up the response order if that is more efficient for you, but try not to. Never interleave individual messages unless you want a hang.)
         (Do not worry about matching requested lengths exactly, focus on throughput.)
         (Non-specified values are NaN, or 0 where NaN does not make sense.)
+
+(Even though on WebEnv side, loops are separate, parallel processing on the agent side (rather than serial) should discourage resource starvation.)
 `, function io(intSize = 0) {
     if (intSize !== 0 && intSize !== 1 && intSize !== 2) throw new Error('Bad intSize')
     const cons = intSize === 0 ? Float32Array : intSize === 1 ? Int8Array : Int16Array
     const thens = [], reqs = []
-    let writeLock = null, readLock = null, initialized = false
+    let initialized = false
     function onDrain() {
         thens.forEach(f => f()), thens.length = 0
     }
@@ -680,7 +674,7 @@ Communication protocol details, simple for easy adoption:
     }
     return {
         obsCoded: new cons(0),
-        async init(page, env) {
+        async init(stream) {
             if (initialized) return // STDIO is once per process.
             process.stdin.on('readable', onReadable)
             const magic = (await readFromStream(readBytes, 1, Uint32Array, false))[0]
@@ -694,29 +688,29 @@ Communication protocol details, simple for easy adoption:
             process.stdout.on('error', doNothing) // Ignore "other end has closed" errors.
             initialized = true
         },
-        async deinit(page, state) {
+        async deinit(stream) {
             // Send a dealloc event.
-            let oldW = writeLock, thenW;
-            writeLock = new Promise(f => thenW=f);  await oldW
+            let oldW = stream.env.writeLock, thenW;
+            stream.env.writeLock = new Promise(f => thenW=f);  await oldW
             const to = process.stdout, bs = this.byteswap
             await writeToStream(to, 0, bs, thens) // TODO: Write the real index, once we know those.
             await writeToStream(to, 0, bs, thens)
             await writeToStream(to, 0xFFFFFFFF, bs, thens)
             thenW()
         },
-        async agent(obs, pred, act) {
+        async agent(stream, obs, pred, act) {
             // Write observation, atomically.
             if (!initialized) return true
-            let oldW = writeLock, thenW;
-            writeLock = new Promise(f => thenW=f);  await oldW
+            let oldW = stream.env.writeLock, thenW;
+            stream.env.writeLock = new Promise(f => thenW=f);  await oldW
             const to = process.stdout, bs = this.byteswap
             await writeToStream(to, 0, bs, thens) // TODO: Write the real index, once we know those.
             await writeArray(to, this.obsCoded = encodeInts(obs, this.obsCoded), bs)
             await writeToStream(to, act.length, bs, thens)
             thenW()
-            // Read prediction then action, atomically.
-            let oldR = readLock, thenR;
-            readLock = new Promise(f => thenR=f);  await oldR
+            // Read prediction then action, atomically (no torn reads).
+            let oldR = stream.env.readLock, thenR;
+            stream.env.readLock = new Promise(f => thenR=f);  await oldR
             const index = (await readFromStream(readBytes, 1, Uint32Array, bs))[0]
             if (index !== 0) // TODO: To receive pred+act per-stream, read pred+act into queues as they arrive, and here, take an item from the queue, waiting until available.
                 throw new Error('Got a non-zero stream index: ' + index)
@@ -813,8 +807,8 @@ In a page, \`directLink(PageAgent, Inputs = 0, Outputs = 0)\` will return (a pro
     // Data communication is not quite as optimized as it could be,
     //   since this sends/receives float32 instead of int16.
     return {
-        init(page, env) {
-            page.evaluateOnNewDocument((name, maxReads, maxWrites, maxLinks) => {
+        init(stream) {
+            stream.page.evaluateOnNewDocument((name, maxReads, maxWrites, maxLinks) => {
                 const agents = {}
                 let reads = 0, writes = 0
                 self[name] = directLink
@@ -841,7 +835,7 @@ In a page, \`directLink(PageAgent, Inputs = 0, Outputs = 0)\` will return (a pro
                 }
             }, name, maxReads, maxWrites, maxLinks)
             let agentCount = 0, reads = 0, writes = 0
-            return page.exposeFunction('_directLinkRegister', async (agentId, ins = 0, outs = 0) => {
+            return stream.page.exposeFunction('_directLinkRegister', async (agentId, ins = 0, outs = 0) => {
                 if (typeof agentId != 'number') return false
                 if (typeof ins != 'number' || typeof outs != 'number') return false
                 if (reads + outs > maxReads) return false
@@ -849,33 +843,34 @@ In a page, \`directLink(PageAgent, Inputs = 0, Outputs = 0)\` will return (a pro
                 if (agentCount + 1 > maxLinks) return false
                 ++agentCount, reads += outs, writes += ins
                 let continues = true, initialized = false
-                const doHandle = await page.evaluateHandle(name => self[name].evalAgent, name)
-                const actHandle = await page.evaluateHandle(sz => new Float32Array(sz), ins)
-                const obsHandle = await page.evaluateHandle(sz => new Float32Array(sz), outs)
-                const toBinaryStringHandle = await page.evaluateHandle('('+toBinaryString+')')
-                const fromBinaryStringHandle = await page.evaluateHandle('('+fromBinaryString+')')
-                await env.relink(env._all, {
+                const p = stream.page
+                const doHandle = await p.evaluateHandle(name => self[name].evalAgent, name)
+                const actHandle = await p.evaluateHandle(sz => new Float32Array(sz), ins)
+                const obsHandle = await p.evaluateHandle(sz => new Float32Array(sz), outs)
+                const toBinaryStringHandle = await p.evaluateHandle('('+toBinaryString+')')
+                const fromBinaryStringHandle = await p.evaluateHandle('('+fromBinaryString+')')
+                await stream.relink(stream._all, {
                     queue:[], // This can't be a real word.
                     priority:-1000,
                     reads:outs,
                     writes:ins,
-                    init(page, env) { initialized && (continues = false), initialized = true },
-                    async read(env, page, state, obs) {
+                    init(stream) { initialized && (continues = false), initialized = true },
+                    async read(stream, obs) {
                         if (!continues) return
                         if (!this.queue.length) return
                         const obsSource = this.queue.shift()
                         overwriteArray(obs, obsSource)
                     },
-                    agent(obs, pred, act) { return continues }, // Ensure that steps always happen.
-                    async write(page, state, pred, act) {
-                        if (env.page !== page) continues = false
+                    agent(stream, obs, pred, act) { return continues }, // Ensure that steps always happen.
+                    async write(stream, pred, act) {
+                        if (stream.page !== stream.page) continues = false
                         if (!continues) return
-                        if (page.isClosed()) return
+                        if (!stream.page || stream.page.isClosed()) return
                         // Call the page-agent with our action, to get observation.
                         const actBase64 = Buffer.from(act.buffer, act.byteOffset, act.byteLength).toString('base64')
                         let result
                         try {
-                            result = await page.evaluate((f, ...a) => f(...a), doHandle, agentId, actBase64, actHandle, obsHandle, toBinaryStringHandle, fromBinaryStringHandle)
+                            result = await stream.page.evaluate((f, ...a) => f(...a), doHandle, agentId, actBase64, actHandle, obsHandle, toBinaryStringHandle, fromBinaryStringHandle)
                         } catch (err) {}
                         if (typeof result != 'string')
                             return continues = false
@@ -885,7 +880,7 @@ In a page, \`directLink(PageAgent, Inputs = 0, Outputs = 0)\` will return (a pro
                             obs[i] = obs[i] !== obs[i] ? NaN : Math.max(-1, Math.min(obs[i], 1))
                         this.queue.push(obs)
                     },
-                    deinit(page, state) {
+                    deinit(stream) {
                         if (!continues) return
                         try {
                             doHandle.dispose()
@@ -934,7 +929,7 @@ If \`relative\` is not \`0\`, the agent meanders its action instead of jumping c
     const derivatives = []
     return {
         priority:1,
-        agent(obs, pred, act) {
+        agent(stream, obs, pred, act) {
             if (!relative)
                 for (let i = 0; i < act.length; ++i)
                     act[i] = Math.random()*2-1
@@ -968,11 +963,11 @@ Exposes 2 actions, which add to viewport scroll position (in pixels).
 `, function(sensitivity = 100) {
     return {
         writes:2,
-        write(page, state, pred, act) {
-            if (page.isClosed()) return
+        write(stream, pred, act) {
+            if (!stream.page || stream.page.isClosed()) return
             const dx = sensitivity * Math.max(-1, Math.min(act[0], 1))
             const dy = sensitivity * Math.max(-1, Math.min(act[1], 1))
-            page.evaluate((dx, dy) => scrollBy(dx, dy), dx, dy).catch(doNothing)
+            stream.page.evaluate((dx, dy) => scrollBy(dx, dy), dx, dy).catch(doNothing)
         },
     }
 })
@@ -984,8 +979,9 @@ Runs a func on an interval, with page and env as args (for example, use \`webenv
 `, function(func, ms = 60000) {
     let id = null
     return {
-        init(page, env) { clearInterval(id), id = setInterval(func, ms, page, env) },
-        deinit(page, state) { clearInterval(id), id = null },
+        // TODO: Make all triggers accept just `stream`, not page & env.
+        init(stream) { clearInterval(id), id = setInterval(func, ms, stream.page, stream) },
+        deinit(stream) { clearInterval(id), id = null },
     }
 })
 
@@ -1007,16 +1003,16 @@ For example: \`webenv.triggers([page => page.goto('https://www.youtube.com/watch
     const sorted = new Observations(triggers)
     const framesUntilReady = new Uint8Array(maxAtOnce || triggers)
     return {
-        init(page, env) {
-            this.env = env
-            if (!resetOnNewPage) return
-            page.on('framenavigated', frame => frame === page.mainFrame() && prev.fill(0))
-            page.on('domcontentloaded', () => prev.fill(0))
+        init(stream) {
+            this.env = stream // TODO: After `write` is better, do not have this.
+            const p = stream.page
+            if (!resetOnNewPage || !p) return
+            p.on('framenavigated', frame => frame === p.mainFrame() && prev.fill(0))
+            p.on('domcontentloaded', () => prev.fill(0))
         },
         priority: typeof opt.priority == 'number' ? opt.priority : 0,
         writes:triggers,
-        write(page, state, pred, act) {
-            if (page.isClosed()) return
+        write(stream, pred, act) {
             let oldThreshold = threshold, oldMax = maxAtOnce || triggers
             let newThreshold = threshold, newMax = maxAtOnce || triggers
             // Disallow new triggers when we don't have enough cooled-down slots.
@@ -1050,8 +1046,8 @@ For example: \`webenv.triggers([page => page.goto('https://www.youtube.com/watch
             }
             // Un/trigger.
             for (let i = 0; i < triggers; ++i)
-                if (!prev[i] && next[i]) start[i](page, this.env)
-                else if (stop && prev[i] && !next[i]) stop[i](page, this.env)
+                if (!prev[i] && next[i]) start[i](stream)
+                else if (stop && prev[i] && !next[i]) stop[i](stream)
             prev.set(next)
         },
     }
@@ -1062,27 +1058,29 @@ For example: \`webenv.triggers([page => page.goto('https://www.youtube.com/watch
 
 exports.triggers.homepage = docs(`\`webenv.triggers([webenv.triggers.homepage])\`
 Back to homepage, please.
-`, function(page, env) {
-    page.mouseX = env.width/2 | 0, page.mouseY = env.height/2 | 0 // Center the mouse too.
-    return page.goto(env.settings.homepage || 'about:blank', {waitUntil:'domcontentloaded'}).catch(doNothing)
+`, function(stream) {
+    if (!stream.page) return
+    stream.page.mouseX = stream.width/2 | 0, stream.page.mouseY = stream.height/2 | 0 // Center the mouse too.
+    return stream.page.goto(stream.settings.homepage || 'about:blank', {waitUntil:'domcontentloaded'}).catch(doNothing)
 })
 
 
 
 exports.triggers.goBack = docs(`\`webenv.triggers([webenv.triggers.goBack])\`
 Back to the previous page, please.
-`, function(page, env) { return page.goBack().catch(doNothing) })
+`, function(stream) { return stream.page && stream.page.goBack().catch(doNothing) })
 
 
 
 exports.triggers.randomLink = docs(`\`webenv.triggers([webenv.triggers.randomLink])\`
 Picks a random file: or http: or https: link on the current page, and follows it.
-`, async function(page, env) {
-    let place = page.url(), i = place.lastIndexOf('#')
+`, async function(stream) {
+    if (!stream.page) return
+    let place = stream.page.url(), i = place.lastIndexOf('#')
     if (i >= 0) place = place.slice(0, i) // `URL#ID` → `URL`
     const selector = 'a'
     let urls
-    try { urls = await page.$$eval(selector, links => links.map(a => a.href)) }
+    try { urls = await stream.page.$$eval(selector, links => links.map(a => a.href)) }
     catch (err) { return }
     urls = urls.filter(u => {
         if (u.slice(0, place.length) === place && u[place.length] === '#') return false
@@ -1093,7 +1091,7 @@ Picks a random file: or http: or https: link on the current page, and follows it
     })
     if (!urls.length) return
     const url = urls[Math.random() * urls.length | 0]
-    return page.goto(url, {waitUntil:'domcontentloaded'}).catch(doNothing)
+    return stream.page.goto(url, {waitUntil:'domcontentloaded'}).catch(doNothing)
 })
 
 
@@ -1105,14 +1103,16 @@ Must only be used with \`webenv.filter\`, with a string \`cache\` path.
 (A bit useless with the RandomURL dataset.)
 
 (This is a very open-ended action. If the agent's loss averages outcomes, then predictions with this trigger would be quite gray and nonsensical; make sure to maximize plausibility instead, so particular outcomes don't get penalized.)
-`, async function(page, env) {
-    if (typeof page.cache !== 'string') throw new Error('But there is no .cache')
+`, async function(stream) {
+    if (!stream.page) return
+    // TODO: Set .cache on stream, not stream.page.
+    if (typeof stream.page.cache !== 'string') throw new Error('But there is no .cache')
     const maxAttempts = 32 // Why maintain a separate main-URL index when you can just retry.
     const fs = require('fs/promises'), path = require('path')
-    const navs = new Array(maxAttempts).fill(page.cache).map(getRandomNav)
+    const navs = new Array(maxAttempts).fill(stream.page.cache).map(getRandomNav)
     for (let nav of navs)
         if (nav = await nav)
-            return page.goto(nav, {waitUntil:'domcontentloaded'}).catch(doNothing)
+            return stream.page.goto(nav, {waitUntil:'domcontentloaded'}).catch(doNothing)
     async function getRandomNav(name) {
         // Return a random URL deeply in `name` (assumed to be a `webenv.filter` cache),
         //   or `null` if not found.
@@ -1141,8 +1141,8 @@ For more details on \`Options\`, see \`webenv.triggers\`.
 `, function(opt = {maxAtOnce:3}, kb = 'Alt Control Shift Enter Tab Spacebar ArrowDown ArrowLeft ArrowRight ArrowUp End Home PageDown PageUp Backspace Delete Escape ` ~ 1 2 3 4 5 6 7 8 9 0 ! @ # $ % ^ & * ( ) q w e r t y u i o p [ ] \\ a s d f g h j k l ; \' z x c v b n m , . / Q W E R T Y U I O P { } | A S D F G H J K L : " Z X C V B N M < > ?') {
     const keys = kb.split(' ').map(k => k === 'Spacebar' ? ' ' : k)
     return exports.triggers(
-        keys.map(k => page => page.keyboard.down(k, k.length > 1 ? undefined : {text:k}).catch(doNothing)),
-        keys.map(k => page => page.keyboard.up(k).catch(doNothing)),
+        keys.map(k => stream => stream.page && stream.page.keyboard.down(k, k.length > 1 ? undefined : {text:k}).catch(doNothing)),
+        keys.map(k => stream => stream.page && stream.page.keyboard.up(k).catch(doNothing)),
         opt
     )
 })
@@ -1162,67 +1162,69 @@ Exposes all mouse-related actions.
         const sensitivity = opt.wheel
         inters.push({
             writes:2,
-            write(page, state, pred, act) {
-                if (page.isClosed()) return
+            write(stream, pred, act) {
+                if (!stream.page || stream.page.isClosed()) return
                 const dx = Math.max(-1, Math.min(act[0], 1)) * sensitivity
                 const dy = Math.max(-1, Math.min(act[1], 1)) * sensitivity
-                page.mouse.wheel({ deltaX:dx, deltaY:dy }).catch(doNothing)
+                stream.page.mouse.wheel({ deltaX:dx, deltaY:dy }).catch(doNothing)
             },
         })
     }
     if (opt.absolute !== false)
         inters.push({
-            init(page, env) {
-                this.env = env, page.mouseX = env.width/2 | 0, page.mouseY = env.height/2 | 0
+            init(stream) {
+                stream.page.mouseX = stream.width/2 | 0, stream.page.mouseY = stream.height/2 | 0
             },
             writes:2,
-            write(page, state, pred, act) {
-                if (page.isClosed()) return
-                const width = this.env.width, height = this.env.height
+            write(stream, pred, act) {
+                const p = stream.page
+                if (!p || p.isClosed()) return
                 const ax = Math.max(-1, Math.min(act[0], 1))
                 const ay = Math.max(-1, Math.min(act[1], 1))
-                page.mouseX = (ax + 1) * .5 * (width-1) | 0
-                page.mouseY = (ay + 1) * .5 * (height-1) | 0
-                page.mouse.move(page.mouseX, page.mouseY).catch(doNothing)
+                p.mouse.move(
+                    p.mouseX = (ax + 1) * .5 * (stream.width-1) | 0,
+                    p.mouseY = (ay + 1) * .5 * (stream.height-1) | 0,
+                ).catch(doNothing)
             },
         })
     if (opt.relative && typeof opt.relative == 'number') {
         const sensitivity = opt.relative
         inters.push({
-            init(page, env) {
-                this.env = env, page.mouseX = env.width/2 | 0, page.mouseY = env.height/2 | 0
+            init(stream) {
+                stream.page.mouseX = stream.width/2 | 0, stream.page.mouseY = stream.height/2 | 0
             },
             writes:2,
-            write(page, state, pred, act) {
-                if (page.isClosed()) return
-                const width = this.env.width, height = this.env.height
+            write(stream, pred, act) {
+                const p = stream.page
+                if (!p || p.isClosed()) return
                 const ax = Math.max(-1, Math.min(act[0], 1))
                 const ay = Math.max(-1, Math.min(act[1], 1))
-                page.mouseX = Math.max(0, Math.min(page.mouseX + sensitivity * ax, width-1)) | 0
-                page.mouseY = Math.max(0, Math.min(page.mouseY + sensitivity * ay, height-1)) | 0
-                page.mouse.move(page.mouseX, page.mouseY).catch(doNothing).catch(doNothing)
+                p.mouse.move(
+                    p.mouseX = Math.max(0, Math.min(p.mouseX + sensitivity * ax, stream.width-1)) | 0,
+                    p.mouseY = Math.max(0, Math.min(p.mouseY + sensitivity * ay, stream.height-1)) | 0,
+                ).catch(doNothing)
             },
         })
     }
     let curButtons = 0
     if (opt.left !== false)
-        start.push((page, env) => mouseButton(env, 1, true)),
-        stop.push((page, env) => mouseButton(env, 1, false))
+        start.push(stream => mouseButton(stream, 1, true)),
+        stop.push(stream => mouseButton(stream, 1, false))
     if (opt.right === true)
-        start.push((page, env) => mouseButton(env, 2, true)),
-        stop.push((page, env) => mouseButton(env, 2, false))
+        start.push(stream => mouseButton(stream, 2, true)),
+        stop.push(stream => mouseButton(stream, 2, false))
     if (opt.middle === true)
-        start.push((page, env) => mouseButton(env, 4, true)),
-        stop.push((page, env) => mouseButton(env, 4, false))
+        start.push(stream => mouseButton(stream, 4, true)),
+        stop.push(stream => mouseButton(stream, 4, false))
     if (start.length) inters.push(exports.triggers(start, stop, {...opt, priority:-2}))
     return inters
-    function mouseButton(env, button, pressed) {
+    function mouseButton(stream, button, pressed) {
         // `page.mouse.down(...)`/`.up(...)` have proven unreliable, so, CDP.
         if (pressed) curButtons |= button
-        env,cdp && env.cdp.send('Input.dispatchMouseEvent', {
+        stream.cdp && stream.cdp.send('Input.dispatchMouseEvent', {
             type: 'mouseReleased',
-            x: env.page.mouseX, // TODO: ...Should set these on `env` directly. (Or maybe, be performed in extension... No, wait, if we have CDP, then we should really use CDP instead of JS for mouse eventes. ...But then, we won't be able to make observer inputs at-init, since we'll have to send mouse position each time, won't we... Quite the conundrum.)
-            y: env.page.mouseY,
+            x: stream.page.mouseX, // TODO: ...Should set these on `env` directly. (Or maybe, be performed in extension... No, wait, if we have CDP, then we should really use CDP instead of JS for mouse eventes. ...But then, we won't be able to make observer inputs at-init, since we'll have to send mouse position each time, won't we... Quite the conundrum.)
+            y: stream.page.mouseY,
             button: button===1 ? 'left' : button===2 ? 'right' : button===4 ? 'middle' : 'none',
             buttons: curButtons,
             clickCount: 1,
@@ -1240,13 +1242,13 @@ Provides an observation of the time between frames, relative to the expected-Fra
     let prevFrame = performance.now()
     return {
         reads:1,
-        read(env, page, state, obs) {
+        read(stream, obs) {
             const nextFrame = performance.now()
             const duration = (nextFrame - prevFrame) - 1 / fps
             obs[0] = Math.max(-1, Math.min(duration / maxMs, 1))
             prevFrame = nextFrame
         },
-        visState(page, state) { return { fps, maxMs, runningAvg:null } },
+        visState(stream) { return { fps, maxMs, runningAvg:null } },
         visualize:function(obs, pred, elem, vState) {
             if (!elem.firstChild) {
                 elem.appendChild(document.createElement('div'))
@@ -1279,18 +1281,17 @@ This does not change video playback speed, but does control when JS timeouts fir
         const then = prevThen;  prevFrame = prevThen = null, then && then()
     }
     return {
-        init(page, env) {
-            env.cdp && env.cdp.on('Emulation.virtualTimeBudgetExpired', resolveFrame)
-            return env // TODO: No result.
+        init(stream) {
+            stream.cdp && stream.cdp.on('Emulation.virtualTimeBudgetExpired', resolveFrame)
         },
-        deinit(page, state) { // TODO: Make `deinit` pass in the env. (We really need it here.) (Also, maybe, clean up the per-stream state, don't just make it `page`; maybe make it a clean interface, with .env and .page and .cdp, so that we don't have too many args everywhere.)
-            state.cdp && state.cdp.off('Emulation.virtualTimeBudgetExpired', resolveFrame)
+        deinit(stream) {
+            stream.cdp && stream.cdp.off('Emulation.virtualTimeBudgetExpired', resolveFrame)
         },
-        async read(env, page, state, obs) {
-            if (!env.cdp) return
+        async read(stream, obs) {
+            if (!stream.cdp) return
             // Break pipelining if frames are taking too long.
             const p = prevFrame;  prevFrame = new Promise(then => prevThen = then);  p && (await p)
-            env.cdp.send('Emulation.setVirtualTimePolicy', {
+            stream.cdp.send('Emulation.setVirtualTimePolicy', {
                 policy:'advance', budget
             }).catch(doNothing)
         },
@@ -1428,19 +1429,22 @@ Arguments:
         cacheFunc = cache
     let mainPage = null
     return {
-        init(page, env) {
-            if (page.cache !== undefined) throw new Error('There can only be one .filter')
-            page.cache = cache
-            mainPage = page
-            this.env = env
-            page.setRequestInterception(true)
-            page.on('request', modifyReq)
+        init(stream) {
+            const p = stream.page
+            if (!p) return
+            if (p.cache !== undefined) throw new Error('There can only be one .filter')
+            p.cache = cache
+            mainPage = p
+            p.setRequestInterception(true)
+            p.on('request', modifyReq)
         },
-        deinit(page, state) {
-            page.off('request', modifyReq)
-            page.setRequestInterception(false)
+        deinit(stream) {
+            const p = stream.page
+            if (!p) return
+            p.off('request', modifyReq)
+            p.setRequestInterception(false)
             mainPage = undefined
-            page.cache = undefined
+            p.cache = undefined
         },
     }
     async function modifyReq(req) {
@@ -1470,61 +1474,59 @@ In particular, this:
     const performance = require('perf_hooks').performance
     let Stream = null, lastStamp = performance.now(), intervalID = null, readyState = 'void'
     return {
-        async init(page, env) {
-            if (!env.cdp || !env.browser) return
-            Stream = env // For events.
-            await env.cdp.send('Page.enable')
-            await env.cdp.send('Page.setDownloadBehavior', { behavior:'deny' }) // Deprecated, but so much better.
-            env.cdp.send('Page.setAdBlockingEnabled', { enabled:true })
-            env.browser.on('targetcreated', onNewTarget)
-            page.on('dialog', onDialog)
-            page.on('popup', onPopup)
-            let expectedEnv = env
+        async init(stream) {
+            if (!stream.cdp || !stream.browser) return
+            Stream = stream // For events.
+            await stream.cdp.send('Page.enable')
+            await stream.cdp.send('Page.setDownloadBehavior', { behavior:'deny' }) // Deprecated, but so much better.
+            stream.cdp.send('Page.setAdBlockingEnabled', { enabled:true })
+            stream.browser.on('targetcreated', onNewTarget)
+            stream.page.on('dialog', onDialog)
+            stream.page.on('popup', onPopup)
+            let expectedPage = stream.page
             ;(function waitMore(ch) {
                 ch && typeof ch.cancel == 'function' && ch.cancel()
-                if (env !== expectedEnv) return
-                expectedEnv = env
+                if (stream.page !== expectedPage) return
+                expectedPage = stream.page
                 // With the default timeout,
                 //   closing and auto-reopening the browser causes an infinite loop in Puppeteer internals.
-                page.waitForFileChooser({ timeout:0 }).then(waitMore, waitMore)
+                stream.page.waitForFileChooser({ timeout:0 }).then(waitMore, waitMore)
             })()
-            deleteCookies && page.on('load', noCookies)
-            deleteCookies && page.on('framenavigated', noCookies)
-            clearInterval(intervalID), intervalID = setInterval(maybeCloseBrowser, timeout*(1000/2), env)
+            deleteCookies && stream.page.on('load', noCookies)
+            deleteCookies && stream.page.on('framenavigated', noCookies)
+            clearInterval(intervalID), intervalID = setInterval(maybeCloseBrowser, timeout*(1000/2), stream)
             readyState = 'initialized'
-            return env // TODO: This is only for deinit.
         },
-        async deinit(page, state) { // TODO: Pass in the env explicitly. And accept it here, don't go through `state`.
-            const env = state
-            if (!env.cdp || !env.browser) return
+        async deinit(stream) {
+            if (!stream.cdp || !stream.browser) return
             clearInterval(intervalID), intervalID = null
-            deleteCookies && page.off('framenavigated', noCookies)
-            deleteCookies && page.off('load', noCookies)
-            page.off('popup', onPopup)
-            page.off('dialog', onDialog)
-            env.browser.off('targetcreated', onNewTarget)
-            env.cdp.send('Page.setAdBlockingEnabled', { enabled:false })
-            await env.cdp.send('Page.disable')
+            deleteCookies && stream.page.off('framenavigated', noCookies)
+            deleteCookies && stream.page.off('load', noCookies)
+            stream.page.off('popup', onPopup)
+            stream.page.off('dialog', onDialog)
+            stream.browser.off('targetcreated', onNewTarget)
+            stream.cdp.send('Page.setAdBlockingEnabled', { enabled:false })
+            await stream.cdp.send('Page.disable')
         },
-        read(env, page, state, obs) {
-            if (!env.cdp || !env.browser) return
-            if (env.page.isClosed() || !env.browser.isConnected())
+        read(stream, obs) {
+            if (!stream.cdp || !stream.browser) return
+            if (stream.page.isClosed() || !stream.browser.isConnected())
                 return lastStamp = performance.now()
             if (!(Math.random() < .01) && performance.now() - lastStamp < timeout*(1000/2)) return
             // Discard console entries, and try to evaluate some JS;
             //   if it takes too long, re-launch the browser.
             //   (Re-launching can spam the console with unhandled promise rejection warnings.)
-            env.cdp.send('Runtime.discardConsoleEntries').catch(doNothing)
+            stream.cdp.send('Runtime.discardConsoleEntries').catch(doNothing)
             if (timeout)
-                env.page.evaluate(() => 0).then(() => lastStamp = performance.now()).catch(doNothing)
+                stream.page.evaluate(() => 0).then(() => lastStamp = performance.now()).catch(doNothing)
             if (readyState === 'initialized') readyState = 'ready'
         },
     }
-    function maybeCloseBrowser(env) {
+    function maybeCloseBrowser(stream) {
         if (!timeout || readyState !== 'ready' || performance.now() - lastStamp <= timeout*1000) return
         readyState = 'void'
         lastStamp = performance.now()
-        env && env.browser && env.browser.isConnected() && env.browser.close()
+        stream && stream.browser && stream.browser.isConnected() && stream.browser.close()
     }
     function onPopup(newPage) {
         // A new tab opens up.
@@ -1566,17 +1568,15 @@ See this object's properties for examples of \`functions\`.
     const source = funcs.map(f => '(' + (''+f) + ')();').join('\n')
     return {
         priority:1,
-        async init(page, env) {
-            if (!env.cdp) return // TODO: This is way too useful to not be used in user-extensions, so, figure out how to.
-            this.script = (await env.cdp.send('Page.addScriptToEvaluateOnNewDocument', {
+        async init(stream) {
+            if (!stream.cdp) return // TODO: This is way too useful to not be used in user-extensions, so, figure out how to.
+            this.script = (await stream.cdp.send('Page.addScriptToEvaluateOnNewDocument', {
                 source, worldName:'webenvJS',
             })).identifier
-            return env // TODO: Remove.
         },
-        deinit(page, state) {
-            if (!env.cdp) return
-            const env = state // TODO: Ugh.
-            env.cdp.send('Page.removeScriptToEvaluateOnNewDocument', { identifier: this.script })
+        deinit(stream) {
+            if (!stream.cdp) return
+            stream.cdp.send('Page.removeScriptToEvaluateOnNewDocument', { identifier: this.script })
         },
     }
 })
@@ -1701,10 +1701,11 @@ Args:
     return {
         priority: 999999999,
         reads: hidden ? undefined : 1,
-        read(env, page, state, obs) {
+        read(stream, obs) {
+            if (!stream.page) return
             const v = scoreSum / scoreNum // NaN if no scores since the last frame.
             scoreSum = scoreNum = 0
-            const u = page.url()
+            const u = stream.page.url()
 
             const norm = signalNormalize(v, data[u])
             if (v === v) // Update the page's reward-stream statistics, and cross-page improvement.
@@ -1712,18 +1713,19 @@ Args:
                 data.ALL = signalUpdate(norm, data.ALL, maxHorizon)
             if (!hidden) obs[0] = norm
         },
-        init(page, env) {
-            env.score = data
+        init(stream) {
+            stream.score = data
             if (timeoutID === null)
                 active = true, timeoutID = setTimeout(saveData, saveInterval*1000)
-            return page.exposeFunction(name, async score => {
+            if (!stream.page) return
+            return stream.page.exposeFunction(name, async score => {
                 if (typeof score != 'number' || score !== score) return false
                 scoreSum += Math.max(-maxRawMagnitude, Math.min(score, maxRawMagnitude))
                 ++scoreNum
                 return updated = true
             })
         },
-        deinit(page, state) {
+        deinit(stream) {
             return active = false, saveData(true)
         },
     }
@@ -1819,9 +1821,11 @@ async function fetchSlice(url, start = 0, end = null) {
 `, function() {
     const fs = require('fs/promises')
     return {
-        init(page, env) {
-            return page.exposeFunction('_fetchLocalFileSlice', async function(url, start = 0, end = null) {
-                if (page.url().slice(0,7) !== 'file://')
+        init(stream) {
+            if (!stream.page) return
+            return stream.page.exposeFunction('_fetchLocalFileSlice', async function(url, start = 0, end = null) {
+                if (!stream.page) return ''
+                if (stream.page.url().slice(0,7) !== 'file://')
                     throw new Error('Non-file: protocols are not supported')
                 if (typeof url != 'string')
                     throw new Error('URL must be a string')
@@ -1835,7 +1839,7 @@ async function fetchSlice(url, start = 0, end = null) {
                     throw new Error('End must be after start')
                 if (end !== null && (end - start > 20 * 2**20))
                     throw new Error('Max slice size is 20MB')
-                const resolved = new URL(url, page.url())
+                const resolved = new URL(url, stream.page.url())
                 const buf = Buffer.alloc(end - start)
                 const file = await fs.open(resolved, 'r')
                 try {
@@ -1855,8 +1859,8 @@ Specifies the User-Agent string.
 Identify yourself and include contact information to overcome some of the prejudice against bots on the Web: https://www.w3.org/wiki/Bad_RDF_Crawlers
 `, function(agent = 'WebEnv agent <https://github.com/Antipurity/webenv>') {
     return {
-        init(page, env) {
-            return page.setExtraHTTPHeaders({ 'User-Agent': agent })
+        init(stream) {
+            return stream.page && stream.page.setExtraHTTPHeaders({ 'User-Agent': agent })
         },
     }
 })
@@ -1877,51 +1881,51 @@ const observers = docs(`The shared interface for extension-side video and audio 
 May be replaced by ALL observations coming from the extension. And through WebRTC, not CDP. And with properly-varying bytes-per-value.
 
 Other interfaces that want this must define:
-- \`.observerInput(page, state)=>obsInput\`,
+- \`.observerInput(stream)=>obsInput\` (called on every frame, to JSON-serialize the result),
 - \`.observer(obsInput, video:{grab(x,y,w,h)=>pixels}, audio:{grab(sampleN=2048, sampleRate=44100)=>samples}, obsOutput)\`;
 `, {
     key: Symbol('observers'),
-    init(page, env) {
-        if (!env.extensionPage) return
-        env.extensionPage.exposeFunction('gotObserverData', gotObserverData)
+    init(stream) {
+        if (!stream.extensionPage) return
+        stream.extensionPage.exposeFunction('gotObserverData', gotObserverData)
         function gotObserverData(b64) {
             // Yeah, sure, u16 per color per pixel is 2× the inefficiency. But. Audio.
             const obsBuf = Buffer.from(b64 || '', 'base64') // Int16; decode into floats.
             const obsLen = obsBuf.byteLength / Int16Array.BYTES_PER_ELEMENT | 0
-            decodeInts(new Int16Array(obsBuf.buffer, obsBuf.byteOffset, obsLen), env._obsFloats)
+            decodeInts(new Int16Array(obsBuf.buffer, obsBuf.byteOffset, obsLen), stream._obsFloats)
             // TODO: ...But what do we do about non-observer data becoming overwritten... Maybe not care, since having observers at all is temporary, and ALL observations will soon be provided by the extension...
         }
     },
-    async read(env, page, st, obs) {
-        if (!env.page || !env.extensionPage) return
-        const state = env[this.key] || (env[this.key] = Object.create(null))
-        if (state.all !== env._all) {
+    async read(stream, obs) {
+        if (!stream.page || !stream.extensionPage) return
+        const state = stream[this.key] || (stream[this.key] = Object.create(null))
+        if (state.all !== stream._all) {
             // Relink extension-side observers.
-            state.all = env._all
+            state.all = stream._all
             state.obsInds = []
             const observers = []
-            for (let i = 0; i < env._all.length; ++i) {
-                const o = env._all[i]
+            for (let i = 0; i < stream._all.length; ++i) {
+                const o = stream._all[i]
                 if (typeof o.observer == 'function' || typeof o.observer == 'string')
                     state.obsInds.push(i),
-                    observers.push({read:''+o.observer, offset:env._allReadOffsets[i], length:o.reads || 0})
+                    observers.push({read:''+o.observer, offset:stream._allReadOffsets[i], length:o.reads || 0})
             }
-            const w = env.width || 0
-            const h = env.height || 0
-            await env.extensionPage.evaluate((o,w,h) => updateObservers(o,w,h), observers, w, h)
+            const w = stream.width || 0
+            const h = stream.height || 0
+            await stream.extensionPage.evaluate((o,w,h) => updateObservers(o,w,h), observers, w, h)
         }
         const obsInds = state.obsInds
         // Call observers. The extension will call `gotObserverData` for future frames.
         //   (No `await`: the observer stream is delayed by at least a frame, to not stall.)
         const inputs = new Array(obsInds.length)
         for (let i = 0; i < obsInds.length; ++i) {
-            const inAll = obsInds[i], o = env._all[inAll]
+            const inAll = obsInds[i], o = stream._all[inAll]
             if (o && typeof o.observerInput == 'function')
-                inputs[i] = o.observerInput(env.page, env._allState[inAll])
+                inputs[i] = o.observerInput(stream)
             else inputs[i] = undefined
         }
-        if (env.extensionPage.isClosed()) return
-        env.extensionPage.evaluate(ins => void setTimeout(readObservers, 0, ins), inputs).catch(doNothing)
+        if (stream.extensionPage.isClosed()) return
+        stream.extensionPage.evaluate(ins => void setTimeout(readObservers, 0, ins), inputs).catch(doNothing)
     },
 })
 
@@ -1991,11 +1995,11 @@ The result is a promise for the environment, which is an object with:
         if (!this.reads) return
         try {
             // Defer observations to interfaces.
-            const inds = this._obsInds, p = this.page, a = this._all, s = this._allState
+            const inds = this._obsInds, a = this._all
             const obs = this._obsSlice
             const tmp = this._allocArray(0)
             for (let i = 0; i < inds.length; ++i) {
-                const j = inds[i], r = a[j].read(this, p, s[j], obs[i])
+                const j = inds[i], r = a[j].read(this, obs[i])
                 if (r instanceof Promise) tmp.push(r)
             }
             // Await all promises at once.
@@ -2016,12 +2020,12 @@ The result is a promise for the environment, which is an object with:
         try {
             if (acts !== this._actFloats) this._actFloats.set(acts)
             // Defer actions to interfaces.
-            const inds = this._actInds, p = this.page, a = this._all, s = this._allState
+            const inds = this._actInds, a = this._all
             const pred = this._predSlice, act = this._actSlice
             const tmp = this._allocArray(0)
             for (let i = 0; i < inds.length; ++i) {
-                if (!a[inds[i]]) return
-                const r = a[inds[i]].write(p, s[inds[i]], pred[i], act[i])
+                if (!a[inds[i]]) continue
+                const r = a[inds[i]].write(this, pred[i], act[i])
                 if (r instanceof Promise) tmp.push(r)
             }
             // Await all promises at once.
@@ -2050,7 +2054,7 @@ The result is a promise for the environment, which is an object with:
         await track(interfaces, 0)
         // Respect priorities, but do not shuffle needlessly.
         all.sort((a,b) => ((b.priority || 0) - (a.priority || 0)) || (indices.get(a) - indices.get(b)))
-        const rInds = [], wInds = [], agentInds = [], allState = []
+        const rInds = [], wInds = [], agentInds = []
         for (let i = 0; i < all.length; ++i) {
             const o = all[i]
             if (typeof o.read == 'function') rInds.push(i)
@@ -2063,11 +2067,14 @@ The result is a promise for the environment, which is an object with:
         let reads = 0, writes = 0
         const allReadOffsets = [], allWriteOffsets = []
         const seen = new Set
+        const tmp = this._allocArray(0)
         for (let i = 0; i < all.length; ++i) {
             const o = all[i], prev = oldIndices.get(o)
             seen.add(o)
-            if (typeof o.init == 'function')
-                allState[i] = prev === undefined ? o.init(this.page, this) : this._allState ? this._allState[prev] : undefined
+            if (typeof o.init == 'function') {
+                const r = prev === undefined && o.init(this)
+                if (r instanceof Promise) tmp.push(r)
+            }
             allReadOffsets[i] = reads, allWriteOffsets[i] = writes
             if (typeof o.reads == 'number') {
                 if (o.reads < 0 || o.reads !== o.reads>>>0)
@@ -2082,15 +2089,13 @@ The result is a promise for the environment, which is an object with:
             if (o.settings && typeof o.settings == 'object')
                 Object.assign(this.settings, o.settings)
         }
-        for (let i = 0; i < all.length; ++i)
-            if (allState[i] instanceof Promise)
-                allState[i] = await allState[i]
+        for (let i = 0; i < tmp.length; ++i) await tmp[i]
+        this._allocArray(tmp)
         if (this._all) {
-            const p = this.page, a = this._all, s = this._allState
-            const tmp = this._allocArray(0)
+            const a = this._all, tmp = this._allocArray(0)
             for (let i = 0; i < a.length; ++i) {
                 if (seen.has(a[i]) || typeof a[i].deinit != 'function') continue
-                const r = a[i].deinit(p, s[i])
+                const r = a[i].deinit(this)
                 if (r instanceof Promise) tmp.push(r)
             }
             // Await all promises at once.
@@ -2128,7 +2133,8 @@ The result is a promise for the environment, which is an object with:
         for (let i = 0; i < agentInds.length; ++i) {
             const j = agentInds[i], bpe = Observations.BYTES_PER_ELEMENT
             const o = all[j], r = allReadOffsets[j], w = allWriteOffsets[j]
-            const args = [] // obs, pred, act
+            const args = [] // stream, obs, pred, act
+            args.push(this)
             args.push(typeof o.reads == 'number' ? new Observations(obsFloats.buffer, r * bpe, o.reads) : obsFloats)
             args.push(typeof o.reads == 'number' ? new Observations(predFloats.buffer, r * bpe, o.reads) : predFloats)
             args.push(typeof o.writes == 'number' ? new Observations(actFloats.buffer, w * bpe, o.writes) : actFloats)
@@ -2144,7 +2150,7 @@ The result is a promise for the environment, which is an object with:
         // Finalize what we computed here.
         this.reads = reads, this.writes = writes
         this._allReadOffsets = allReadOffsets, this._allWriteOffsets = allWriteOffsets
-        this._all = all, this._obsInds = rInds, this._actInds = wInds, this._agentInds = agentInds, this._allState = allState
+        this._all = all, this._obsInds = rInds, this._actInds = wInds, this._agentInds = agentInds, 
         this._obsFloats = obsFloats
         this._predFloats = predFloats, this._actFloats = actFloats
         this._obsSlice = obsSlice, this._predSlice = predSlice
@@ -2155,11 +2161,11 @@ The result is a promise for the environment, which is an object with:
         if (this._killed) return
         clearInterval(this._watchdogCheckId)
         this._killed = true
-        const p = this.page, a = this._all, s = this._allState
-        if (a) {
-            const tmp = this._allocArray(0)
+        if (this._all) {
+            const a = this._all, tmp = this._allocArray(0)
             for (let i = 0; i < a.length; ++i) {
-                const r = typeof a[i].deinit == 'function' ? a[i].deinit(p, s[i]) : null
+                if (typeof a[i].deinit != 'function') continue
+                const r = a[i].deinit(this)
                 if (r instanceof Promise) tmp.push(r)
             }
             // Await all promises at once.

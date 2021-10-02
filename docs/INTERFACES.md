@@ -24,7 +24,7 @@ You may want to write your own agent. Base it on `webenv.randomAgent()`:
 
 ```js
 webenv.init(
-    { async agent(obs, pred, act) {
+    { async agent(stream, obs, pred, act) {
         await 'asteroid impact'
         for (let i = 0; i < act.length; ++i)
             act[i] = Math.random()*2-1
@@ -416,20 +416,4 @@ This defines a very simple environment for agents that have a reasonable executi
 
 Have another application in mind? Contribute.
 
-[Look at how interfaces are implemented](../webenv.js), and/or understand the basic principles:
-
-- An interface is an object, which defines some properties/methods. Interfaces can be grouped into trees of arrays for convenience.
-- All functions below can return a promise.
-- Create/destroy:
-    - `.init(page, env)=>state`,
-    - `.deinit(page, state)` (on browser relaunching, only init);
-- Read/process/write:
-    - `.reads:Number`, `.read(page, state, obs)` (modify `obs` in-place);
-      - `.observerInput(page, state)=>obsInput`, `.observer(obsInput, video:{grab(x,y,w,h)=>pixels}, audio:{grab(sampleN=2048, sampleRate=44100)=>samples}, obsOutput)` (before reading, these are collected from an automatically-installed extension);
-    - `.agent(obs, pred, act)=>continues` (causes an automatic interpreter loop; return `false` to unlink the agent);
-    - `.writes:Number`, `.write(page, state, pred, act)` (`pred` can predict the next read `obs`; do read from `act` and act on that);
-- Convenience:
-    - `.priority:Number` (if some interface must always go after another kind of interfaces, do not burden users, but give it a lower priority);
-- Visualization, via `webenv.webView(...)`:
-    - `.visState(page, state)=>vState` (the result must be JSON-serializable, sent once at init-time),
-    - `.visualize(obs, pred, elem, vState)` (serialized into web-views to visualize data there, so write the function out fully, not as `{ f(){} }`).
+[Look at how interfaces are implemented](../webenv.js), and/or understand the basic principles, by looking at runtime documentation `require('webenv').init.docs`.
