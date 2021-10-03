@@ -6,117 +6,51 @@ const performance = require('perf_hooks').performance
 
 const Observations = Float32Array
 
-// TODO: Remake docs so that they say that this accepts streams, not interfaces directly (though it can accept streams too, for simplicity).
-exports.init = docs(`Function. Pass in numeric interfaces, receive a promise.
-The extensible creator of numeric Web interfaces, for machine learning: a truly general environment for AGI.
+exports.init = docs(`Function. Pass in numeric streams and/or interfaces, receive a promise of an object that manages bidirectional numeric data streams: Env.
 
-Without interfaces, this is useless.
-All other members of this module either are such interfaces (such as \`webenv.defaults\`) or create them.
-    Some are mostly observations, some are mostly actions, some are mostly agents (connecting observations to actions).
-    Agents are called in a loop, which maximizes throughput.
+See \`webenv.browser\` for an example of a type of stream. For convenience, all top-level non-stream interfaces are considered to be in their own \`webenv.browser\`.
 
-Ideally, you should not treat observations/actions as anything other than vectors of approximately -1..1 32-bit floats. (Not necessarily square, not necessarily an image. Very likely multimodal.)
+(Uniting many streams in one allows agents to process streams in batches, which is good for performance in master-slave computing architectures such as CPU+GPU.)
 
-To write new interfaces, look at the pre-existing interfaces.
-    An interface is an object (or an array of interfaces, for convenience) that may define:
-    - \`.settings\` (see \`webenv.settings\`);
-    - \`.init(stream)\`, \`.deinit(stream)\` (neither is called on browser relaunching, except on new/removed interfaces);
-    - \`.reads:Number\`, \`.read(stream, obs)\` (modify \`obs\` in-place, do not read);
-    - \`.writes:Number\`, \`.write(stream, pred, act)\` (\`pred\` can predict the next read \`obs\`; do read from \`act\` and act on that, do not write);
-    - \`.agent(stream, obs, pred, act)=>continues\` (return false to unlink the agent) (to prevent torn writes, there should only be one agent);
-    - \`priority:Number\` (for example, interfaces that read actions at write-time have priority of -1, to always go after action-fillers);
-    All functions are potentially asynchronous, and will be \`await\`ed if needed.
+Env's methods:
+- \`.reinit(...streams)\`: for dynamically changing the set of streams/interfaces; \`await\` it.
+    - To modify \`env\`'s streams, use \`await env.reinit(MODIFY_ARRAY(env.streams))\`.
+    - To close streams without closing NodeJS, use \`await env.reinit()\`.
 `, async function init(...interfaces) {
-    const env = Object.create(null)
-    // TODO: Have `.reinit(...streams)`, which is called on start and whenever.
-    // TODO: Have `.close()`, which closes every stream.
-    env.streams = { 0: await streamPrototype.open(env, relaunch) }
-    return env
-
-    async function relaunch() {
-        // Close the previous browser.
-        if (this.browser) {
-            const b = this.browser
-            this.browser = null
-            await b.close()
-        }
-
-        const ext = require('path').join(__dirname, 'extension')
-        const dataDir = require('path').join(__dirname, 'puppeteer-chrome-profile')
-
-        // Remove folders that may be problematic for long-term stability. (Things never just work.)
-        const fs = require('fs')
-        function rm(...p) {
-            const path = require('path').join(dataDir, ...p)
-            return new Promise(then => fs.rm(path, { force:true, recursive:true }, then))
-        }
-        await Promise.all([rm('Crashpad', 'reports'), rm('BrowserMetrics'), rm('ShaderCache', 'GPUCache'), rm('ShaderCache')])
-
-        // Open the new browser.
-        const puppeteer = require('puppeteer')
-        const browser = this.browser = await puppeteer.launch({
-            headless:false,
-            defaultViewport:null,
-            waitForInitialPage:false,
-            args:[
-                '--allow-file-access-from-files',
-                '--autoplay-policy=no-user-gesture-required',
-                '--load-extension=' + ext,
-                '--disable-extensions-except=' + ext,
-                '--whitelisted-extension-id=clmfcdjojibdkmjpbfbddhjiolfjhcgn',
-                '--lang='+this.lang,
-                '--disable-notifications',
-                '--user-data-dir=' + dataDir,
-                '--allow-profiles-outside-user-dir',
-            ],
-            ignoreDefaultArgs:[
-                '--mute-audio',
-                '--disable-gpu',
-            ],
-        })
-        const page = this.page = await browser.newPage()
-        if (!page) throw new Error('Puppeteer returned null')
-        page.on('error', err => { throw err })
-        closeAllPagesExcept(browser, page)
-        const langParts = this.lang.split(',')
-        ;[ // Thanks, async/await, very helpful for efficiency via parallelization. (Sarcasm.)
-            this.cdp,
-            this._chromeWidth, // TODO: ...Where are these used, apart from `viewport`? And can we not (rather, can we make `viewport` perform that for us)? ...Too lazy.
-            this._chromeHeight,
-            this.extensionPage,
-        ] = await Promise.all([
-            page.target().createCDPSession(),
-            page.evaluate(() => outerWidth - innerWidth),
-            page.evaluate(() => outerHeight - innerHeight),
-            browser.waitForTarget(t => t.type() === 'background_page' && t._targetInfo.title === 'capture').then(t => t.page()),
-            page.setUserAgent(''),
-            page.evaluateOnNewDocument(langParts => {
-                Object.defineProperty(navigator, 'language', { value:langParts[0] })
-                Object.defineProperty(navigator, 'languages', { value:langParts })
-            }, langParts),
-            page.setExtraHTTPHeaders({ 'Accept-Language': langParts[langParts.length-1] }),
-        ])
-        const oldInters = this._all || interfaces
-        interfaces = null
-        this._all = [] // Call all initializers again, to re-attach event listeners.
-        this._agentInds = [] // Re-launch the step loop if we have agents.
-        await this.relink(...oldInters)
-        if (this.settings.homepage && this.settings.homepage !== 'about:blank')
-            // Browser crashes are far more frequent if we don't wait at least a bit.
-            await Promise.race([
-                Promise.all([
-                    page.goto(this.settings.homepage, {waitUntil:'domcontentloaded'}).then(() => this.cdp.send('Page.resetNavigationHistory')).catch(doNothing),
-                    this.cdp.send('Page.resetNavigationHistory').catch(doNothing),
-                ]),
-                new Promise(then => setTimeout(then, 10000)),
-            ])
-        this._lastStepEnd = performance.now()
+    const env = {
+        streams: [],
+        _reinitLock: null,
+        async reinit(...interfaces) {
+            let p = this._reinitLock, then
+            this._reinitLock = new Promise(f => then=f)
+            await p // Lock.
+            try {
+                const next = await exports.browser(...interfaces)
+                const newStreams = [], preservedStreams = new Set
+                for (let s of next) { // Preserve the new+old.
+                    if (s.index !== null && s.env !== this)
+                        throw new Error('A stream already belongs to another env')
+                    if (s.index !== null) newStreams[s.index] = s, preservedStreams.add(s)
+                }
+                for (let s of next) // Allocate+open the new.
+                    if (s.index === null) {
+                        let i = 0
+                        while (newStreams[i] !== undefined) ++i
+                        newStreams[i] = s.open(this, i)
+                    }
+                // Close the old.
+                await Promise.all(this.streams.filter(s => !preservedStreams.has(s)).map(s => s.close()))
+                this.streams = newStreams
+                return this
+            } finally { then() }
+        },
     }
+    return await env.reinit(...interfaces)
 })
 
 
 
-// TODO: ...Can this be a part of `.settings`, so that we overwhelm users less...
+// TODO: ...Can this be a part of `.settings`, so that we overwhelm users less? Only `webenv.browser` would react, right?
 exports.viewport = docs(`\`webenv.viewport(opt)\`
 Sets viewport size on init.
 Pass in a JS object with at least \`{ width:640, height:480 }\` (https://pptr.dev/#?product=Puppeteer&version=v5.2.1&show=api-pagesetviewportviewport), or nothing.`, function viewport(opt = {}) {
@@ -1934,7 +1868,7 @@ Other interfaces that want this must define:
 // `Object.freeze`ing this would have been good, if it didn't prevent children from defining their own `lang` and such.
 const streamPrototype = docs(`This encapsulates all information about one stream of data.
 
-To create a new stream from this prototype, use the factory function \`.open(env, relaunch = null)\`.
+To create a new stream from this prototype, use \`streamPrototype.create(relaunch = null).open(env, index)\`.
 
 The result is a promise for the environment, which is an object with:
 - \`relink(...interfaces)\`: changes interfaces at run-time. Agents might get confused, since they likely rely on positions. (Prefer \`result.relink(MODIFY(result._all))\` to remembering the initial interfaces, to handle dynamic links.)
@@ -1946,7 +1880,7 @@ The result is a promise for the environment, which is an object with:
 - \`close()=>Promise<void>\`: ends this stream. \`env\` is not notified.
 `, {
     // Public interface.
-    env: null,
+    env: null, index: null,
     reads: 0,
     writes: 0,
     settings: null,
@@ -1958,33 +1892,37 @@ The result is a promise for the environment, which is an object with:
     lowball: .95,
     maxRelaunchAttempts: 32,
 
-    async open(env, relaunch = null) {
-        // JS classes are boring.
+    create(relaunch = null) {
+        // Factory function: creates an object, and returns it.
+        //   (JS classes are boring.)
         const res = Object.create(this)
         res._relaunch = relaunch
+        return res
+    },
+    async open(env, index) {
         // Public interface. (More efficient to set this to defaults than to have many object shapes.)
-        res.env = env
-        res.reads = 0, res.writes = 0
-        res.settings = Object.create(null)
-        res.browser = null, res.page = null, res.cdp = null, res.extensionPage = null
+        this.env = env, this.index = index
+        this.reads = 0, this.writes = 0
+        this.settings = Object.create(null)
+        this.browser = null, this.page = null, this.cdp = null, this.extensionPage = null
         // Private state.
-        res._stall = null // A promise when a `relaunch` is in progress.
-        res._unlink = new Set
-        res._watchdogCheckId = setInterval(() => { // This watchdog timer is easier than fixing rare-hang-on-navigation bugs.
-            if (performance.now()-res._lastStepEnd < 15000) return
-            res._relaunchRetrying()
+        this._stall = null // A promise when a `relaunch` is in progress.
+        this._unlink = new Set
+        this._watchdogCheckId = setInterval(() => { // This watchdog timer is easier than fixing rare-hang-on-navigation bugs.
+            if (performance.now()-this._lastStepEnd < 15000) return
+            this._relaunchRetrying()
         }, 30000)
-        res._lastStepEnd = performance.now() // For measuring time between steps.
-        res._period = new class ObsNumber { // Measuring time between steps.
+        this._lastStepEnd = performance.now() // For measuring time between steps.
+        this._period = new class ObsNumber { // Measuring time between steps.
             // A number that estimates some other number, independent of context (unlike a NN).
             constructor(x, momentum = .99) { this.x = +x, this.m = +momentum }
             valueOf() { return this.x }
             set(x) { return this.x = this.m * this.x + (1 - this.m) * Math.max(-this.x, Math.min(x, this.x*2)) }
         }(0)
-        res._stepsNow = 0 // Throughput is maximized by lowballing time-between-steps, but without too many steps at once.
-        res._killed = false // `.close()` will set this to true.
-        await res._relaunchRetrying()
-        return res
+        this._stepsNow = 0 // Throughput is maximized by lowballing time-between-steps, but without too many steps at once.
+        this._killed = false // `.close()` will set this to true.
+        await this._relaunchRetrying()
+        return this
     },
     async read() {
         // Collect webenv-side reads.
@@ -2043,15 +1981,14 @@ The result is a promise for the environment, which is an object with:
 
         // Flatten the interface tree.
         const all = [], indices = new Map
-        async function track(o) {
+        await (async function track(o) {
             if (o instanceof Promise) o = await o
-            if (Array.isArray(o)) return o.forEach(track)
-            if (!o || typeof o != 'object') throw new Error('All must be webenv interfaces')
+            if (Array.isArray(o)) return Promise.all(o.map(track))
+            if (!o || typeof o != 'object') throw new Error('All must be webenv interfaces, got '+o)
             if (indices.has(o)) return // De-duplicate.
             indices.set(o, all.length)
             all.push(o)
-        }
-        await track(interfaces, 0)
+        })(interfaces)
         // Respect priorities, but do not shuffle needlessly.
         all.sort((a,b) => ((b.priority || 0) - (a.priority || 0)) || (indices.get(a) - indices.get(b)))
         const rInds = [], wInds = [], agentInds = []
@@ -2266,6 +2203,125 @@ async function closeAllPagesExcept(browser, page) {
     const bad = browser.targets().filter(t => t.type() === 'page' && t !== page.target()).map(t => t.page())
     for (let p of bad) (await p).close().catch(doNothing)
 }
+
+
+
+// TODO: Test with 2+ browsers (will probably encounter `.webView` problems, and `.io` problems; should fix them before many-browser tests).
+// TODO: Into INTERFACES.md.
+exports.browser = docs(`\`webenv.browser(...interfaces)\`
+Creates a data stream from a 'Puppeteer'ed browser.
+
+Without interfaces, this is useless.
+All other members of this module either are such interfaces (such as \`webenv.defaults\`), or create them, or are streams (\`webenv.browser\`).
+    Some are mostly observations, some are mostly actions, some are mostly agents (connecting observations to actions).
+    Agents are called in a loop, which maximizes throughput.
+
+Ideally, you should not treat observations/actions as anything other than vectors of approximately -1..1 32-bit floats. (Not necessarily square, not necessarily an image. Very likely multimodal.)
+
+To write new interfaces, look at the pre-existing interfaces.
+    An interface is an object (or an array of interfaces, for convenience) that may define:
+    - \`.settings\` (see \`webenv.settings\`);
+    - \`.init(stream)\`, \`.deinit(stream)\` (neither is called on browser relaunching, except on new/removed interfaces);
+    - \`.reads:Number\`, \`.read(stream, obs)\` (modify \`obs\` in-place, do not read);
+    - \`.writes:Number\`, \`.write(stream, pred, act)\` (\`pred\` can predict the next read \`obs\`; do read from \`act\` and act on that, do not write);
+    - \`.agent(stream, obs, pred, act)=>continues\` (return false to unlink the agent) (to prevent torn writes, there should only be one agent);
+    - \`priority:Number\` (for example, interfaces that read actions at write-time have priority of -1, to always go after action-fillers);
+    All functions are potentially asynchronous, and will be \`await\`ed if needed.
+`, async function(...interfaces) {
+    let streams = [], nonStreams = []
+    await (async function track(o) {
+        if (o instanceof Promise) o = await o
+        if (Array.isArray(o)) return Promise.all(o.map(track))
+        if (!o || typeof o != 'object') throw new Error('All must be webenv streams/interfaces, got '+o)
+        if (Object.getPrototypeOf(o) === streamPrototype) streams.push(o)
+        else nonStreams.push(o)
+    })(interfaces)
+    interfaces = null
+    if (nonStreams.length) {
+        streams.push(streamPrototype.create(relaunch))
+        async function relaunch() {
+            // Close the previous browser.
+            if (this.browser) {
+                const b = this.browser
+                this.browser = null
+                await b.close()
+            }
+
+            const ext = require('path').join(__dirname, 'extension')
+            const dataDir = require('path').join(__dirname, 'puppeteer-chrome-profile')
+
+            // Remove folders that may be problematic for long-term stability. (Things never just work.)
+            const fs = require('fs')
+            function rm(...p) {
+                const path = require('path').join(dataDir, ...p)
+                return new Promise(then => fs.rm(path, { force:true, recursive:true }, then))
+            }
+            await Promise.all([rm('Crashpad', 'reports'), rm('BrowserMetrics'), rm('ShaderCache', 'GPUCache'), rm('ShaderCache')])
+
+            // Open the new browser.
+            const puppeteer = require('puppeteer')
+            const browser = this.browser = await puppeteer.launch({
+                headless:false,
+                defaultViewport:null,
+                waitForInitialPage:false,
+                args:[
+                    '--allow-file-access-from-files',
+                    '--autoplay-policy=no-user-gesture-required',
+                    '--load-extension=' + ext,
+                    '--disable-extensions-except=' + ext,
+                    '--whitelisted-extension-id=clmfcdjojibdkmjpbfbddhjiolfjhcgn',
+                    '--lang='+this.lang,
+                    '--disable-notifications',
+                    '--user-data-dir=' + dataDir,
+                    '--allow-profiles-outside-user-dir',
+                ],
+                ignoreDefaultArgs:[
+                    '--mute-audio',
+                    '--disable-gpu',
+                ],
+            })
+            const page = this.page = await browser.newPage()
+            if (!page) throw new Error('Puppeteer returned null')
+            page.on('error', err => { throw err })
+            closeAllPagesExcept(browser, page)
+            const langParts = this.lang.split(',')
+            ;[ // Thanks, async/await, very helpful for efficiency via parallelization. (Sarcasm.)
+                this.cdp,
+                this._chromeWidth, // TODO: ...Where are these used, apart from `viewport`? And can we not (rather, can we make `viewport` perform that for us)? ...Too lazy.
+                // ...Actually, maybe we should essentially integrate `viewport` into here (by reading .settings post-init), also adding an interface that sometimes resizes the browser window to appropriate width/height.
+                this._chromeHeight,
+                this.extensionPage,
+            ] = await Promise.all([
+                page.target().createCDPSession(),
+                page.evaluate(() => outerWidth - innerWidth),
+                page.evaluate(() => outerHeight - innerHeight),
+                browser.waitForTarget(t => t.type() === 'background_page' && t._targetInfo.title === 'capture').then(t => t.page()),
+                page.setUserAgent(''),
+                page.evaluateOnNewDocument(langParts => {
+                    Object.defineProperty(navigator, 'language', { value:langParts[0] })
+                    Object.defineProperty(navigator, 'languages', { value:langParts })
+                }, langParts),
+                page.setExtraHTTPHeaders({ 'Accept-Language': langParts[langParts.length-1] }),
+            ])
+            const oldInters = this._all || nonStreams
+            streams = nonStreams = null
+            this._all = [] // Call all initializers again, to re-attach event listeners.
+            this._agentInds = [] // Re-launch the step loop if we have agents.
+            await this.relink(...oldInters)
+            if (this.settings.homepage && this.settings.homepage !== 'about:blank')
+                // Browser crashes are far more frequent if we don't wait at least a bit.
+                await Promise.race([
+                    Promise.all([
+                        page.goto(this.settings.homepage, {waitUntil:'domcontentloaded'}).then(() => this.cdp.send('Page.resetNavigationHistory')).catch(doNothing),
+                        this.cdp.send('Page.resetNavigationHistory').catch(doNothing),
+                    ]),
+                    new Promise(then => setTimeout(then, 10000)),
+                ])
+            this._lastStepEnd = performance.now()
+        }
+    }
+    return streams
+})
 
 
 
