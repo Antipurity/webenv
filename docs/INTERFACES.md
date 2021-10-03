@@ -47,8 +47,9 @@ Defines settings.
 
 These include:
 
-- `homepage='about:blank'`: the URL to open a browser window to. (For example, set it to the RandomURL dataset.)
-- `simultaneousSteps=16`: how many steps are allowed to run at once (at most). Set to `1` to fully synchronize on each step, which makes visualization nicer but introduces a lot of stalling.
+- `homepage:'about:blank'`: the URL to open a browser window to. (For example, set it to the RandomURL dataset.)
+- `simultaneousSteps:16`: how many steps are allowed to run at once (at most). Set to `1` to fully synchronize on each step, which makes visualization nicer but introduces a lot of stalling.
+- If for `webenv.browser`, `width:640` and `height:480`.
 
 ```js
 webenv.userAgent(agent = 'WebEnv agent <https://github.com/Antipurity/webenv>')
@@ -127,15 +128,6 @@ These interfaces define numbers that agents can see.
 All observations are numbers in `-1`..`1`.
 
 (With `webenv.webView()`, most of these can be easily visualized for debugging.)
-
-```js
-webenv.viewport()
-webenv.viewport({ width=640, height=480 })
-```
-
-Sets the size of the layout viewport.
-
-A pre-requisite for reading images.
 
 ```js
 webenv.image()
@@ -393,7 +385,6 @@ webenv.defaults = [
     webenv.fetchSlice(),
     webenv.webView(),
     webenv.filter(null, 'cached'),
-    webenv.viewport(), // 640×480
     webenv.const(),
     webenv.loopback(),
     webenv.frameTime(),

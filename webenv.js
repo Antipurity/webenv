@@ -50,44 +50,6 @@ Env's methods:
 
 
 
-// TODO: ...Can this be a part of `.settings`, so that we overwhelm users less? Only `webenv.browser` would react, right?
-exports.viewport = docs(`\`webenv.viewport(opt)\`
-Sets viewport size on init.
-Pass in a JS object with at least \`{ width:640, height:480 }\` (https://pptr.dev/#?product=Puppeteer&version=v5.2.1&show=api-pagesetviewportviewport), or nothing.`, function viewport(opt = {}) {
-    if (!opt || typeof opt != 'object') throw new Error('Not an object')
-    if (opt.width == null) opt.width = 640
-    if (opt.height == null) opt.height = 480
-    return {
-        boundsArgs:null, prevPage:null,
-        async init(stream) {
-            // Resize browser window (for tab capture), and set viewport.
-            if (!stream.cdp) return
-            if (stream.width && stream.width !== opt.width || stream.height && stream.height !== opt.height)
-                throw new Error('Can only have one viewport')
-                stream.width = opt.width
-            stream.height = opt.height
-            const targetId = (await stream.cdp.send('Target.getTargets')).targetInfos[0].targetId
-            const windowId = (await stream.cdp.send('Browser.getWindowForTarget', {targetId})).windowId
-            await stream.cdp.send('Browser.setWindowBounds', this.boundsArgs = {
-                bounds: {
-                    width: stream.width + stream._chromeWidth,
-                    height: stream.height + stream._chromeHeight,
-                },
-                windowId,
-            })
-            return stream.page.setViewport(opt)
-        },
-        read(stream, obs) {
-            if (!stream.cdp) return
-            if (this.prevPage !== stream.page || Math.random() < .01)
-                stream.cdp.send('Browser.setWindowBounds', this.boundsArgs).catch(doNothing)
-            this.prevPage = stream.page
-        },
-    }
-})
-
-
-
 exports.const = docs(`\`webenv.const(value = 1, obsCount = 1, actCount = 0)\`
 Tired of coding bias neurons?
 Just create a constant input.
@@ -125,10 +87,10 @@ Slloooooooow.
 `, function image(maskColor = 0xfafafa) {
     return [observers, {
         init(stream) {
-            this.reads = stream.width * stream.height * 3
+            this.reads = stream.settings.width * stream.settings.height * 3
         },
         reads:'computed',
-        observerInput(stream) { return { w:stream.width, h:stream.height, mask:maskColor } },
+        observerInput(stream) { return { w:stream.settings.width, h:stream.settings.height, mask:maskColor } },
         observer: function(input, video, audio, obs) {
             const d = video.grab(0, 0, input.w, input.h, input.w, input.h)
             const maskColor = input.mask
@@ -141,7 +103,7 @@ Slloooooooow.
                 obs[to++] = masked ? NaN : (2*B - 255) / 255
             }
         },
-        visState(stream) { return { width:stream.width, height:stream.height } },
+        visState(stream) { return { width:stream.settings.width, height:stream.settings.height } },
         visualize:visualizePageScreenshot,
     }]
 })
@@ -199,7 +161,7 @@ Provide a mask color (0xRRGGBB) to mask exact matches, or \`null\` to disable th
         observerInput(stream) { // TODO: ...Observer input is only per-frame because we have mouseX/mouseY, isn't it... If we make it in-extension, we can make it at-init, right? (And pass in `stream` instead of `page`.) But we do want to use CDP to dispatch mouse events if we can, so, maybe both (but still have a less expensive way to send observer data than JSON-serialized objects full of constants)...
             let x = stream.page.mouseX || 0, y = stream.page.mouseY || 0
             x -= x % quantize, y -= y % quantize
-            return { x, y, w:width, h:height, mask:maskColor, maxW: stream.width, maxH:stream.height }
+            return { x, y, w:width, h:height, mask:maskColor, maxW: stream.settings.width, maxH:stream.settings.height }
         },
         observer: function(input, video, audio, obs) {
             const x = input.x - ((input.w / 2) | 0), y = input.y - ((input.h / 2) | 0)
@@ -241,7 +203,7 @@ Provide a mask color (0xRRGGBB) to mask exact matches, or \`null\` to disable th
         observerInput(stream) {
             let x = stream.page.mouseX || 0, y = stream.page.mouseY || 0
             x -= x % quantize, y -= y % quantize
-            return { x, y, w:diam, h:diam, mask:maskColor, maxW: stream.width, maxH: stream.height }
+            return { x, y, w:diam, h:diam, mask:maskColor, maxW: stream.settings.width, maxH: stream.settings.height }
         },
         observer: (''+function observeFovea(input, video, audio, obs) {
             if (!observeFovea.invert) { // Prepare data, if not prepared already.
@@ -994,7 +956,8 @@ exports.triggers.homepage = docs(`\`webenv.triggers([webenv.triggers.homepage])\
 Back to homepage, please.
 `, function(stream) {
     if (!stream.page) return
-    stream.page.mouseX = stream.width/2 | 0, stream.page.mouseY = stream.height/2 | 0 // Center the mouse too.
+    stream.page.mouseX = stream.settings.width/2 | 0
+    stream.page.mouseY = stream.settings.height/2 | 0 // Center the mouse too.
     return stream.page.goto(stream.settings.homepage || 'about:blank', {waitUntil:'domcontentloaded'}).catch(doNothing)
 })
 
@@ -1107,7 +1070,8 @@ Exposes all mouse-related actions.
     if (opt.absolute !== false)
         inters.push({
             init(stream) {
-                stream.page.mouseX = stream.width/2 | 0, stream.page.mouseY = stream.height/2 | 0
+                stream.page.mouseX = stream.settings.width/2 | 0
+                stream.page.mouseY = stream.settings.height/2 | 0
             },
             writes:2,
             write(stream, pred, act) {
@@ -1116,8 +1080,8 @@ Exposes all mouse-related actions.
                 const ax = Math.max(-1, Math.min(act[0], 1))
                 const ay = Math.max(-1, Math.min(act[1], 1))
                 p.mouse.move(
-                    p.mouseX = (ax + 1) * .5 * (stream.width-1) | 0,
-                    p.mouseY = (ay + 1) * .5 * (stream.height-1) | 0,
+                    p.mouseX = (ax + 1) * .5 * (stream.settings.width-1) | 0,
+                    p.mouseY = (ay + 1) * .5 * (stream.settings.height-1) | 0,
                 ).catch(doNothing)
             },
         })
@@ -1125,7 +1089,8 @@ Exposes all mouse-related actions.
         const sensitivity = opt.relative
         inters.push({
             init(stream) {
-                stream.page.mouseX = stream.width/2 | 0, stream.page.mouseY = stream.height/2 | 0
+                stream.page.mouseX = stream.settings.width/2 | 0
+                stream.page.mouseY = stream.settings.height/2 | 0
             },
             writes:2,
             write(stream, pred, act) {
@@ -1134,8 +1099,8 @@ Exposes all mouse-related actions.
                 const ax = Math.max(-1, Math.min(act[0], 1))
                 const ay = Math.max(-1, Math.min(act[1], 1))
                 p.mouse.move(
-                    p.mouseX = Math.max(0, Math.min(p.mouseX + sensitivity * ax, stream.width-1)) | 0,
-                    p.mouseY = Math.max(0, Math.min(p.mouseY + sensitivity * ay, stream.height-1)) | 0,
+                    p.mouseX = Math.max(0, Math.min(p.mouseX + sensitivity * ax, stream.settings.width-1)) | 0,
+                    p.mouseY = Math.max(0, Math.min(p.mouseY + sensitivity * ay, stream.settings.height-1)) | 0,
                 ).catch(doNothing)
             },
         })
@@ -1804,8 +1769,9 @@ Identify yourself and include contact information to overcome some of the prejud
 exports.settings = docs(`\`webenv.settings(settings)\`
 Defines settings.
 These include:
-- \`homepage='about:blank'\`: the URL to open a browser window to. (For example, set it to the RandomURL dataset.)
-- \`simultaneousSteps=16\`: how many steps are allowed to run at once (at most). Set to \`1\` to fully synchronize on each step, which makes visualization nicer but introduces a lot of stalling.
+- \`homepage:'about:blank'\`: the URL to open a browser window to. (For example, set it to the RandomURL dataset.)
+- \`simultaneousSteps:16\`: how many steps are allowed to run at once (at most). Set to \`1\` to fully synchronize on each step, which makes visualization nicer but introduces a lot of stalling.
+- If for \`webenv.browser\`, \`width:640\` and \`height:480\`.
 `, function(settings) { return settings.homepage, { settings } })
 
 
@@ -1844,8 +1810,8 @@ Other interfaces that want this must define:
                     state.obsInds.push(i),
                     observers.push({read:''+o.observer, offset:stream._allReadOffsets[i], length:o.reads || 0})
             }
-            const w = stream.width || 0
-            const h = stream.height || 0
+            const w = stream.settings.width || 0
+            const h = stream.settings.height || 0
             await stream.extensionPage.evaluate((o,w,h) => updateObservers(o,w,h), observers, w, h)
         }
         const obsInds = state.obsInds
@@ -2238,7 +2204,26 @@ To write new interfaces, look at the pre-existing interfaces.
     })(interfaces)
     interfaces = null
     if (nonStreams.length) {
+        let windowId = null, chromeWidth = 0, chromeHeight = 0
+        nonStreams.push({ // Counteract rowdy users.
+            prevPage: null,
+            read(stream, obs) {
+                if (!stream.cdp) return
+                if (this.prevPage !== stream.page || Math.random() < .01) resizeWindow(stream)
+                this.prevPage = stream.page
+            },
+        })
         streams.push(streamPrototype.create(relaunch))
+
+        function resizeWindow(stream) {
+            return stream.cdp.send('Browser.setWindowBounds', {
+                windowId,
+                bounds: {
+                    width: stream.settings.width + chromeWidth,
+                    height: stream.settings.height + chromeHeight,
+                },
+            }).catch(doNothing)
+        }
         async function relaunch() {
             // Close the previous browser.
             if (this.browser) {
@@ -2287,9 +2272,8 @@ To write new interfaces, look at the pre-existing interfaces.
             const langParts = this.lang.split(',')
             ;[ // Thanks, async/await, very helpful for efficiency via parallelization. (Sarcasm.)
                 this.cdp,
-                this._chromeWidth, // TODO: ...Where are these used, apart from `viewport`? And can we not (rather, can we make `viewport` perform that for us)? ...Too lazy.
-                // ...Actually, maybe we should essentially integrate `viewport` into here (by reading .settings post-init), also adding an interface that sometimes resizes the browser window to appropriate width/height.
-                this._chromeHeight,
+                chromeWidth,
+                chromeHeight,
                 this.extensionPage,
             ] = await Promise.all([
                 page.target().createCDPSession(),
@@ -2308,6 +2292,14 @@ To write new interfaces, look at the pre-existing interfaces.
             this._all = [] // Call all initializers again, to re-attach event listeners.
             this._agentInds = [] // Re-launch the step loop if we have agents.
             await this.relink(...oldInters)
+
+            // Set the viewport.
+            if (this.settings.width == null) this.settings.width = 640
+            if (this.settings.height == null) this.settings.height = 480
+            const targetId = (await this.cdp.send('Target.getTargets')).targetInfos[0].targetId
+            windowId = (await this.cdp.send('Browser.getWindowForTarget', {targetId})).windowId
+            await resizeWindow(this)
+
             if (this.settings.homepage && this.settings.homepage !== 'about:blank')
                 // Browser crashes are far more frequent if we don't wait at least a bit.
                 await Promise.race([
@@ -2337,7 +2329,6 @@ exports.defaults = [
     exports.fetchSlice(),
     exports.webView(),
     exports.filter(null, 'cached'),
-    exports.viewport(),
     exports.const(),
     exports.loopback(),
     exports.frameTime(),
