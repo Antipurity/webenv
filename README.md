@@ -10,6 +10,8 @@ Agents interact with the Web by continuously receiving observations and sending 
 
 Setting up an infinite loop that allows useful learning in any situation is essential for the most interesting applications of intelligence. WebEnv provides a clean interface to the real world, while discouraging practices that act as barriers to learning.
 
+Have you ever been annoyed by how AI articles misrepresent progress in AI to average readers, making it seem like AI is a singular entity that can do all these amazing tasks and is about to take over their jobs? That's because the reality is that tasks are separated by years of research, not a quick "AI, please do this" prompt. If those articles were written about models in fully general environments such as WebEnv, that impression would have been much more accurate.
+
 ## Getting started
 
 Using [NPM](https://www.npmjs.com/), as you commonly do in machine learning, install the `webenv-ml` package:
@@ -39,13 +41,11 @@ No constraints to make learning easier. Brush against raw generality.
 - Universality: WebEnv is able to include all ML datasets and environments, behavior of ML solutions in them, an agent's own behavior, and most of human ingenuity. Instead of creating a new agent for each task, re-use the same one for all. When data gets too big to memorize, generality is the only solution.
     - Open-ended: one way to describe general intelligence is "good zero-shot performance on unseen tasks", and the most unseen tasks are ones that do not exist yet. Web pages can call `directScore` to evaluate your agent, creating an expansive set of maximization tasks, which will only get bigger with time.
 
-- Focus on throughput: combining all formats introduces a non-insignificant representation overhead, so WebEnv is fast and robust to compensate. (TBD: trivial scalability: simply write computations, not interfaces to data and users, no matter the batch size.)
+- Efficiency: combining all formats introduces a non-insignificant representation overhead, so WebEnv is fast and robust to compensate. It even supports batch sizes of more than `1`: simply write computations, not interfaces to data and users.
     - Real-time: agents must focus on their throughput and frame-time consistency too. This presents novel challenges to many ML frameworks (namely, efficient BPTT handling is pain, easier to use synthetic gradients).
 
 - Self-determination: under constant pressure to represent essentially-infinitely-complex interactions with data and goals, only the most complete representations will survive, creating mesa-optimizers: aware of everything, general, quickly adaptable, and learned. Research learned agency at scale.
     - Understandable: general intelligence can only be guided and judged by general intelligence, so interfaces (mostly) share a human-usable format, and observations and their predictions are easy to inspect visually. This also makes it easy to ensure AI safety. (TBD: a built-in interface for humans to connect their browsing to agents with one click, for easy creation of AGI-as-a-service platforms.)
-
-Have you ever been annoyed by how AI articles misrepresent progress in AI to average readers, making it seem like AI is a singular entity that can do all these amazing tasks and is about to take over their jobs? That's because the reality is that tasks are separated by years of research, not a quick "AI, please do this" prompt. If those articles were written about models in fully general environments such as WebEnv, that impression would have been much more accurate.
 
 ## Caveats
 

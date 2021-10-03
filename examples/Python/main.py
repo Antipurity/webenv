@@ -110,7 +110,7 @@ def loss(pred, got, obs, act_len):
       pred = pred + recurrent.webenv_merge(torch.zeros_like(pred), obs, 0.)
   L = obs_loss(pred, got) / hparams['loss_divisor']
   if hparams['console']:
-    print(L.cpu().detach().numpy())
+    print(obs.shape[0], L.cpu().detach().numpy()) # TODO
   if hparams['tensorboard']:
     writer.add_scalar('Loss', L, i-1)
   if return_model is not None or max_model is not None:
@@ -151,8 +151,11 @@ webenv.webenv(
   [
     'we.settings',
     '{ homepage:"about:blank" }', # TODO: https://www.google.com/
+    # Note: ideally, the homepage would be a redirector to random websites.
+    #   (Install & use the RandomURL dataset if you can. No pre-existing website is good enough.)
   ],
-  # Note: ideally, the homepage would be a redirector to random websites.
-  #   One that won't mark the agent as a bot.
-  #   (Install & use the RandomURL dataset if you can. No pre-existing website is good enough.)
+  ['we.browser'], # TODO
+  ['we.browser'], # TODO
+  ['we.browser'], # TODO
+  ['we.browser'], # TODO
   webenv_path=we_p)

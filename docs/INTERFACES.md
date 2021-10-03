@@ -2,6 +2,18 @@ This documents what interfaces are available for use in WebEnv.
 
 Think of this as a wish-list of what you want your agents to use.
 
+# Contents
+
+- [Contents](#contents)
+- [Entry point](#entry-point)
+- [Essentials](#essentials)
+- [Batch size](#batch-size)
+- [Observations](#observations)
+- [Actions](#actions)
+- [Utilities](#utilities)
+- [Defaults](#defaults)
+- [Contributing](#contributing)
+
 # Entry point
 
 To initialize a web environment:
@@ -50,6 +62,7 @@ These include:
 - `homepage:'about:blank'`: the URL to open a browser window to. (For example, set it to the RandomURL dataset.)
 - `simultaneousSteps:16`: how many steps are allowed to run at once (at most). Set to `1` to fully synchronize on each step, which makes visualization nicer but introduces a lot of stalling.
 - If for `webenv.browser`, `width:640` and `height:480`.
+- If for `webenv.browser`, `userProfile`, which is a function from stream to the user profile directory. The default is `webenv/puppeteer-chrome-profile-INDEX`.
 
 ```js
 webenv.userAgent(agent = 'WebEnv agent <https://github.com/Antipurity/webenv>')
@@ -120,6 +133,22 @@ This exposes the `_fetchLocalFileSlice` function; see [`/tools/data/fetchSlice.j
 Reading the whole dataset into memory is often unfeasible, so, slicing is needed.
 
 Some datasets have a fixed sample size, some separate their samples with newlines. Periodically fetch big slices and handle what you have.
+
+# Batch size
+
+By default, WebEnv runs only one browser.
+
+To run more, use:
+
+```js
+webenv.browser(...interfaces)
+```
+
+Puppeteers a browser to make it into a data stream.
+
+Ideally, you should not treat observations/actions as anything other than vectors of approximately `-1`..`1` 32-bit floats. (Not necessarily square, not necessarily an image. Very likely multimodal.)
+
+Top-level interfaces given to `webenv.init(…)` are copied into all streams, so adding extra browsers can be done as simply `we.init(…, we.browser(), we.browser())` (which runs 2).
 
 # Observations
 
@@ -325,6 +354,8 @@ Makes the actual agent reside in another process than this environment, connecte
 
 Useful for isolation, parallelization, and bridging to other languages.
 
+If one stream in an env has this, then all other streams there must have this too.
+
 For protocol details, refer to runtime documentation: `require('webenv').io.docs`. (In short, agents get stream-index and observations and action-length, and send stream-index and predictions and actions. No compression.)
 
 ```js
@@ -403,8 +434,8 @@ webenv.defaults = [
 
 This defines a very simple environment for agents that have a reasonable execution time per step even with non-high-end Nvidia hardware.
 
-# Creating your own interfaces
+# Contributing
 
 Have another application in mind? Contribute.
 
-[Look at how interfaces are implemented](../webenv.js), and/or understand the basic principles, by looking at runtime documentation `require('webenv').init.docs`.
+[Look at how interfaces are implemented](../webenv.js), and/or understand the basic principles, by looking at runtime documentation `require('webenv').init.docs` or `require('webenv').browser.docs`.

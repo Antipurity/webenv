@@ -8,24 +8,37 @@ const Observations = Float32Array
 
 exports.init = docs(`Function. Pass in numeric streams and/or interfaces, receive a promise of an object that manages bidirectional numeric data streams: Env.
 
-See \`webenv.browser\` for an example of a type of stream. For convenience, all top-level non-stream interfaces are considered to be in their own \`webenv.browser\`.
+See \`webenv.browser\` for an example of a type of stream.
+All top-level non-stream interfaces will be copied into all streams.
 
 (Uniting many streams in one allows agents to process streams in batches, which is good for performance in master-slave computing architectures such as CPU+GPU.)
 
 Env's methods:
 - \`.reinit(...streams)\`: for dynamically changing the set of streams/interfaces; \`await\` it.
-    - To modify \`env\`'s streams, use \`await env.reinit(MODIFY_ARRAY(env.streams))\`.
+    - To modify \`env\`'s streams, use \`await env.reinit(MODIFY(env.streams))\`.
     - To close streams without closing NodeJS, use \`await env.reinit()\`.
 `, async function init(...interfaces) {
     const env = {
         streams: [],
+        interfaces: [],
         _reinitLock: null,
         async reinit(...interfaces) {
             let p = this._reinitLock, then
             this._reinitLock = new Promise(f => then=f)
             await p // Lock.
             try {
-                const next = await exports.browser(...interfaces)
+                // Remember the top-level interfaces, in `.interfaces`.
+                const next = [], nonStreams = []
+                await (async function track(o) {
+                    if (o instanceof Promise) o = await o
+                    if (Array.isArray(o)) return Promise.all(o.map(track))
+                    if (!o || typeof o != 'object') throw new Error('All must be webenv streams/interfaces, got '+o)
+                    if (Object.getPrototypeOf(o) === streamPrototype) next.push(o)
+                    else nonStreams.push(o)
+                })(interfaces)
+                this.interfaces = nonStreams
+                if (!next.length)
+                    next.push(this.streams[0] || (await exports.browser()))
                 const newStreams = [], preservedStreams = new Set
                 for (let s of next) { // Preserve the new+old.
                     if (s.index !== null && s.env !== this)
@@ -39,8 +52,10 @@ Env's methods:
                         newStreams[i] = s.open(this, i)
                     }
                 // Close the old.
-                await Promise.all(this.streams.filter(s => !preservedStreams.has(s)).map(s => s.close()))
-                this.streams = newStreams
+                const removed = this.streams.filter(s => !preservedStreams.has(s))
+                await Promise.all(removed.map(s => s.close()))
+                removed.forEach(s => s.env = s.index = null)
+                this.streams = await Promise.all(newStreams)
                 return this
             } finally { then() }
         },
@@ -371,6 +386,11 @@ Other interfaces may define:
         end:0, interfaces:null,
         lastPred:null, // Not perfectly synchronized like a queue would be, but who cares. Sync requires copies anyway, so, too slow.
         init(stream) {
+            // TODO: Store the server on `stream.env`, not `this`.
+            // TODO: ...Don't even create the server here, instead, make the env create it for us; port & HTTPS options should be settings.
+            //   TODO: On env, have the method `.listen(path, func(req, res))→cancelFunc` (which checks all paths, and returns 404 if none match) (if path is already present, just ref-count). Here, use it to register pages & observations.
+            // TODO: Expect stream ID in all URLs except for top-level ones, which should dispatch to all others (HTML page: a selection of streams and an <iframe> of what we picked; observations: send events on relink that describe all the current stream indices.)
+            // TODO: Make the docs note that all `.webView`s in an env should be shared.
             if (!this.server) {
                 this.server = server((req, res) => {
                     if (req.url === '/'+path) {
@@ -401,9 +421,9 @@ Other interfaces may define:
         read(stream, obs) {
             const to = this.connections
             if (!to.length) return
-            if (this.interfaces !== stream._all) {
+            if (this.interfaces !== stream.interfaces) {
                 sendRelink(stream, to)
-                this.interfaces = stream._all
+                this.interfaces = stream.interfaces
             }
             sendObservation(obs, this.lastPred, to)
         },
@@ -518,8 +538,10 @@ function swapBytes(buf, bpe = 4) {
 exports.io = docs(`\`webenv.io(intSize = 0)\`
 Makes the actual agent reside in another process, connected through standard IO. (Useful for isolation and parallelization.)
 
+If one stream in an env has this, then all other streams there must have this too.
+
 Communication protocol details, simple for easy adoption:
-- Specify \`intSize\` to decrease precision and increase throughput: \`0\` if all values use float32, \`1\` if int8, \`2\` if int16.
+- Specify \`intSize\` to decrease precision and increase throughput: \`0\` if all values use float32, \`1\` if int8, \`2\` if int16. (Indices/lengths will still use unsigned int32.)
     - To decode int8, \`v = x === -128 ? NaN : v / 127\`.
     - To encode int8, \`x = v !== v ? -128 : round(clamp(v, -1, 1) * 127)\`.
     - To decode int16, \`v = x === -65536 ? NaN : x / 32767\`.
@@ -534,7 +556,7 @@ Communication protocol details, simple for easy adoption:
         - then observation (that many values),
         - then u32 expected action length (0xFFFFFFFF to indicate that this stream has ended, and its index will be reused later).
     - (The agent schedules a computation, which goes from observations to actions.)
-        - (The agent should replace NaN observations with its own predictions of them. This is in-agent for differentiability.)
+        - (The agent should replace NaN observations with its own predictions of them. This is done in-agent for differentiability.)
     - In response, the agent sends:
         - u32 stream index,
         - u32 prediction length (feel free to make this 0, which would disable its visualization),
@@ -551,7 +573,7 @@ Communication protocol details, simple for easy adoption:
     if (intSize !== 0 && intSize !== 1 && intSize !== 2) throw new Error('Bad intSize')
     const cons = intSize === 0 ? Float32Array : intSize === 1 ? Int8Array : Int16Array
     const thens = [], reqs = []
-    let initialized = false
+    let writeLock = null // No torn writes.
     function onDrain() {
         thens.forEach(f => f()), thens.length = 0
     }
@@ -568,10 +590,39 @@ Communication protocol details, simple for easy adoption:
             reqs.push(len, resolve), onReadable()
         })
     }
+    async function readAllData(bs) {
+        // Infinitely read process.stdout.
+        while (true) {
+            const index = (await readFromStream(readBytes, 1, Uint32Array, bs))[0]
+            const predData = await readArray(cons, bs)
+            const actData = await readArray(cons, bs)
+            const s = io.env.streams[index]
+            if (!s) continue
+            const q = s._dataQueue
+            const item = [predData, actData]
+            if (q.items.length > s.settings.simultaneousSteps) continue
+            if (q.waiting.length) // Resolve the first reader.
+                q.waiting.shift()(item)
+            else // Allow others to resolve the item.
+                q.items.push(item)
+        }
+    }
+    async function getDataQueueItem(stream, dont = false) {
+        const q = stream._dataQueue
+        if (dont) return
+        if (!q.items.length)
+            return await new Promise(then => q.waiting.push(then))
+        return items.shift()
+    }
     return {
         obsCoded: new cons(0),
         async init(stream) {
-            if (initialized) return // STDIO is once per process.
+            if (io.env && io.env !== stream.env)
+                throw new Error('STDIO is once per process, but got another WebEnv trying to get in on the action')
+            if (!stream._dataQueue)
+                stream._dataQueue = { items:[], waiting:[] }
+            if (io.env) return // STDIO is once per process.
+            io.env = stream.env
             process.stdin.on('readable', onReadable)
             const magic = (await readFromStream(readBytes, 1, Uint32Array, false))[0]
             if (magic === 0x01020304)
@@ -582,38 +633,32 @@ Communication protocol details, simple for easy adoption:
                 throw new Error('Bad magic number:', magic)
             process.stdout.on('drain', onDrain)
             process.stdout.on('error', doNothing) // Ignore "other end has closed" errors.
-            initialized = true
+            readAllData(this.byteswap) // Fill those data queues.
         },
         async deinit(stream) {
+            if (!io.env) return
             // Send a dealloc event.
-            let oldW = stream.env.writeLock, thenW;
-            stream.env.writeLock = new Promise(f => thenW=f);  await oldW
+            let oldW = writeLock, thenW
+            writeLock = new Promise(f => thenW=f);  await oldW
             const to = process.stdout, bs = this.byteswap
-            await writeToStream(to, 0, bs, thens) // TODO: Write the real index, once we know those.
+            await writeToStream(to, stream.index, bs, thens)
             await writeToStream(to, 0, bs, thens)
             await writeToStream(to, 0xFFFFFFFF, bs, thens)
             thenW()
         },
         async agent(stream, obs, pred, act) {
-            // Write observation, atomically.
-            if (!initialized) return true
-            let oldW = stream.env.writeLock, thenW;
-            stream.env.writeLock = new Promise(f => thenW=f);  await oldW
+            // Write observation, atomically (no torn writes).
+            if (!io.env) return true
+            let oldW = writeLock, thenW
+            writeLock = new Promise(f => thenW=f);  await oldW
             const to = process.stdout, bs = this.byteswap
-            await writeToStream(to, 0, bs, thens) // TODO: Write the real index, once we know those.
+            await writeToStream(to, stream.index, bs, thens)
             await writeArray(to, this.obsCoded = encodeInts(obs, this.obsCoded), bs)
             await writeToStream(to, act.length, bs, thens)
             thenW()
-            // Read prediction then action, atomically (no torn reads).
-            let oldR = stream.env.readLock, thenR;
-            stream.env.readLock = new Promise(f => thenR=f);  await oldR
-            const index = (await readFromStream(readBytes, 1, Uint32Array, bs))[0]
-            if (index !== 0) // TODO: To receive pred+act per-stream, read pred+act into queues as they arrive, and here, take an item from the queue, waiting until available.
-                throw new Error('Got a non-zero stream index: ' + index)
-            const predData = await readArray(cons, bs)
-            const actData = await readArray(cons, bs)
+            // Read from our data queue.
+            const [predData, actData] = await getDataQueueItem(stream)
             decodeInts(predData, pred), decodeInts(actData, act)
-            thenR()
             return true
         },
     }
@@ -745,7 +790,7 @@ In a page, \`directLink(PageAgent, Inputs = 0, Outputs = 0)\` will return (a pro
                 const obsHandle = await p.evaluateHandle(sz => new Float32Array(sz), outs)
                 const toBinaryStringHandle = await p.evaluateHandle('('+toBinaryString+')')
                 const fromBinaryStringHandle = await p.evaluateHandle('('+fromBinaryString+')')
-                await stream.relink(stream._all, {
+                await stream.relink(stream.interfaces, {
                     queue:[], // This can't be a real word.
                     priority:-1000,
                     reads:outs,
@@ -875,8 +920,7 @@ Runs a func on an interval, with page and env as args (for example, use \`webenv
 `, function(func, ms = 60000) {
     let id = null
     return {
-        // TODO: Make all triggers accept just `stream`, not page & env.
-        init(stream) { clearInterval(id), id = setInterval(func, ms, stream.page, stream) },
+        init(stream) { clearInterval(id), id = setInterval(func, ms, stream) },
         deinit(stream) { clearInterval(id), id = null },
     }
 })
@@ -900,7 +944,6 @@ For example: \`webenv.triggers([page => page.goto('https://www.youtube.com/watch
     const framesUntilReady = new Uint8Array(maxAtOnce || triggers)
     return {
         init(stream) {
-            this.env = stream // TODO: After `write` is better, do not have this.
             const p = stream.page
             if (!resetOnNewPage || !p) return
             p.on('framenavigated', frame => frame === p.mainFrame() && prev.fill(0))
@@ -1001,9 +1044,8 @@ Must only be used with \`webenv.filter\`, with a string \`cache\` path.
 
 (This is a very open-ended action. If the agent's loss averages outcomes, then predictions with this trigger would be quite gray and nonsensical; make sure to maximize plausibility instead, so particular outcomes don't get penalized.)
 `, async function(stream) {
-    if (!stream.page) return
-    // TODO: Set .cache on stream, not stream.page.
-    if (typeof stream.page.cache !== 'string') throw new Error('But there is no .cache')
+    if (!stream.page || stream.page.cache === undefined) return
+    if (typeof stream.page.cache !== 'string') throw new Error('But the stream page has no .cache')
     const maxAttempts = 32 // Why maintain a separate main-URL index when you can just retry.
     const fs = require('fs/promises'), path = require('path')
     const navs = new Array(maxAttempts).fill(stream.page.cache).map(getRandomNav)
@@ -1772,7 +1814,8 @@ These include:
 - \`homepage:'about:blank'\`: the URL to open a browser window to. (For example, set it to the RandomURL dataset.)
 - \`simultaneousSteps:16\`: how many steps are allowed to run at once (at most). Set to \`1\` to fully synchronize on each step, which makes visualization nicer but introduces a lot of stalling.
 - If for \`webenv.browser\`, \`width:640\` and \`height:480\`.
-`, function(settings) { return settings.homepage, { settings } })
+- If for \`webenv.browser\`, \`userProfile\`, which is a function from stream to the user profile directory. The default is \`webenv/puppeteer-chrome-profile-INDEX\`.
+`, function(settings) { return { settings } })
 
 
 
@@ -1834,18 +1877,19 @@ Other interfaces that want this must define:
 // `Object.freeze`ing this would have been good, if it didn't prevent children from defining their own `lang` and such.
 const streamPrototype = docs(`This encapsulates all information about one stream of data.
 
-To create a new stream from this prototype, use \`streamPrototype.create(relaunch = null).open(env, index)\`.
+To create a new stream from this prototype, use \`stream = await streamPrototype.create(relaunch = null).open(env, index)\`.
 
 The result is a promise for the environment, which is an object with:
-- \`relink(...interfaces)\`: changes interfaces at run-time. Agents might get confused, since they likely rely on positions. (Prefer \`result.relink(MODIFY(result._all))\` to remembering the initial interfaces, to handle dynamic links.)
+- \`await relink(...interfaces)\`: changes interfaces at run-time. Agents might get confused, since they likely rely on positions. (Use \`stream.relink(MODIFY(stream.interfaces))\` to handle dynamic links.)
 - \`reads:Number\`: how many observations are available as floats.
 - \`writes:Number\`: how many actions are available as floats.
 - Low-level:
-    - \`read()=>Promise<Observations>\`: returns observations as -1…1 32-bit floats, NaN where not provided.
-    - \`write(Actions)=>Promise<void>\`: accepts the numeric actions, and performs them.
-- \`close()=>Promise<void>\`: ends this stream. \`env\` is not notified.
+    - \`await read()\`: returns observations as -1…1 32-bit floats, NaN where not provided.
+    - \`await write(Actions)\`: accepts the numeric actions, and performs them.
+- \`await close()\`: ends this stream. \`env\` is not notified.
 `, {
     // Public interface.
+    interfaces: null,
     env: null, index: null,
     reads: 0,
     writes: 0,
@@ -1853,7 +1897,7 @@ The result is a promise for the environment, which is an object with:
     // May always remain null, if using a non-Puppeteer backend.
     browser: null, page: null, cdp: null, extensionPage: null,
 
-    // Parameters.
+    // Non-`settings` parameters, hidden from view.
     lang: 'en-US,en',
     lowball: .95,
     maxRelaunchAttempts: 32,
@@ -1867,10 +1911,19 @@ The result is a promise for the environment, which is an object with:
     },
     async open(env, index) {
         // Public interface. (More efficient to set this to defaults than to have many object shapes.)
+        this.interfaces = null
         this.env = env, this.index = index
         this.reads = 0, this.writes = 0
         this.settings = Object.create(null)
         this.browser = null, this.page = null, this.cdp = null, this.extensionPage = null
+        // Default settings.
+        Object.assign(this.settings, {
+            homepage: 'about:blank',
+            simultaneousSteps: 16,
+            width: 640,
+            height: 480,
+            userProfile: stream => require('path').join(__dirname, 'puppeteer-chrome-profile-' + stream.index),
+        })
         // Private state.
         this._stall = null // A promise when a `relaunch` is in progress.
         this._unlink = new Set
@@ -1944,17 +1997,22 @@ The result is a promise for the environment, which is an object with:
         if (this._all)
             for (let i = 0; i < this._all.length; ++i)
                 oldIndices.set(this._all[i], i)
+        const ownInterfaces = []
 
         // Flatten the interface tree.
         const all = [], indices = new Map
-        await (async function track(o) {
+        let own
+        async function track(o) {
             if (o instanceof Promise) o = await o
             if (Array.isArray(o)) return Promise.all(o.map(track))
             if (!o || typeof o != 'object') throw new Error('All must be webenv interfaces, got '+o)
             if (indices.has(o)) return // De-duplicate.
             indices.set(o, all.length)
             all.push(o)
-        })(interfaces)
+            if (own) ownInterfaces.push(o)
+        }
+        own = false, await track(this.env.interfaces)
+        own = true, await track(interfaces)
         // Respect priorities, but do not shuffle needlessly.
         all.sort((a,b) => ((b.priority || 0) - (a.priority || 0)) || (indices.get(a) - indices.get(b)))
         const rInds = [], wInds = [], agentInds = []
@@ -2052,6 +2110,7 @@ The result is a promise for the environment, which is an object with:
 
         // Finalize what we computed here.
         this.reads = reads, this.writes = writes
+        this.interfaces = ownInterfaces
         this._allReadOffsets = allReadOffsets, this._allWriteOffsets = allWriteOffsets
         this._all = all, this._obsInds = rInds, this._actInds = wInds, this._agentInds = agentInds, 
         this._obsFloats = obsFloats
@@ -2132,8 +2191,9 @@ The result is a promise for the environment, which is an object with:
                 // Do not let exceptions kill us.
             } finally {
                 // Unlink the agents that do not want to live on.
+                //   (Unless they're copied from the top-level, because, too much work to support that.)
                 if (res._unlink.size) {
-                    let prevStall = res._stall;  res._stall = res.relink(res._all.filter(o => !res._unlink.has(o))), res._unlink.clear();  await prevStall
+                    let prevStall = res._stall;  res._stall = res.relink(res.interfaces.filter(o => !res._unlink.has(o))), res._unlink.clear();  await prevStall
                     prevStall = res._stall;  res._stall = null;  await prevStall
                 }
             }
@@ -2172,8 +2232,6 @@ async function closeAllPagesExcept(browser, page) {
 
 
 
-// TODO: Test with 2+ browsers (will probably encounter `.webView` problems, and `.io` problems; should fix them before many-browser tests).
-// TODO: Into INTERFACES.md.
 exports.browser = docs(`\`webenv.browser(...interfaces)\`
 Creates a data stream from a 'Puppeteer'ed browser.
 
@@ -2190,129 +2248,115 @@ To write new interfaces, look at the pre-existing interfaces.
     - \`.init(stream)\`, \`.deinit(stream)\` (neither is called on browser relaunching, except on new/removed interfaces);
     - \`.reads:Number\`, \`.read(stream, obs)\` (modify \`obs\` in-place, do not read);
     - \`.writes:Number\`, \`.write(stream, pred, act)\` (\`pred\` can predict the next read \`obs\`; do read from \`act\` and act on that, do not write);
-    - \`.agent(stream, obs, pred, act)=>continues\` (return false to unlink the agent) (to prevent torn writes, there should only be one agent);
+    - \`.agent(stream, obs, pred, act)=>continues\` (return false to unlink the agent, unless it is at top-level) (to prevent torn writes, there should only be one agent);
     - \`priority:Number\` (for example, interfaces that read actions at write-time have priority of -1, to always go after action-fillers);
     All functions are potentially asynchronous, and will be \`await\`ed if needed.
 `, async function(...interfaces) {
-    let streams = [], nonStreams = []
-    await (async function track(o) {
-        if (o instanceof Promise) o = await o
-        if (Array.isArray(o)) return Promise.all(o.map(track))
-        if (!o || typeof o != 'object') throw new Error('All must be webenv streams/interfaces, got '+o)
-        if (Object.getPrototypeOf(o) === streamPrototype) streams.push(o)
-        else nonStreams.push(o)
-    })(interfaces)
-    interfaces = null
-    if (nonStreams.length) {
-        let windowId = null, chromeWidth = 0, chromeHeight = 0
-        nonStreams.push({ // Counteract rowdy users.
-            prevPage: null,
-            read(stream, obs) {
-                if (!stream.cdp) return
-                if (this.prevPage !== stream.page || Math.random() < .01) resizeWindow(stream)
-                this.prevPage = stream.page
+    let windowId = null, chromeWidth = 0, chromeHeight = 0
+    interfaces.push({ // Counteract rowdy users.
+        prevPage: null,
+        read(stream, obs) {
+            if (!stream.cdp) return
+            if (this.prevPage !== stream.page || Math.random() < .01) resizeWindow(stream)
+            this.prevPage = stream.page
+        },
+    })
+    return streamPrototype.create(relaunch)
+
+    function resizeWindow(stream) {
+        return stream.cdp.send('Browser.setWindowBounds', {
+            windowId,
+            bounds: {
+                width: stream.settings.width + chromeWidth,
+                height: stream.settings.height + chromeHeight,
             },
-        })
-        streams.push(streamPrototype.create(relaunch))
-
-        function resizeWindow(stream) {
-            return stream.cdp.send('Browser.setWindowBounds', {
-                windowId,
-                bounds: {
-                    width: stream.settings.width + chromeWidth,
-                    height: stream.settings.height + chromeHeight,
-                },
-            }).catch(doNothing)
-        }
-        async function relaunch() {
-            // Close the previous browser.
-            if (this.browser) {
-                const b = this.browser
-                this.browser = null
-                await b.close()
-            }
-
-            const ext = require('path').join(__dirname, 'extension')
-            const dataDir = require('path').join(__dirname, 'puppeteer-chrome-profile')
-
-            // Remove folders that may be problematic for long-term stability. (Things never just work.)
-            const fs = require('fs')
-            function rm(...p) {
-                const path = require('path').join(dataDir, ...p)
-                return new Promise(then => fs.rm(path, { force:true, recursive:true }, then))
-            }
-            await Promise.all([rm('Crashpad', 'reports'), rm('BrowserMetrics'), rm('ShaderCache', 'GPUCache'), rm('ShaderCache')])
-
-            // Open the new browser.
-            const puppeteer = require('puppeteer')
-            const browser = this.browser = await puppeteer.launch({
-                headless:false,
-                defaultViewport:null,
-                waitForInitialPage:false,
-                args:[
-                    '--allow-file-access-from-files',
-                    '--autoplay-policy=no-user-gesture-required',
-                    '--load-extension=' + ext,
-                    '--disable-extensions-except=' + ext,
-                    '--whitelisted-extension-id=clmfcdjojibdkmjpbfbddhjiolfjhcgn',
-                    '--lang='+this.lang,
-                    '--disable-notifications',
-                    '--user-data-dir=' + dataDir,
-                    '--allow-profiles-outside-user-dir',
-                ],
-                ignoreDefaultArgs:[
-                    '--mute-audio',
-                    '--disable-gpu',
-                ],
-            })
-            const page = this.page = await browser.newPage()
-            if (!page) throw new Error('Puppeteer returned null')
-            page.on('error', err => { throw err })
-            closeAllPagesExcept(browser, page)
-            const langParts = this.lang.split(',')
-            ;[ // Thanks, async/await, very helpful for efficiency via parallelization. (Sarcasm.)
-                this.cdp,
-                chromeWidth,
-                chromeHeight,
-                this.extensionPage,
-            ] = await Promise.all([
-                page.target().createCDPSession(),
-                page.evaluate(() => outerWidth - innerWidth),
-                page.evaluate(() => outerHeight - innerHeight),
-                browser.waitForTarget(t => t.type() === 'background_page' && t._targetInfo.title === 'capture').then(t => t.page()),
-                page.setUserAgent(''),
-                page.evaluateOnNewDocument(langParts => {
-                    Object.defineProperty(navigator, 'language', { value:langParts[0] })
-                    Object.defineProperty(navigator, 'languages', { value:langParts })
-                }, langParts),
-                page.setExtraHTTPHeaders({ 'Accept-Language': langParts[langParts.length-1] }),
-            ])
-            const oldInters = this._all || nonStreams
-            streams = nonStreams = null
-            this._all = [] // Call all initializers again, to re-attach event listeners.
-            this._agentInds = [] // Re-launch the step loop if we have agents.
-            await this.relink(...oldInters)
-
-            // Set the viewport.
-            if (this.settings.width == null) this.settings.width = 640
-            if (this.settings.height == null) this.settings.height = 480
-            const targetId = (await this.cdp.send('Target.getTargets')).targetInfos[0].targetId
-            windowId = (await this.cdp.send('Browser.getWindowForTarget', {targetId})).windowId
-            await resizeWindow(this)
-
-            if (this.settings.homepage && this.settings.homepage !== 'about:blank')
-                // Browser crashes are far more frequent if we don't wait at least a bit.
-                await Promise.race([
-                    Promise.all([
-                        page.goto(this.settings.homepage, {waitUntil:'domcontentloaded'}).then(() => this.cdp.send('Page.resetNavigationHistory')).catch(doNothing),
-                        this.cdp.send('Page.resetNavigationHistory').catch(doNothing),
-                    ]),
-                    new Promise(then => setTimeout(then, 10000)),
-                ])
-            this._lastStepEnd = performance.now()
-        }
+        }).catch(doNothing)
     }
-    return streams
+    async function relaunch() {
+        // Close the previous browser.
+        if (this.browser) {
+            const b = this.browser
+            this.browser = null
+            await b.close()
+        }
+
+        const ext = require('path').join(__dirname, 'extension')
+        const dataDir = this.settings.userProfile(this)
+
+        // Remove folders that may be problematic for long-term stability. (Things never just work.)
+        const fs = require('fs')
+        function rm(...p) {
+            const path = require('path').join(dataDir, ...p)
+            return new Promise(then => fs.rm(path, { force:true, recursive:true }, then))
+        }
+        await Promise.all([rm('Crashpad', 'reports'), rm('BrowserMetrics'), rm('ShaderCache', 'GPUCache'), rm('ShaderCache')])
+
+        // Open the new browser.
+        const puppeteer = require('puppeteer')
+        const browser = this.browser = await puppeteer.launch({
+            headless:false,
+            defaultViewport:null,
+            waitForInitialPage:false,
+            args:[
+                '--allow-file-access-from-files',
+                '--autoplay-policy=no-user-gesture-required',
+                '--load-extension=' + ext,
+                '--disable-extensions-except=' + ext,
+                '--whitelisted-extension-id=clmfcdjojibdkmjpbfbddhjiolfjhcgn',
+                '--lang='+this.lang,
+                '--disable-notifications',
+                '--user-data-dir=' + dataDir,
+                '--allow-profiles-outside-user-dir',
+            ],
+            ignoreDefaultArgs:[
+                '--mute-audio',
+                '--disable-gpu',
+            ],
+        })
+        const page = this.page = await browser.newPage()
+        if (!page) throw new Error('Puppeteer returned null')
+        page.on('error', err => { throw err })
+        closeAllPagesExcept(browser, page)
+        const langParts = this.lang.split(',')
+        ;[ // Thanks, async/await, very helpful for efficiency via parallelization. (Sarcasm.)
+            this.cdp,
+            chromeWidth,
+            chromeHeight,
+            this.extensionPage,
+        ] = await Promise.all([
+            page.target().createCDPSession(),
+            page.evaluate(() => outerWidth - innerWidth),
+            page.evaluate(() => outerHeight - innerHeight),
+            browser.waitForTarget(t => t.type() === 'background_page' && t._targetInfo.title === 'capture').then(t => t.page()),
+            page.setUserAgent(''),
+            page.evaluateOnNewDocument(langParts => {
+                Object.defineProperty(navigator, 'language', { value:langParts[0] })
+                Object.defineProperty(navigator, 'languages', { value:langParts })
+            }, langParts),
+            page.setExtraHTTPHeaders({ 'Accept-Language': langParts[langParts.length-1] }),
+        ])
+        const oldInters = this.interfaces || interfaces
+        interfaces = null
+        this._all = [] // Call all initializers again, to re-attach event listeners.
+        this._agentInds = [] // Re-launch the step loop if we have agents.
+        await this.relink(...oldInters)
+
+        // Set the viewport.
+        const targetId = (await this.cdp.send('Target.getTargets')).targetInfos[0].targetId
+        windowId = (await this.cdp.send('Browser.getWindowForTarget', {targetId})).windowId
+        await resizeWindow(this)
+
+        if (this.settings.homepage && this.settings.homepage !== 'about:blank')
+            // Browser crashes are far more frequent if we don't wait at least a bit.
+            await Promise.race([
+                Promise.all([
+                    page.goto(this.settings.homepage, {waitUntil:'domcontentloaded'}).then(() => this.cdp.send('Page.resetNavigationHistory')).catch(doNothing),
+                    this.cdp.send('Page.resetNavigationHistory').catch(doNothing),
+                ]),
+                new Promise(then => setTimeout(then, 10000)),
+            ])
+        this._lastStepEnd = performance.now()
+    }
 })
 
 
