@@ -32,6 +32,20 @@ Comparing software and hardware (the real world):
 
 Browser > robot.
 
+### I hate everything involving the words "money", "centralization", and "surveillance". Why is this "AGI-as-a-service" thing mentioned?
+
+We all know what needs to be done to create AGI (run one good general model on everything forever), but to actually do it, we need to give very careful thought to growth incentives.
+
+AGI-as-a-service (ML-as-a-service) platforms, where users can get some `directScore`-maximization service for free (sunlight is free, come on) and more reliable and expansive service for a fee, are the ideal models for growth: incentivize both starting to use the model and growing it.
+
+One problem is that `webenv.webView` *is* glow-in-the-dark surveillance on users. Solving this would involve either federated learning (running the model on the user's device; but then, how would the server know that both data and [the reported gradients](https://arxiv.org/abs/2103.05633) are correct?) or server-side [homomorphic encryption](https://arxiv.org/abs/2106.07229) (has to approximate non-linearities, hard to implement, has big runtime overhead, and needs a server to encrypt data with a shared key) or user-side [secure multiparty computation](https://medium.com/pytorch/what-is-secure-multi-party-computation-8c875fb36ca5) (has to approximate non-linearities, and has big communication overhead). On the non-AI side, WebEnv is based on open-source Web standards, so at least you can be sure when the interface is turned off.
+
+Another problem is centralization. Solvable using data verification (model likelihood of data, and only accept high-likelihood-data updates), proof-of-learning (check that the result usually improves on data, or [record every individual update](https://arxiv.org/abs/2103.05633)), and rewarding updaters & verifiers through a cryptocurrency — solvable *for now*. As AI capabilities increase, compute-for-AGI will share "having more allows getting more" dynamics with money by its nature, which eventually always lead to centralization ([competition laws ](https://en.wikipedia.org/wiki/Competition_law)[are more like](https://en.wikipedia.org/wiki/Collusion)[suggestions](https://en.wikipedia.org/wiki/Cartel)).
+
+Another problem might be, not enough centralization: models can be copied by [just predicting its outputs given inputs, ](https://paperswithcode.com/paper/stealing-machine-learning-models-via)[especially if pre-trained on mostly the same data](https://paperswithcode.com/paper/thieves-on-sesame-street-model-extraction-of). We live in the same universe, so AGI training data is essentially the same, even for WebEnv. However, continuously training the model continually makes its copies out of date. Incentive given.
+
+We did not implement very heavyweight and imperfect solutions.
+
 ### Why would machine learning (with the Web) be enough for AGI?
 
 To solve AGI is to solve philosophy. Luckily, it's pretty easy. Unluckily, the solution does not satisfy any egos that humans spent a lot of time building up, and so it is always instantly dismissed.

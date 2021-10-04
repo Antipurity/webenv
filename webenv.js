@@ -535,20 +535,24 @@ function swapBytes(buf, bpe = 4) {
 
 
 
-exports.io = docs(`\`webenv.io(intSize = 0)\`
+exports.io = docs(`\`webenv.io()\`
 Makes the actual agent reside in another process, connected through standard IO. (Useful for isolation and parallelization.)
 
 If one stream in an env has this, then all other streams there must have this too.
 
 Communication protocol details, simple for easy adoption:
-- Specify \`intSize\` to decrease precision and increase throughput: \`0\` if all values use float32, \`1\` if int8, \`2\` if int16. (Indices/lengths will still use unsigned int32.)
-    - To decode int8, \`v = x === -128 ? NaN : v / 127\`.
-    - To encode int8, \`x = v !== v ? -128 : round(clamp(v, -1, 1) * 127)\`.
-    - To decode int16, \`v = x === -65536 ? NaN : x / 32767\`.
-    - To encode int16, \`x = v !== v ? -65536 : round(clamp(v, -1, 1) * 32767)\`.
 - Here, "environment" means this process, "agent" means the controlling process that receives its observations and feeds it (predictions and) actions.
-- At init, the agent sends the magic u32 number \`0x01020304\`.
-    - (This allows the environment to perform all endianness conversions, simplifying the agent.)
+- At init:
+    - The agent sends the magic u32 number \`0x01020304\`.
+        - (This allows the environment to perform all endianness conversions, simplifying the agent.)
+    - The agent sends u32 int size: \`0\` for float32, \`1\` for int8, \`2\` for int16.
+        - All that extra capacity is extra verification.
+        - Allows decreasing precision and increasing throughput.
+        - Values are encoded/decoded, but indices/lengths will still use unsigned int32.
+            - To decode int8, \`v = x === -128 ? NaN : v / 127\`.
+            - To encode int8, \`x = v !== v ? -128 : round(clamp(v, -1, 1) * 127)\`.
+            - To decode int16, \`v = x === -65536 ? NaN : x / 32767\`.
+            - To encode int16, \`x = v !== v ? -65536 : round(clamp(v, -1, 1) * 32767)\`.
 - Loop:
     - The agent receives:
         - u32 stream index (minimal, so it can be used to index into a dense vector of stream states),
@@ -569,10 +573,9 @@ Communication protocol details, simple for easy adoption:
         (Non-specified values are NaN, or 0 where NaN does not make sense.)
 
 (Even though on WebEnv side, loops are separate, parallel processing on the agent side (rather than serial) should discourage resource starvation.)
-`, function io(intSize = 0) {
-    if (intSize !== 0 && intSize !== 1 && intSize !== 2) throw new Error('Bad intSize')
-    const cons = intSize === 0 ? Float32Array : intSize === 1 ? Int8Array : Int16Array
+`, function io() {
     const thens = [], reqs = []
+    let cons // Constructor for encoded arrays.
     let writeLock = null // No torn writes.
     function onDrain() {
         thens.forEach(f => f()), thens.length = 0
@@ -600,7 +603,7 @@ Communication protocol details, simple for easy adoption:
             if (!s) continue
             const q = s._dataQueue
             const item = [predData, actData]
-            if (q.items.length > s.settings.simultaneousSteps) continue
+            if (q.items.length > s.settings.simultaneousSteps) q.items.shift()
             if (q.waiting.length) // Resolve the first reader.
                 q.waiting.shift()(item)
             else // Allow others to resolve the item.
@@ -615,7 +618,7 @@ Communication protocol details, simple for easy adoption:
         return items.shift()
     }
     return {
-        obsCoded: new cons(0),
+        obsCoded: null,
         async init(stream) {
             if (io.env && io.env !== stream.env)
                 throw new Error('STDIO is once per process, but got another WebEnv trying to get in on the action')
@@ -631,6 +634,10 @@ Communication protocol details, simple for easy adoption:
                 this.byteswap = true
             else
                 throw new Error('Bad magic number:', magic)
+            const intSize = (await readFromStream(readBytes, 1, Uint32Array, this.byteswap))[0]
+            if (![0,1,2].includes(intSize)) throw new Error('Bad intSize: '+intSize)
+            cons = intSize === 0 ? Float32Array : intSize === 1 ? Int8Array : Int16Array
+            this.obsCoded = new cons(0)
             process.stdout.on('drain', onDrain)
             process.stdout.on('error', doNothing) // Ignore "other end has closed" errors.
             readAllData(this.byteswap) // Fill those data queues.

@@ -36,7 +36,7 @@ def webenv(agent, *interfaces, int_size=0, webenv_path='webenv', js_executor=js_
     - `interfaces`: a list of either strings (which are put as-is as JS code, where `we` is the webenv module) or structured args.
     Args are a convenience: numbers and bools and strings are put as-is (JS strings must be quoted again), arrays become function calls (with the first string item being the unescaped function to call), dicts become objects.
 
-    - `int_size`: increase throughput at the cost of precision. `0` communicates through float32, `1` through int8, `2` through int16. Do not specify `we.io(X)` manually.
+    - `int_size`: increase throughput at the cost of precision. `0` communicates through float32, `1` through int8, `2` through int16. Do not specify `we.io()` manually.
 
     - `webenv_path`: what the generated JS should `require`. `'webenv'` by default.
 
@@ -51,7 +51,7 @@ def webenv(agent, *interfaces, int_size=0, webenv_path='webenv', js_executor=js_
         raise TypeError('Agent must be a function')
     if int_size != 0 and int_size != 1 and int_size != 2:
         raise TypeError('Int size must be 0 (float32) or 1 (int8) or 2 (int16)')
-    code = _js_code_for_interfaces(interfaces, int_size, webenv_path)
+    code = _js_code_for_interfaces(interfaces, webenv_path)
     cmd = js_executor(code)
     prev_write = [None] # A lock, to only do one write at a time.
     prev_flush_info = [None] # A lock on flushes. (Effectively unused.)
@@ -105,6 +105,7 @@ def webenv(agent, *interfaces, int_size=0, webenv_path='webenv', js_executor=js_
         proc.stdin.transport.set_write_buffer_limits(0, 0)
         reader, writer = proc.stdout, proc.stdin
         _write_u32(writer, 0x01020304)
+        _write_u32(writer, int_size)
         await _flush(writer, prev_flush_info)
         counter = 0
         read_streams['any'] = asyncio.Queue()
@@ -173,9 +174,9 @@ def _encode(floats, int_size = 0):
     rounded = np.where(np.isnan(floats), nanValue, np.rint(np.clip(floats, -1, 1) * scale))
     dtype = np.int8 if int_size == 1 else np.int16
     return rounded.astype(dtype)
-def _js_code_for_interfaces(inters, int_size, webenv_path):
+def _js_code_for_interfaces(inters, webenv_path):
     code = "const we = require('" + webenv_path + "');"
-    code += "we.init(we.io(" + str(int_size) + "),"
+    code += "we.init(we.io(),"
     for i in inters:
         if isinstance(i, str):
             code = code + i + ','

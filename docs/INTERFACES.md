@@ -347,7 +347,6 @@ By default, this forbids non-`file:` pages to access `file:` URLs, so including 
 
 ```js
 webenv.io()
-webenv.io(intSize = 0)
 ```
 
 Makes the actual agent reside in another process than this environment, connected through standard IO through a very simple protocol.
@@ -356,7 +355,7 @@ Useful for isolation, parallelization, and bridging to other languages.
 
 If one stream in an env has this, then all other streams there must have this too.
 
-For protocol details, refer to runtime documentation: `require('webenv').io.docs`. (In short, agents get stream-index and observations and action-length, and send stream-index and predictions and actions. No compression.)
+For protocol details, refer to runtime documentation: `require('webenv').io.docs`. (In short, agents get stream-index and observations and action-length, and send stream-index and predictions and actions. No compression except via int encoding.)
 
 ```js
 webenv.fps(fps = 30)
