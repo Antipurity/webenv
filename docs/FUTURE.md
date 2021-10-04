@@ -5,7 +5,6 @@ This document outlines what still needs to be done to reach MVP state (or the "r
 - Batch size > 1:
     - Clean up cruft:
         - Make observer & visualization args work by specifying an array as the called func, where the first item is what is executed on the other side, and the rest are stream→data funcs (for updated-each-frame variables) or data (for constants).
-            - So, have a function that compiles such a thing to "sender here, receiver there" (re-using outputs when funcs have the same string representation)? ...Or maybe not, since we'll be swapping out observers with WebRTC communication...
     - Make multi-streaming work better:
         - Figure out why our Python code never shares batches.
     - Make the Capture extension communicate through a Web Socket rather than CDP (gaining speed via not having to communicate through JSON+base64), AND be fully responsible for all/most reads via `remoteRead`, AND for all/most writes via `remoteWrite`.

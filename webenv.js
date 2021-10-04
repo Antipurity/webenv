@@ -2482,6 +2482,55 @@ To write new interfaces, look at the pre-existing interfaces.
 
 
 
+function compileSentJS(staticArgs, ...items) { // TODO: Use this for visualizers, and for observers.
+    // Compiles `…, [thereFunc, ...sendArgs], …` into `[sendFunc, receiveFunc]`.
+    //   This handles both variables and constants, and merges receivers when they have the same body.
+    //   All sent args must be JSON-serializable. And, no infinite loops.
+    //   `staticArgs` is a Map from items to strings of args that go before sent args.
+    //   `thereFunc` can be a string or a JS function (turned into a string).
+    //     Called as `thereFunc(...staticArgs, ...sentArgs)`.
+    //   `sendArgs` can be either `data` or `(...args)=>Promise<data>`.
+    //   `sendFunc(...args)` will generate the string to send.
+    //   `receiveFunc(str)` on receiver will process the sent string.
+    //     Set up via `receiveFunc = new Function(receiveFunc))()`.
+    //     Used via `f(str)`.
+    let sendFuncs = [], receive = []
+    receive.push('const sent = JSON.parse(str)')
+    receive.push(`if (!RCV.empty) RCV.empty = []`)
+    const sent = [], sentStringToIndex = new Map
+    for (let i = 0; i < items.length; ++i) {
+        const item = items[i]
+        if (!Array.isArray(item)) throw new Error('Can only compile arrays, first received func then sent args')
+        receive.push(`if (!RCV.F${i}) RCV.F${i} = ${item[0]}`)
+        const args = []
+        for (let j = 1; j < item.length; ++j) {
+            const arg = item[j]
+            if (typeof arg == 'function') { // Unknown; send it each time.
+                const at = allocSent(arg)
+                sendFuncs[at] = arg
+                args.push(`sent[${at}]`)
+            } else // Known; pre-send it.
+                args.push(JSON.stringify(arg))
+        }
+        const st = staticArgs && staticArgs.get(item)
+        receive.push(`RCV.F${i}(${st ? st+',' : ''}${args.join(',')})`)
+    }
+    return [bindSender(sendFuncs), `return async function RCV(str){\n${receive.join('\n')}\n}`]
+    function allocSent(fn) { // Returns an index in `sent`.
+        const str = ''+fn, m = sentStringToIndex
+        if (m.has(str)) return m.get(str)
+        const i = sent.length;  sent[i] = fn;  m.get(str, i);  return i
+    }
+    function bindSender(sendFuncs) {
+        return async function SND(...args) {
+            // `await` this call to get the string that the receiver has to receive.
+            return JSON.stringify(await Promise.all(sendFuncs.map(f => f(...args))))
+        }
+    }
+}
+
+
+
 function docs(str, fun) { fun.docs = str;  return fun }
 
 
