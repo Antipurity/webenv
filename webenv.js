@@ -74,7 +74,7 @@ Also useful for not confusing agents when removing interfaces by not shifting ot
         actCount = obsCount.writes || 0, obsCount = obsCount.reads || 0
     return {
         reads: obsCount,
-        read(stream, obs) { obs.fill(value) },
+        async read(stream, obs, end) { await end();  obs.fill(value) },
         writes: actCount,
     }
 })
@@ -88,7 +88,7 @@ Agents might use this to compensate for latency.
     let lastAct = null // No queue. Observation is always the most-recent action.
     return {
         reads: count,
-        read(stream, obs) { lastAct && obs.set(lastAct) },
+        async read(stream, obs, end) { await end();  lastAct && obs.set(lastAct) },
         writes: count,
         write(stream, pred, act) { lastAct = act },
     }
@@ -173,7 +173,7 @@ Provide a mask color (0xRRGGBB) to mask exact matches, or \`null\` to disable th
 `, function imageRect(width = 100, height = width, quantize = 1, maskColor = 0xfafafa) {
     return [observers, {
         reads: width * height * 3,
-        observerInput(stream) { // TODO: ...Observer input is only per-frame because we have mouseX/mouseY, isn't it... If we make it in-extension, we can make it at-init, right? (And pass in `stream` instead of `page`.) But we do want to use CDP to dispatch mouse events if we can, so, maybe both (but still have a less expensive way to send observer data than JSON-serialized objects full of constants)...
+        observerInput(stream) { // TODO: Make `observer` definitions be of the format `[thereFunc, ...hereArgs]`, able to handle both constants (`data`) and variables (`stream→data`, merged if func body is the same), minimizing computation.
             let x = stream.page.mouseX || 0, y = stream.page.mouseY || 0
             x -= x % quantize, y -= y % quantize
             return { x, y, w:width, h:height, mask:maskColor, maxW: stream.settings.width, maxH:stream.settings.height }
@@ -418,13 +418,14 @@ Other interfaces may define:
             return new Promise(then => server.close(then))
         },
         priority:-1,
-        read(stream, obs) {
+        async read(stream, obs, end) {
             const to = this.connections
             if (!to.length) return
             if (this.interfaces !== stream.interfaces) {
                 sendRelink(stream, to)
                 this.interfaces = stream.interfaces
             }
+            await end()
             sendObservation(obs, this.lastPred, to)
         },
         write(stream, pred, act) {
@@ -803,10 +804,11 @@ In a page, \`directLink(PageAgent, Inputs = 0, Outputs = 0)\` will return (a pro
                     reads:outs,
                     writes:ins,
                     init(stream) { initialized && (continues = false), initialized = true },
-                    async read(stream, obs) {
+                    async read(stream, obs, end) {
                         if (!continues) return
                         if (!this.queue.length) return
                         const obsSource = this.queue.shift()
+                        await end()
                         overwriteArray(obs, obsSource)
                     },
                     agent(stream, obs, pred, act) { return continues }, // Ensure that steps always happen.
@@ -1171,7 +1173,7 @@ Exposes all mouse-related actions.
         if (pressed) curButtons |= button
         stream.cdp && stream.cdp.send('Input.dispatchMouseEvent', {
             type: 'mouseReleased',
-            x: stream.page.mouseX, // TODO: ...Should set these on `env` directly. (Or maybe, be performed in extension... No, wait, if we have CDP, then we should really use CDP instead of JS for mouse eventes. ...But then, we won't be able to make observer inputs at-init, since we'll have to send mouse position each time, won't we... Quite the conundrum.)
+            x: stream.page.mouseX,
             y: stream.page.mouseY,
             button: button===1 ? 'left' : button===2 ? 'right' : button===4 ? 'middle' : 'none',
             buttons: curButtons,
@@ -1190,11 +1192,12 @@ Provides an observation of the time between frames, relative to the expected-Fra
     let prevFrame = performance.now()
     return {
         reads:1,
-        read(stream, obs) {
+        async read(stream, obs, end) {
             const nextFrame = performance.now()
             const duration = (nextFrame - prevFrame) - 1 / fps
-            obs[0] = Math.max(-1, Math.min(duration / maxMs, 1))
             prevFrame = nextFrame
+            await end()
+            obs[0] = Math.max(-1, Math.min(duration / maxMs, 1))
         },
         visState(stream) { return { fps, maxMs, runningAvg:null } },
         visualize:function(obs, pred, elem, vState) {
@@ -1235,7 +1238,7 @@ This does not change video playback speed, but does control when JS timeouts fir
         deinit(stream) {
             stream.cdp && stream.cdp.off('Emulation.virtualTimeBudgetExpired', resolveFrame)
         },
-        async read(stream, obs) {
+        async read(stream, obs, end) {
             if (!stream.cdp) return
             // Break pipelining if frames are taking too long.
             const p = prevFrame;  prevFrame = new Promise(then => prevThen = then);  p && (await p)
@@ -1456,7 +1459,7 @@ In particular, this:
             stream.cdp.send('Page.setAdBlockingEnabled', { enabled:false })
             await stream.cdp.send('Page.disable')
         },
-        read(stream, obs) {
+        read(stream, obs, end) {
             if (!stream.cdp || !stream.browser) return
             if (stream.page.isClosed() || !stream.browser.isConnected())
                 return lastStamp = performance.now()
@@ -1517,7 +1520,7 @@ See this object's properties for examples of \`functions\`.
     return {
         priority:1,
         async init(stream) {
-            if (!stream.cdp) return // TODO: This is way too useful to not be used in user-extensions, so, figure out how to.
+            if (!stream.cdp) return // TODO: This is way too useful to not be used in user-extensions, so, figure out how to. ...If we have in-extension JS code engine like [thereFunc, ...hereArgs], handling both constants and variables, which will take care of injecting on new document, then this will not be an issue.
             this.script = (await stream.cdp.send('Page.addScriptToEvaluateOnNewDocument', {
                 source, worldName:'webenvJS',
             })).identifier
@@ -1649,7 +1652,7 @@ Args:
     return {
         priority: 999999999,
         reads: hidden ? undefined : 1,
-        read(stream, obs) {
+        async read(stream, obs, end) {
             if (!stream.page) return
             const v = scoreSum / scoreNum // NaN if no scores since the last frame.
             scoreSum = scoreNum = 0
@@ -1659,7 +1662,7 @@ Args:
             if (v === v) // Update the page's reward-stream statistics, and cross-page improvement.
                 data[u] = signalUpdate(v, data[u], maxHorizon),
                 data.ALL = signalUpdate(norm, data.ALL, maxHorizon)
-            if (!hidden) obs[0] = norm
+            if (!hidden) await end(), obs[0] = norm
         },
         init(stream) {
             stream.score = data
@@ -1846,7 +1849,7 @@ Other interfaces that want this must define:
             // TODO: ...But what do we do about non-observer data becoming overwritten... Maybe not care, since having observers at all is temporary, and ALL observations will soon be provided by the extension...
         }
     },
-    async read(stream, obs) {
+    async read(stream, obs, end) {
         if (!stream.page || !stream.extensionPage) return
         const state = stream[this.key] || (stream[this.key] = Object.create(null))
         if (state.all !== stream._all) {
@@ -1952,25 +1955,33 @@ The result is a promise for the environment, which is an object with:
     },
     async read() {
         // Collect webenv-side reads.
-        // It might happen that a new read might get scheduled before an old one is finished.
-        //   For these cases, make sure to only not modify internal buffers between `await`s, only modify in synchronous code.
+        // To prevent torn writes, `await end()` right before the last synchronous write.
         if (this._killed) throw new Error('Cannot read from a closed environment')
         this._relaunchIfNeeded()
         if (!this.reads) return
+        let then
         try {
             // Defer observations to interfaces.
-            const inds = this._obsInds, a = this._all
-            const obs = this._obsSlice
+            let waitingOn = 0, endPromise = new Promise(f => then=f)
+            const inds = this._obsInds, obs = this._obsSlice
             const tmp = this._allocArray(0)
+            waitingOn = inds.length
             for (let i = 0; i < inds.length; ++i) {
-                const j = inds[i], r = a[j].read(this, obs[i])
-                if (r instanceof Promise) tmp.push(r)
+                const j = inds[i], r = this._all[j].read(this, obs[i], end)
+                if (r instanceof Promise) tmp.push(r.then(end))
+                else end()
             }
             // Await all promises at once.
             for (let i = 0; i < tmp.length; ++i) await tmp[i]
             this._allocArray(tmp)
             return this._obsFloats
-        } catch (err) { if (!this._stall) throw err }
+            function end() {
+                // Resolve if the last end, and always return a promise.
+                --waitingOn // (Ending a spot multiple times should not matter because of how `end` should be used.)
+                if (!waitingOn) then()
+                return endPromise
+            }
+        } catch (err) { then && then();  if (!this._stall) throw err }
     },
     async write(acts) {
         if (this._killed) throw new Error('Cannot write to a closed environment')
@@ -2253,7 +2264,7 @@ To write new interfaces, look at the pre-existing interfaces.
     An interface is an object (or an array of interfaces, for convenience) that may define:
     - \`.settings\` (see \`webenv.settings\`);
     - \`.init(stream)\`, \`.deinit(stream)\` (neither is called on browser relaunching, except on new/removed interfaces);
-    - \`.reads:Number\`, \`.read(stream, obs)\` (modify \`obs\` in-place, do not read);
+    - \`.reads:Number\`, \`.read(stream, obs, end)\` (modify \`obs\` in-place, do not read) (to prevent torn writes, \`await end()\` right before writing);
     - \`.writes:Number\`, \`.write(stream, pred, act)\` (\`pred\` can predict the next read \`obs\`; do read from \`act\` and act on that, do not write);
     - \`.agent(stream, obs, pred, act)=>continues\` (return false to unlink the agent, unless it is at top-level) (to prevent torn writes, there should only be one agent);
     - \`priority:Number\` (for example, interfaces that read actions at write-time have priority of -1, to always go after action-fillers);
@@ -2262,7 +2273,7 @@ To write new interfaces, look at the pre-existing interfaces.
     let windowId = null, chromeWidth = 0, chromeHeight = 0
     interfaces.push({ // Counteract rowdy users.
         prevPage: null,
-        read(stream, obs) {
+        read(stream, obs, end) {
             if (!stream.cdp) return
             if (this.prevPage !== stream.page || Math.random() < .01) resizeWindow(stream)
             this.prevPage = stream.page
