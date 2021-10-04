@@ -63,6 +63,8 @@ These include:
 - `simultaneousSteps:16`: how many steps are allowed to run at once (at most). Set to `1` to fully synchronize on each step, which makes visualization nicer but introduces a lot of stalling.
 - If for `webenv.browser`, `width:640` and `height:480`.
 - If for `webenv.browser`, `userProfile`, which is a function from stream to the user profile directory. The default is `webenv/puppeteer-chrome-profile-INDEX`.
+- `port:1234` and `httpsOptions:null`: the server's options.
+    - Optionally, specify key and certificate in `httpsOptions`, [as specified here](https://nodejs.org/en/knowledge/HTTP/servers/how-to-create-a-HTTPS-server/).
 
 ```js
 webenv.userAgent(agent = 'WebEnv agent <https://github.com/Antipurity/webenv>')
@@ -317,14 +319,12 @@ These vacuous interfaces can be very useful for certain needs.
 
 ```js
 webenv.webView()
-webenv.webView(port = 1234, httpsOptions = null, path = '')
+webenv.webView(path = '')
 ```
 
 Allows visualizing the observation streams as they are read, by opening `localhost:1234/path` or similar in a browser.
 
-To use HTTPS instead of HTTP, [specify key and certificate](https://nodejs.org/en/knowledge/HTTP/servers/how-to-create-a-HTTPS-server/) in `httpsOptions`.
-
-To prevent others from seeing observations, use random characters as `path`. Not extremely secure, but visualization is not exactly a safety-critical application.
+To prevent others from seeing observations, use random characters as `path`. Not extremely secure, but visualization is not exactly a safety-critical application (and in-web-page authentication is more complicated).
 
 See runtime docs `require('webenv').webView.docs` for details on how interfaces declare themselves viewable.
 

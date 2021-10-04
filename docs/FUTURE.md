@@ -8,9 +8,6 @@ This document outlines what still needs to be done to reach MVP state (or the "r
             - So, have a function that compiles such a thing to "sender here, receiver there" (re-using outputs when funcs have the same string representation)? ...Or maybe not, since we'll be swapping out observers with WebRTC communication...
     - Make multi-streaming work better:
         - Figure out why our Python code never shares batches.
-        - Make `webenv.webView` actually select the stream to view, via sub-URLs in `<iframe>`s.
-        - Share the web server across all `webenv.webView`s. In fact, have just one HTTP/S server, launched always, since it'll always be used.
-        - Dark theme `webView` (glow-in-the-dark mode).
     - Make the Capture extension communicate through a Web Socket rather than CDP (gaining speed via not having to communicate through JSON+base64), AND be fully responsible for all/most reads via `remoteRead`, AND for all/most writes via `remoteWrite`.
         - Isolate all `.page` and `.cdp` uses, in `read` and `write` and triggers, and replace as many as we can with in-extension `remoteRead` and `remoteWrite` versions.
             - There is no way to send `.isTrusted` events in JS, so, if a CDP channel is available for keyboard & mouse events, must use that instead of in-extension presses+clicks.

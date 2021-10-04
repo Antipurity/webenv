@@ -17,16 +17,48 @@ Env's methods:
 - \`.reinit(...streams)\`: for dynamically changing the set of streams/interfaces; \`await\` it.
     - To modify \`env\`'s streams, use \`await env.reinit(MODIFY(env.streams))\`.
     - To close streams without closing NodeJS, use \`await env.reinit()\`.
+- \`.listen(path='/', func)\`: router, for making the HTTP/S server listen at \`path\` (such as \`\`), via \`func(req, res)\`; \`await\` it.
+    - Returns \`null\` if path was already listening, else \`path\`.
+    - If \`func\` is \`null\` but \`path\` is not, this cancels the subscription.
+    - Port & HTTPS settings are taken from \`webenv.settings(…)\` of the first stream.
 `, async function init(...interfaces) {
     const env = {
         streams: [],
         interfaces: [],
         _reinitLock: null,
+        _server: null,
+        _serverPaths: Object.create(null),
+        async listen(path='/', func) {
+            if (!this._server) {
+                const opt = this.streams[0].settings.httpsOptions
+                const http = require('http'), https = require('https')
+                const server = !opt ? (f => http.createServer(f)) : (f => https.createServer(opt, f))
+                this._server = server((req, res) => {
+                    const u = req.url, paths = this._serverPaths
+                    if (u in paths) paths[u](req, res)
+                    else res.statusCode = 404, res.end()
+                })
+                await new Promise(then => this._server.listen(this.streams[0].settings.port, then))
+            }
+            const paths = this._serverPaths
+            const had = path in paths
+            if (!func && path != null) delete paths[path]
+            else if (typeof func != 'function')
+                throw new Error('Listener is not a function')
+            if (!had) paths[path] = func
+            return had ? path : null
+        },
         async reinit(...interfaces) {
             let p = this._reinitLock, then
             this._reinitLock = new Promise(f => then=f)
             await p // Lock.
             try {
+                // Kill the server if no interfaces.
+                if (!interfaces.length) {
+                    const server = this._server;  this._server = null
+                    this._serverPaths = Object.create(null)
+                    await new Promise(then => server.close(then))
+                }
                 // Remember the top-level interfaces, in `.interfaces`.
                 const next = [], nonStreams = []
                 await (async function track(o) {
@@ -45,17 +77,19 @@ Env's methods:
                         throw new Error('A stream already belongs to another env')
                     if (s.index !== null) newStreams[s.index] = s, preservedStreams.add(s)
                 }
+                const removed = this.streams.filter(s => !preservedStreams.has(s))
+                this.streams = newStreams
+                const tmp = []
                 for (let s of next) // Allocate+open the new.
                     if (s.index === null) {
                         let i = 0
                         while (newStreams[i] !== undefined) ++i
-                        newStreams[i] = s.open(this, i)
+                        newStreams[i] = s
+                        tmp.push(s.open(this, i))
                     }
-                // Close the old.
-                const removed = this.streams.filter(s => !preservedStreams.has(s))
-                await Promise.all(removed.map(s => s.close()))
+                await Promise.all(removed.map(s => s.close())) // Close the old.
                 removed.forEach(s => s.env = s.index = null)
-                this.streams = await Promise.all(newStreams)
+                await Promise.all(tmp) // Open the new.
                 return this
             } finally { then() }
         },
@@ -370,63 +404,119 @@ To calculate \`samples\`, divide \`sampleRate\` by the expected frames-per-secon
 
 
 
-exports.webView = docs(`\`webenv.webView(port = 1234, httpsOptions = null, path = '')\`
+exports.webView = docs(`\`webenv.webView(path = '')\`
 Allows visualizing the observation streams as they are read, by opening \`localhost:1234/path\` or similar in a browser.
-Optionally, specify key and certificate in \`httpsOptions\`: https://nodejs.org/en/knowledge/HTTP/servers/how-to-create-a-HTTPS-server/
 To prevent others from seeing observations, use random characters as \`path\`.
 Other interfaces may define:
 - \`.visState(stream)=>vState\` (the result must be JSON-serializable, sent once at init-time),
 - \`.visualize(obs, pred, elem, vState)\` (serialized into web-views to visualize data there, so write the function out fully, not as \`{f(){}}\`).
-`, function webView(port = 1234, httpsOptions = null, path = '') {
-    const http = require('http'), https = require('https')
-    const server = !httpsOptions ? (f => http.createServer(f)) : (f => https.createServer(httpsOptions, f))
+`, function webView(path = '') {
+    const serverSentEvents = {
+        'Content-Type': 'text/event-stream',
+        'Cache-Control': 'no-cache',
+        Connection: 'keep-alive',
+    }
     return {
-        connections:[],
-        server:null,
-        end:0, interfaces:null,
-        lastPred:null, // Not perfectly synchronized like a queue would be, but who cares. Sync requires copies anyway, so, too slow.
-        init(stream) {
-            // TODO: Store the server on `stream.env`, not `this`.
-            // TODO: ...Don't even create the server here, instead, make the env create it for us; port & HTTPS options should be settings.
-            //   TODO: On env, have the method `.listen(path, func(req, res))→cancelFunc` (which checks all paths, and returns 404 if none match) (if path is already present, just ref-count). Here, use it to register pages & observations.
-            // TODO: Expect stream ID in all URLs except for top-level ones, which should dispatch to all others (HTML page: a selection of streams and an <iframe> of what we picked; observations: send events on relink that describe all the current stream indices.)
-            // TODO: Make the docs note that all `.webView`s in an env should be shared.
-            if (!this.server) {
-                this.server = server((req, res) => {
-                    if (req.url === '/'+path) {
-                        // Serve the base visualization page.
-                        res.statusCode = 200
-                        res.setHeader('Content-Type', 'text/html')
-                        res.end(`<!DOCTYPE html><style>html>div{text-align:center}</style><script>${createBaseJS()}</script>`)
-                    } else if (req.url === '/observations' + (path ? '/'+path : '')) {
-                        // Remember to later send events to here whenever observations arrive.
-                        this.connections.push(res)
-                        res.on('close', () => this.connections.splice(this.connections.indexOf(res), -1))
-                        res.writeHead(200, {
-                            'Content-Type': 'text/event-stream',
-                            'Cache-Control': 'no-cache',
-                            Connection: 'keep-alive',
-                        })
-                        sendRelink(stream, this.connections)
-                    } else res.statusCode = 404
-                })
-                return new Promise(then => this.server.listen(port, then))
-            }
+        registered:null, // For un-`listen`ing.
+        obsListConnections:new Set, // For multi-streaming.
+        connections:[], // For data stream listeners.
+        interfaces:null, // For detecting relinks.
+        lastPreds:[], // Per-ID. Not perfectly synchronized like a queue would be, but who cares. Sync requires copies anyway, so, too slow.
+        async init(stream) {
+            const env = stream.env, id = stream.index
+            this.registered = [...(this.registered || []), ...await Promise.all([
+                // API.
+                env.listen(route('observations', path), (req, res) => {
+                    // Live stream lists.
+                    const conn = this.obsListConnections
+                    conn.add(res), res.on('close', () => conn.delete(res))
+                    res.writeHead(200, serverSentEvents)
+                    sendRestream(env, conn)
+                }),
+                env.listen(route('observations', path, ''+id), (req, res) => {
+                    // Remember to later send events to here whenever observations arrive.
+                    if (!this.connections[id]) this.connections[id] = new Set
+                    const conn = this.connections[id]
+                    conn.add(res), res.on('close', () => conn.delete(res))
+                    res.writeHead(200, serverSentEvents)
+                    sendRelink(stream, conn)
+                }),
+                // UI.
+                env.listen(route(path), (req, res) => {
+                    // List all streams, and allow switching between them.
+                    //   (Very simple HTML, inlined & hardcoded.)
+                    res.statusCode = 200
+                    res.setHeader('Content-Type', 'text/html')
+                    res.end(`
+<!DOCTYPE html>
+<style>
+    iframe { flex:1 1 100%; border-width:0 }
+    html { display:flex; flex-flow:column wrap; height:100%; justify-content:center; align-items:center; }
+    button { border:none }
+    button.active { background-color:#4dc1ed }
+    @media (prefers-color-scheme: dark) {
+        /* Glow-in-the-dark theme. */
+        html { background-color:#1f1f1f }
+    }
+</style>
+<script>
+const root = document.documentElement
+const iframe = root.appendChild(document.createElement('iframe'))
+const source = new EventSource(${JSON.stringify(route('observations', path))})
+const buttons = []
+let selected
+function select(btn) {
+    selected && selected.classList.remove('active')
+    const sameId = selected && selected.textContent === btn.textContent
+    if ((selected = btn)) {
+        if (!sameId) iframe.src = ${JSON.stringify(path ? '/'+path : '')}+'/'+btn.textContent
+        selected.classList.add('active')
+    }
+}
+source.addEventListener('restream', function(evt) {
+    const ids = JSON.parse(evt.data)
+    buttons.forEach(b => b.remove())
+    const prevSelected = selected && selected.textContent
+    ids.forEach(id => {
+        const b = document.createElement('button')
+        b.textContent = ''+id
+        if (prevSelected === b.textContent) select(b)
+        buttons.push(root.insertBefore(b, iframe))
+    })
+    if (!ids.length) select()
+    else if (!selected) select(buttons[0])
+})
+onclick = evt => {
+    if (!evt.target || evt.target.tagName !== 'BUTTON') return
+    select(evt.target)
+}
+</script>`)
+                }),
+                env.listen(route(path, ''+id), (req, res) => {
+                    // Serve the base visualization page.
+                    res.statusCode = 200
+                    res.setHeader('Content-Type', 'text/html')
+                    res.end(`<!DOCTYPE html><style>html>div{text-align:center}@media (prefers-color-scheme: dark) {html{color:#e0e0e0}}</style><script>${createBaseJS(route('observations', path, ''+id))}</script>`)
+                }),
+            ])]
+            sendRestream(env, this.obsListConnections) // Adding/removing many at once will send quadratically-many 'restream' events.
+            function route(...p) { return '/' + p.filter(s=>s).join('/') }
         },
-        deinit(stream) {
-            const server = this.server;  this.server = null
-            return new Promise(then => server.close(then))
+        async deinit(stream) {
+            sendRestream(stream.env, this.obsListConnections)
+            const reg = this.registered;  this.registered = null
+            reg && (await Promise.all(reg.map(path => stream.env.listen(path))))
         },
         priority:-1,
         async read(stream, obs, end) {
-            const to = this.connections
-            if (!to.length) return
+            const id = stream.index, to = this.connections[id]
+            if (!to || !to.size || !this.lastPreds[id]) return
             if (this.interfaces !== stream.interfaces) {
                 sendRelink(stream, to)
                 this.interfaces = stream.interfaces
             }
             await end()
-            sendObservation(obs, this.lastPred, to)
+            sendObservation(obs, this.lastPreds[id], to)
         },
         write(stream, pred, act) {
             // Remember prediction to send later, unless it's all-zeros|NaN.
@@ -434,16 +524,25 @@ Other interfaces may define:
             let empty = true
             for (let i = 0; i < pred.length; ++i)
                 if (pred[i] === pred[i]) { empty = false;  break }
-            this.lastPred = empty ? null : pred
+            this.lastPreds[stream.index] = empty ? null : pred
         },
     }
+    function sendRestream(env, to) {
+        if (!to || !to.size) return
+        const indices = []
+        for (let i = 0; i < env.streams.length; ++i)
+            if (env.streams[i]) indices.push(i)
+        const toWrite = `event:restream\ndata:${JSON.stringify(indices)}\n\n`
+        to.forEach(res => res.write(toWrite))
+    }
     function sendRelink(stream, to) {
+        if (!to || !to.size) return
         let end = 0
         for (let inter of stream._all)
             if (typeof inter.reads == 'number')
                 end += inter.reads
-        const vis = createExtendJS(stream, stream._all, end)
-        to.forEach(res => res.write(`event:relink\ndata:${vis}\n\n`))
+        const toWrite = `event:relink\ndata:${createExtendJS(stream, stream._all, end)}\n\n`
+        to.forEach(res => res.write(toWrite))
     }
     function sendObservation(obs, pred, to) {
         // 33% + 8 bytes of memory overhead per obs, due to base64 and Server-Sent Events.
@@ -455,11 +554,11 @@ Other interfaces may define:
         const toWrite = `data:${obs64} ${pred64}\n\n`
         to.forEach(res => res.write(toWrite))
     }
-    function createBaseJS() {
+    function createBaseJS(at) {
         // Receive & decode observation and prediction, then defer to currently-linked visualizers.
         const bpe = Observations.BYTES_PER_ELEMENT
         return `let state = null, root = document.documentElement.appendChild(document.createElement('div'))
-const source = new EventSource('/observations${path ? '/'+path : ''}')
+const source = new EventSource(${JSON.stringify(at)})
 source.addEventListener('relink', function(evt) {
     while (root.lastChild) root.removeChild(root.lastChild)
     new Function('state', evt.data)(state = {}, root)
@@ -1825,6 +1924,8 @@ These include:
 - \`simultaneousSteps:16\`: how many steps are allowed to run at once (at most). Set to \`1\` to fully synchronize on each step, which makes visualization nicer but introduces a lot of stalling.
 - If for \`webenv.browser\`, \`width:640\` and \`height:480\`.
 - If for \`webenv.browser\`, \`userProfile\`, which is a function from stream to the user profile directory. The default is \`webenv/puppeteer-chrome-profile-INDEX\`.
+- \`port:1234\` and \`httpsOptions:null\`: the server's options.
+    - Optionally, specify key and certificate in \`httpsOptions\`, as in https://nodejs.org/en/knowledge/HTTP/servers/how-to-create-a-HTTPS-server/
 `, function(settings) { return { settings } })
 
 
@@ -1933,6 +2034,8 @@ The result is a promise for the environment, which is an object with:
             width: 640,
             height: 480,
             userProfile: stream => require('path').join(__dirname, 'puppeteer-chrome-profile-' + stream.index),
+            port: 1234,
+            httpsOptions: null,
         })
         // Private state.
         this._stall = null // A promise when a `relaunch` is in progress.
