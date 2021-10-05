@@ -1,9 +1,8 @@
 // An extension for capturing video & audio.
 //   Lots of changing of data formats, but I can't find a way to have less copying.
 
-const observers = [], obsBegin = 1
+let RCV = null
 let stream = null
-let prevInputs = null
 const video = {
     ctx2d:document.createElement('canvas').getContext('2d'),
     elem:null, // ImageCapture throws far too many errors for us.
@@ -34,7 +33,7 @@ const audio = {
         //   (The samples will be interleaved, and -1..1. See this.channels to un-interleave.)
         if (!stream) return new Float32Array(0)
         if (!this.ctx) {
-            // ScriptProcessorNode is probably fine, even though it's deprecated, since August 29 2014.
+            // ScriptProcessorNode is probably fine, even though it's been deprecated since August 29 2014.
             this.ctx = new AudioContext({ sampleRate })
             const sourceNode = this.ctx.createMediaStreamSource(stream)
             const scriptNode = this.ctx.createScriptProcessor(512)
@@ -77,33 +76,20 @@ const audio = {
 
 
 
-function updateObservers(obsers, width, height) {
-    // obsers: [...{read:String, offset:Number, length:Number}]
-    //   .read gets turned into `(input, video:{grab(x,y,w,h)=>pixelsTypedArray}, audio:{grab(samples)=>sampleTypedArray}, obs)=>Promise<void>`
-    //     It's responsible for filling `obs` with values.
-    //   We also create the observation buffer, and per-observer observation views into it.
-    let maxEnd = 0
-    for (let o of obsers) maxEnd = Math.max(maxEnd, o.offset + o.length)
-    observers.length = 0
-    const obs = observers[0] = new Float32Array(maxEnd)
-    for (let o of obsers) {
-        o.read = new Function('return ' + o.read)()
-        o.view = obs.subarray(o.offset, o.offset + o.length)
-        observers.push(o)
-    }
-    // On relinking, dispose of all data. Causes brief blackouts, but allows changing sample rate, kinda.
-    audio.pos = 0, audio.buf = null, audio.samples = null, audio.ctx && (audio.ctx.close(), audio.ctx = null)
-    if (stream !== undefined) {
+function updateObservers(rcv, width, height) {
+    RCV = (new Function(rcv))()
+    // TODO: Remember the sample rate in `audio.grab()`, and when sample rate changes, reinit audio.ctx.
+    if (stream !== undefined) { // TODO: Do not kill the stream on update. (Or the audio context.)
+        // TODO: Make `video.grab()` and `audio.grab()` re/init the stream if present (reinit if width/height changed), not this.
         stream = undefined
-        const opt = {
+        // TODO: If this is missing, use navigator.mediaDevices.getDisplayMedia.
+        chrome.tabCapture.capture({
             audio:true,
             video:true,
             videoConstraints:{
                 mandatory:{ maxWidth:width, maxHeight:height },
             },
-        }
-        // chrome.tabCapture.captureOffscreenTab is an interesting proposition, but, it's funnier to be able to interact with the agent's web-page.
-        chrome.tabCapture.capture(opt, s => {
+        }, s => {
             if (s) {
                 stream = s
                 video.elem = document.createElement('video')
@@ -114,21 +100,14 @@ function updateObservers(obsers, width, height) {
     }
 }
 
-async function readObservers(inputs) {
-    // Read all observers, then await if needed, then return space-separated base64 observation.
-    if (observers.length <= obsBegin) return ''
+// TODO: Call `readObservers` on a timer, estimating runtime. (To be robust to dropped packets.)
+async function readObservers(str) {
+    if (!RCV) return
+    try { await RCV(str) }
+    catch (err) { PRINT(err.stack) }
+    // Report space-separated base64 observation.
     if (typeof gotObserverData == ''+void 0) return
-    const tmp = _allocArray(0)
-    audio.grabbed = false
-    for (let i = obsBegin; i < observers.length; ++i) {
-        const o = observers[i]
-        const result = o.read(inputs[i - obsBegin], video, audio, o.view)
-        if (result instanceof Promise) tmp.push(result)
-    }
-    for (let i = 0; i < tmp.length; ++i) await tmp[i]
-    _allocArray(tmp)
-    if (typeof gotObserverData == ''+void 0) return
-    toBase64(encodeInts(observers[0])).then(gotObserverData)
+    toBase64(encodeInts(RCV.obs)).then(gotObserverData)
 }
 function encodeInts(d) {
     // Encoding floats in JSON & base64 sure is slow, so send 2 bytes per value instead of 4.

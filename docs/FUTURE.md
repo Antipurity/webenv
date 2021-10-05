@@ -4,14 +4,14 @@ This document outlines what still needs to be done to reach MVP state (or the "r
 
 - Batch size > 1:
     - Clean up cruft:
-        - Make observer & visualization args work by specifying an array as the called func, where the first item is what is executed on the other side, and the rest are stream→data funcs (for updated-each-frame variables) or data (for constants).
+        - Make visualization args work by specifying an array as the called func, where the first item is what is executed on the other side, and the rest are stream→data funcs (for updated-each-frame variables) or data (for constants). (To save bandwidth, and code size.)
     - Make multi-streaming work better:
         - Figure out why our Python code never shares batches.
     - Make the Capture extension communicate through a Web Socket rather than CDP (gaining speed via not having to communicate through JSON+base64), AND be fully responsible for all/most reads via `remoteRead`, AND for all/most writes via `remoteWrite`.
-        - Isolate all `.page` and `.cdp` uses, in `read` and `write` and triggers, and replace as many as we can with in-extension `remoteRead` and `remoteWrite` versions.
+        - Replace as many `.page` and `.cdp` uses, in `read` and `write` and triggers, as we can with in-extension `observer` versions.
             - There is no way to send `.isTrusted` events in JS, so, if a CDP channel is available for keyboard & mouse events, must use that instead of in-extension presses+clicks.
-        - Protocol: `0xFFFFFFFF StrLen Str` for reinitialization (execute `f = Function(Str)(f, socket, bytesPerValue=2)` to get new JS code, or update old code in-place only as needed; cancel via `f()`, even the very first version will do), `Index PredLen Pred WriteLen Write JsonLen Json` for an observation (which demands exactly one `Index ReadLen Read` back).
-        - For higher throughput at the cost of dropped packets not being re-sent, use WebRTC instead of Web Sockets. (Have to implement reliability manually, though: the browser should send packets periodically rather than in response.)
+        - Protocol: `0xFFFFFFFF StrLen Str BytesPerValue` for reinitialization (execute `f = Function(Str)(socket, f, bytesPerValue=2)` to get new JS code, or update old code in-place only as needed; cancel via `f()`, even the very first `f` will do); `Index PredLen Pred WriteLen Write JsonLen Json` for an observation (which demands a `Index ReadLen Read JsonLen Json` back).
+        - For higher throughput at the cost of dropped packets not being re-sent, use WebRTC instead of Web Sockets. (Have to implement reliability manually, though: the extension must send packets periodically rather than in response.)
 	- Extension-only user streams: have `webenv.remote(path='/', max=16)`, which for each incoming Web Socket connection, refuses it if over the limit, else establishes the control connection, re-using all code from the Capture's rework.
         - Make sure that the Capture extension can be installed by actual humans.
     - Make the Capture extension usable by humans — or author a separate extension, so that `webenv.browser`s don't have to parse all that extra code (though it's once per startup, so it's cheap).

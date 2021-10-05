@@ -139,19 +139,18 @@ Slloooooooow.
             this.reads = stream.settings.width * stream.settings.height * 3
         },
         reads:'computed',
-        observerInput(stream) { return { w:stream.settings.width, h:stream.settings.height, mask:maskColor } },
-        observer: function(input, video, audio, obs) {
-            const d = video.grab(0, 0, input.w, input.h, input.w, input.h)
-            const maskColor = input.mask
+        observer: [async function({video, audio}, obs, end, w, h, maskColor) {
+            const d = video.grab(0, 0, w, h, w, h)
             // Normalize and write.
-            for (let i = 0, from = 0, to = 0; to < obs.length; ) {
+            await end()
+            for (let from = 0, to = 0; to < obs.length; ) {
                 const R = d[from++], G = d[from++], B = d[from++], A = d[from++]
                 const masked = maskColor != null && ((R<<16) | (G<<8) | B) === maskColor
                 obs[to++] = masked ? NaN : (2*R - 255) / 255
                 obs[to++] = masked ? NaN : (2*G - 255) / 255
                 obs[to++] = masked ? NaN : (2*B - 255) / 255
             }
-        },
+        }, s => s.settings.width, s => s.settings.height, maskColor],
         visState(stream) { return { width:stream.settings.width, height:stream.settings.height } },
         visualize:visualizePageScreenshot,
     }]
@@ -207,24 +206,28 @@ Provide a mask color (0xRRGGBB) to mask exact matches, or \`null\` to disable th
 `, function imageRect(width = 100, height = width, quantize = 1, maskColor = 0xfafafa) {
     return [observers, {
         reads: width * height * 3,
-        observerInput(stream) { // TODO: Make `observer` definitions be of the format `[thereFunc, ...hereArgs]`, able to handle both constants (`data`) and variables (`stream→data`, merged if func body is the same), minimizing computation.
-            let x = stream.page.mouseX || 0, y = stream.page.mouseY || 0
-            x -= x % quantize, y -= y % quantize
-            return { x, y, w:width, h:height, mask:maskColor, maxW: stream.settings.width, maxH:stream.settings.height }
-        },
-        observer: function(input, video, audio, obs) {
-            const x = input.x - ((input.w / 2) | 0), y = input.y - ((input.h / 2) | 0)
-            const d = video.grab(x, y, input.w, input.h, input.maxW, input.maxH)
-            const maskColor = input.mask
-            // Normalize and write.
-            for (let i = 0, from = 0, to = 0; to < obs.length; ++i) {
-                const R = d[from++], G = d[from++], B = d[from++], A = d[from++]
-                const masked = maskColor != null && ((R<<16) | (G<<8) | B) === maskColor
-                obs[to++] = masked ? NaN : (2*R - 255) / 255
-                obs[to++] = masked ? NaN : (2*G - 255) / 255
-                obs[to++] = masked ? NaN : (2*B - 255) / 255
-            }
-        },
+        observer: [
+            async function({video, audio}, obs, end, x, y, w, h, maxW, maxH, maskColor) {
+                x -= (w/2) | 0, y -= (h/2) | 0
+                const d = video.grab(x, y, w, h, maxW, maxH)
+                // Normalize and write.
+                await end()
+                for (let i = 0, from = 0, to = 0; to < obs.length; ++i) {
+                    const R = d[from++], G = d[from++], B = d[from++], A = d[from++]
+                    const masked = maskColor != null && ((R<<16) | (G<<8) | B) === maskColor
+                    obs[to++] = masked ? NaN : (2*R - 255) / 255
+                    obs[to++] = masked ? NaN : (2*G - 255) / 255
+                    obs[to++] = masked ? NaN : (2*B - 255) / 255
+                }
+            },
+            s => (s.page.mouseX || 0) - (s.page.mouseX || 0) % quantize,
+            s => (s.page.mouseY || 0) - (s.page.mouseY || 0) % quantize,
+            width,
+            height,
+            s => s.settings.width,
+            s => s.settings.height,
+            maskColor,
+        ],
         visState(stream) { return { width, height } },
         visualize:visualizePageScreenshot,
     }]
@@ -249,44 +252,48 @@ Provide a mask color (0xRRGGBB) to mask exact matches, or \`null\` to disable th
     const closestPoint = invertFoveatedCoords(radius, points)
     return [observers, {
         reads: numPoints * 3,
-        observerInput(stream) {
-            let x = stream.page.mouseX || 0, y = stream.page.mouseY || 0
-            x -= x % quantize, y -= y % quantize
-            return { x, y, w:diam, h:diam, mask:maskColor, maxW: stream.settings.width, maxH: stream.settings.height }
-        },
-        observer: (''+function observeFovea(input, video, audio, obs) {
-            if (!observeFovea.invert) { // Prepare data, if not prepared already.
-                const p = observeFovea.invert = JSON.parse(INVERT_FOVEA)
-                let max = 0
-                for (let i = 0; i < p.length; ++i) max = Math.max(max, p[i])
-                const numPoints = max + 1
-                observeFovea.pointSum = new Float32Array(numPoints * 3)
-                observeFovea.pointNum = new Int32Array(numPoints)
-            }
-            // Get image data.
-            const x = input.x - (input.w / 2 | 0), y = input.y - (input.h / 2 | 0)
-            const d = video.grab(x, y, input.w, input.h, input.maxW, input.maxH)
-            const maskColor = input.mask
-            const closestPoint = observeFovea.invert
-            const pointSum = observeFovea.pointSum, pointNum = observeFovea.pointNum
-            // Normalize, average, and write.
-            pointSum.fill(0), pointNum.fill(0)
-            for (let i = 0, from = 0; from < d.length; ++i) {
-                const R = d[from++], G = d[from++], B = d[from++], A = d[from++]
-                const to = closestPoint[i] * 3
-                const masked = maskColor != null && ((R<<16) | (G<<8) | B) === maskColor ? 1 : 0
-                pointSum[to+0] += masked ? NaN : (2*R - 255) / 255
-                pointSum[to+1] += masked ? NaN : (2*G - 255) / 255
-                pointSum[to+2] += masked ? NaN : (2*B - 255) / 255
-                ++pointNum[closestPoint[i]]
-            }
-            for (let i = 0, to = 0; to < obs.length; ++i) {
-                obs[to+0] = Math.max(-1, Math.min(pointSum[to+0] / pointNum[i], 1))
-                obs[to+1] = Math.max(-1, Math.min(pointSum[to+1] / pointNum[i], 1))
-                obs[to+2] = Math.max(-1, Math.min(pointSum[to+2] / pointNum[i], 1))
-                to += 3
-            }
-        }).replace('INVERT_FOVEA', '`' + JSON.stringify(Array.from(closestPoint)) + '`'),
+        observer: [
+            async function observeFovea({video, audio}, obs, end, closestPoint, x, y, w, h, maxW, maxH, maskColor) {
+                if (!observeFovea.pointSum) { // Prepare data, if not prepared already.
+                    let max = 0
+                    for (let i = 0; i < closestPoint.length; ++i)
+                        max = Math.max(max, closestPoint[i])
+                    const numPoints = max + 1
+                    observeFovea.pointSum = new Float32Array(numPoints * 3)
+                    observeFovea.pointNum = new Int32Array(numPoints)
+                }
+                // Get image data.
+                x -= (w/2) | 0, y -= (h/2) | 0
+                const d = video.grab(x, y, w, h, maxW, maxH)
+                const pointSum = observeFovea.pointSum, pointNum = observeFovea.pointNum
+                // Normalize, average, and write.
+                await end()
+                pointSum.fill(0), pointNum.fill(0)
+                for (let i = 0, from = 0; from < d.length; ++i) {
+                    const R = d[from++], G = d[from++], B = d[from++], A = d[from++]
+                    const to = closestPoint[i] * 3
+                    const masked = maskColor != null && ((R<<16) | (G<<8) | B) === maskColor ? 1 : 0
+                    pointSum[to+0] += masked ? NaN : (2*R - 255) / 255
+                    pointSum[to+1] += masked ? NaN : (2*G - 255) / 255
+                    pointSum[to+2] += masked ? NaN : (2*B - 255) / 255
+                    ++pointNum[closestPoint[i]]
+                }
+                for (let i = 0, to = 0; to < obs.length; ++i) {
+                    obs[to+0] = Math.max(-1, Math.min(pointSum[to+0] / pointNum[i], 1))
+                    obs[to+1] = Math.max(-1, Math.min(pointSum[to+1] / pointNum[i], 1))
+                    obs[to+2] = Math.max(-1, Math.min(pointSum[to+2] / pointNum[i], 1))
+                    to += 3
+                }
+            },
+            Array.from(closestPoint),
+            s => (s.page.mouseX || 0) - (s.page.mouseX || 0) % quantize,
+            s => (s.page.mouseY || 0) - (s.page.mouseY || 0) % quantize,
+            diam,
+            diam,
+            s => s.settings.width,
+            s => s.settings.height,
+            maskColor,
+        ],
         visState(stream) { return Array.from(closestPoint) },
         // JSON doesn't even transmit u32 data.
         // I made a better data format a few times, but it's easier to use built-ins.
@@ -387,11 +394,11 @@ To calculate \`samples\`, divide \`sampleRate\` by the expected frames-per-secon
 `, function imageRect(samples = 2048, sampleRate = 44100) {
     return [observers, {
         reads: samples,
-        observerInput(stream) { return { samples, sampleRate } },
-        observer: function(input, video, audio, obs) {
+        observer: [async function({video, audio}, obs, end, samples, sampleRate) {
             // A copy, but this is small-time compared to `webenv.image(...)`.
-            obs.set(audio.grab(input.samples, input.sampleRate))
-        },
+            await end()
+            obs.set(audio.grab(samples, sampleRate))
+        }, samples, sampleRate],
         visState(stream) { return sampleRate },
         visualize:function(obs, pred, elem, vState) {
             let sumSqr = 0
@@ -404,12 +411,14 @@ To calculate \`samples\`, divide \`sampleRate\` by the expected frames-per-secon
 
 
 
+// TODO: ...Maybe, rename to `webenv.visualize`? (One word is twice as nice as 2.)
 exports.webView = docs(`\`webenv.webView(path = '')\`
 Allows visualizing the observation streams as they are read, by opening \`localhost:1234/path\` or similar in a browser.
 To prevent others from seeing observations, use random characters as \`path\`.
 Other interfaces may define:
 - \`.visState(stream)=>vState\` (the result must be JSON-serializable, sent once at init-time),
 - \`.visualize(obs, pred, elem, vState)\` (serialized into web-views to visualize data there, so write the function out fully, not as \`{f(){}}\`).
+// TODO: Make these just \`.webView: [(elem, obs, pred, ...args)=>…, ...args]\`.
 `, function webView(path = '') {
     const serverSentEvents = {
         'Content-Type': 'text/event-stream',
@@ -1299,7 +1308,7 @@ Provides an observation of the time between frames, relative to the expected-Fra
             obs[0] = Math.max(-1, Math.min(duration / maxMs, 1))
         },
         visState(stream) { return { fps, maxMs, runningAvg:null } },
-        visualize:function(obs, pred, elem, vState) {
+        visualize:function(obs, pred, elem, vState) { // TODO: Receive the +stream._period each frame, and report FPS based on that. (Way more reliable than an extra estimation method.)
             if (!elem.firstChild) {
                 elem.appendChild(document.createElement('div'))
                 elem.firstChild.style.width = '1.2em'
@@ -1619,7 +1628,7 @@ See this object's properties for examples of \`functions\`.
     return {
         priority:1,
         async init(stream) {
-            if (!stream.cdp) return // TODO: This is way too useful to not be used in user-extensions, so, figure out how to. ...If we have in-extension JS code engine like [thereFunc, ...hereArgs], handling both constants and variables, which will take care of injecting on new document, then this will not be an issue.
+            if (!stream.cdp) return
             this.script = (await stream.cdp.send('Page.addScriptToEvaluateOnNewDocument', {
                 source, worldName:'webenvJS',
             })).identifier
@@ -1935,51 +1944,71 @@ const observers = docs(`The shared interface for extension-side video and audio 
 May be replaced by ALL observations coming from the extension. And through WebRTC, not CDP. And with properly-varying bytes-per-value.
 
 Other interfaces that want this must define:
-- \`.observerInput(stream)=>obsInput\` (called on every frame, to JSON-serialize the result),
-- \`.observer(obsInput, video:{grab(x,y,w,h)=>pixels}, audio:{grab(sampleN=2048, sampleRate=44100)=>samples}, obsOutput)\`;
+- \`.observer: [({video, audio}, obs, end, ...args)=>…, ...args]\`
+    - Computed args get the \`stream\`.
+    - Communication cost is reduced as much as possible without compression, don't worry.
+    - Calling \`await end()\` at the end or just before writing to \`obs\` (f32 array) is mandatory.
+    - \`video:{grab(x,y,w,h)=>pixels}\`
+    - \`audio:{grab(sampleN=2048, sampleRate=44100)=>samples\`
+// TODO: Also give the previous actions to observers, so that the extension can perform them for us. (Would need a separate binary-ish stream for this, to not waste time+bandwidth on base64+JSON-encoding actions. Post-web-socket.)
+//   (And the previous predictions, so that users can visualize those.)
 `, {
     key: Symbol('observers'),
     init(stream) {
         if (!stream.extensionPage) return
         stream.extensionPage.exposeFunction('gotObserverData', gotObserverData)
+        stream.extensionPage.exposeFunction('PRINT', console.error) // For debugging.
         function gotObserverData(b64) {
             // Yeah, sure, u16 per color per pixel is 2× the inefficiency. But. Audio.
+            //   TODO: Make the extension communicate through a WebSocket, not CDP.
             const obsBuf = Buffer.from(b64 || '', 'base64') // Int16; decode into floats.
             const obsLen = obsBuf.byteLength / Int16Array.BYTES_PER_ELEMENT | 0
             decodeInts(new Int16Array(obsBuf.buffer, obsBuf.byteOffset, obsLen), stream._obsFloats)
-            // TODO: ...But what do we do about non-observer data becoming overwritten... Maybe not care, since having observers at all is temporary, and ALL observations will soon be provided by the extension...
+            // (Technically, this can overwrite other `read`s, but `await end()` should prevent that.)
         }
     },
-    async read(stream, obs, end) {
-        if (!stream.page || !stream.extensionPage) return
+    async read(stream, obs, _) {
+        if (!stream.page || !stream.extensionPage || stream.extensionPage.isClosed()) return
         const state = stream[this.key] || (stream[this.key] = Object.create(null))
-        if (state.all !== stream._all) {
+        if (state.snd === undefined || state.all !== stream._all) {
             // Relink extension-side observers.
             state.all = stream._all
-            state.obsInds = []
-            const observers = []
+            const items = [], staticArgs = new Map
+            items.push([`()=>{},RCV.obs=new ${Observations.name}(${stream.reads})`])
+            const obsSlicesFunc = items.push([`()=>{}`])-1
+            const endFunc = items.push([`()=>{}`])-1
+            const obsSlices = []
             for (let i = 0; i < stream._all.length; ++i) {
                 const o = stream._all[i]
-                if (typeof o.observer == 'function' || typeof o.observer == 'string')
-                    state.obsInds.push(i),
-                    observers.push({read:''+o.observer, offset:stream._allReadOffsets[i], length:o.reads || 0})
+                if (Array.isArray(o.observer)) {
+                    const item = o.observer
+                    const off = stream._allReadOffsets[i]
+                    const at = obsSlices.push(`RCV.obs.subarray(${off}, ${off + (o.reads || 0)})`)-1
+                    items.push(item)
+                    staticArgs.set(item, `RCV.media,RCV.obsSlices[${at}],RCV.end`)
+                }
             }
+            items[obsSlicesFunc] = [`()=>{},RCV.obsSlices=[${obsSlices.join(',')}]`]
+            items[endFunc] = [`() => {
+                const end = RCV.end = ${end}
+                end.items = ${staticArgs.size}, end.p = new Promise(then => end.then = then)
+            },RCV.media={video,audio}`]
+            state.snd = null
+            const [snd, rcv] = await compileSentJS(staticArgs, items)
+            state.snd = snd
             const w = stream.settings.width || 0
             const h = stream.settings.height || 0
-            await stream.extensionPage.evaluate((o,w,h) => updateObservers(o,w,h), observers, w, h)
+            await stream.extensionPage.evaluate((rcv,w,h) => updateObservers(rcv,w,h), rcv, w, h)
+            function end() { // Resolve if the last end(), and always return a promise.
+                if (!--end.items) end.then()
+                return end.p
+            }
         }
-        const obsInds = state.obsInds
+        if (!state.snd) return
         // Call observers. The extension will call `gotObserverData` for future frames.
         //   (No `await`: the observer stream is delayed by at least a frame, to not stall.)
-        const inputs = new Array(obsInds.length)
-        for (let i = 0; i < obsInds.length; ++i) {
-            const inAll = obsInds[i], o = stream._all[inAll]
-            if (o && typeof o.observerInput == 'function')
-                inputs[i] = o.observerInput(stream)
-            else inputs[i] = undefined
-        }
-        if (stream.extensionPage.isClosed()) return
-        stream.extensionPage.evaluate(ins => void setTimeout(readObservers, 0, ins), inputs).catch(doNothing)
+        const str = await state.snd(stream)
+        stream.extensionPage.evaluate(str => readObservers(str), str).catch(doNothing)
     },
 })
 
@@ -2050,7 +2079,7 @@ The result is a promise for the environment, which is an object with:
             constructor(x, momentum = .99) { this.x = +x, this.m = +momentum }
             valueOf() { return this.x }
             set(x) { return this.x = this.m * this.x + (1 - this.m) * Math.max(-this.x, Math.min(x, this.x*2)) }
-        }(0)
+        }(env && env.streams && env.streams[0] && +env.streams[0]._period || 0)
         this._stepsNow = 0 // Throughput is maximized by lowballing time-between-steps, but without too many steps at once.
         this._killed = false // `.close()` will set this to true.
         await this._relaunchRetrying()
@@ -2482,8 +2511,8 @@ To write new interfaces, look at the pre-existing interfaces.
 
 
 
-function compileSentJS(staticArgs, ...items) { // TODO: Use this for visualizers, and for observers.
-    // Compiles `…, [thereFunc, ...sendArgs], …` into `[sendFunc, receiveFunc]`.
+async function compileSentJS(staticArgs, items) { // TODO: Use this for visualizers.
+    // Compiles items (`…, [thereFunc, ...sendArgs], …`) into `[sendFunc, receiveFunc]`.
     //   This handles both variables and constants, and merges receivers when they have the same body.
     //   All sent args must be JSON-serializable. And, no infinite loops.
     //   `staticArgs` is a Map from items to strings of args that go before sent args.
@@ -2492,34 +2521,41 @@ function compileSentJS(staticArgs, ...items) { // TODO: Use this for visualizers
     //   `sendArgs` can be either `data` or `(...args)=>Promise<data>`.
     //   `sendFunc(...args)` will generate the string to send.
     //   `receiveFunc(str)` on receiver will process the sent string.
-    //     Set up via `receiveFunc = new Function(receiveFunc))()`.
-    //     Used via `f(str)`.
+    //     Set up via `RCV = (new Function(receiveFunc))()`. Used via `await RCV(str)`.
+    //     `RCV` can be used to store globals.
     let sendFuncs = [], receive = []
-    receive.push('const sent = JSON.parse(str)')
-    receive.push(`if (!RCV.empty) RCV.empty = []`)
-    const sent = [], sentStringToIndex = new Map
+    receive.push(`const sent = JSON.parse(str)`)
+    receive.push(`const received = new Array(${items.length})`)
+    const consts = receive.push(``)-1
+    const sentStringToIndex = new Map
+    const constStringToIndex = new Map
     for (let i = 0; i < items.length; ++i) {
-        const item = items[i]
+        const item = items[i] instanceof Promise ? await items[i] : items[i]
         if (!Array.isArray(item)) throw new Error('Can only compile arrays, first received func then sent args')
         receive.push(`if (!RCV.F${i}) RCV.F${i} = ${item[0]}`)
         const args = []
         for (let j = 1; j < item.length; ++j) {
-            const arg = item[j]
+            const arg = item[j] instanceof Promise ? await item[j] : item[j]
             if (typeof arg == 'function') { // Unknown; send it each time.
-                const at = allocSent(arg)
+                const at = allocSent(''+arg, sentStringToIndex)
                 sendFuncs[at] = arg
                 args.push(`sent[${at}]`)
-            } else // Known; pre-send it.
-                args.push(JSON.stringify(arg))
+            } else { // Known; pre-send it.
+                const at = allocSent(JSON.stringify(arg), constStringToIndex)
+                args.push(`RCV.V[${at}]`)
+            }
         }
         const st = staticArgs && staticArgs.get(item)
-        receive.push(`RCV.F${i}(${st ? st+',' : ''}${args.join(',')})`)
+        receive.push(`received[${i}] = RCV.F${i}(${st ? st+',' : ''}${args.join(',')})`)
     }
+    const constStrings = []
+    constStringToIndex.forEach((i,str) => constStrings[i] = str)
+    receive[consts] = `if (!RCV.V) RCV.V = [${constStrings.join(',')}]`
+    receive.push(`return Promise.all(received)`)
     return [bindSender(sendFuncs), `return async function RCV(str){\n${receive.join('\n')}\n}`]
-    function allocSent(fn) { // Returns an index in `sent`.
-        const str = ''+fn, m = sentStringToIndex
+    function allocSent(str, m) { // Returns an index in `sent`.
         if (m.has(str)) return m.get(str)
-        const i = sent.length;  sent[i] = fn;  m.get(str, i);  return i
+        const i = m.size;  m.set(str, i);  return i
     }
     function bindSender(sendFuncs) {
         return async function SND(...args) {
