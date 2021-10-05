@@ -547,6 +547,7 @@ ${endian}
             //   But how often do you have closed envs anyway?
             const env = stream.env
             sendRestream(env, Spot(env).connections)
+            Spot(stream).connections && Spot(stream).connections.forEach(res => res.end())
             await env.listen(route('observations', path, ''+id))
         },
         priority:-1,
