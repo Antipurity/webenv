@@ -3,10 +3,9 @@ This document outlines what still needs to be done to reach MVP state (or the "r
 (These are breaking changes. After this, there shouldn't be any breaking changes.)
 
 - Batch size > 1:
-    - Clean up cruft:
-        - Make visualization args work by specifying an array as the called func, where the first item is what is executed on the other side, and the rest are stream→data funcs (for updated-each-frame variables) or data (for constants). (To save bandwidth, and code size.)
     - Make multi-streaming work better:
         - Figure out why our Python code never shares batches.
+- Joint training and deployment:
     - Make the Capture extension communicate through a Web Socket rather than CDP (gaining speed via not having to communicate through JSON+base64), AND be fully responsible for all/most reads via `remoteRead`, AND for all/most writes via `remoteWrite`.
         - Replace as many `.page` and `.cdp` uses, in `read` and `write` and triggers, as we can with in-extension `observer` versions.
             - There is no way to send `.isTrusted` events in JS, so, if a CDP channel is available for keyboard & mouse events, must use that instead of in-extension presses+clicks.

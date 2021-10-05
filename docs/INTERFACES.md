@@ -158,7 +158,7 @@ These interfaces define numbers that agents can see.
 
 All observations are numbers in `-1`..`1`.
 
-(With `webenv.webView()`, most of these can be easily visualized for debugging.)
+(With `webenv.visualize()`, most of these can be easily visualized for debugging.)
 
 ```js
 webenv.image()
@@ -318,15 +318,15 @@ Must only be used with `webenv.filter(...)`, with a string `cache` path.
 These vacuous interfaces can be very useful for certain needs.
 
 ```js
-webenv.webView()
-webenv.webView(path = '')
+webenv.visualize()
+webenv.visualize(path = '')
 ```
 
-Allows visualizing the observation streams as they are read, by opening `localhost:1234/path` or similar in a browser.
+Allows visualizing observations and predictions, by opening `localhost:1234/path` or similar in a browser.
 
-To prevent others from seeing observations, use random characters as `path`. Not extremely secure, but visualization is not exactly a safety-critical application (and in-web-page authentication is more complicated).
+To prevent others from seeing observations, use random characters as `path`. Not extremely secure, but visualization is not exactly a safety-critical application (and in-web-page authentication is slightly less convenient).
 
-See runtime docs `require('webenv').webView.docs` for details on how interfaces declare themselves viewable.
+See runtime docs `require('webenv').visualize.docs` for details on how interfaces declare themselves viewable.
 
 ```js
 webenv.filter()
@@ -413,7 +413,7 @@ webenv.defaults = [
     webenv.directScore(),
     webenv.userAgent(), // 'WebEnv agent <https://github.com/Antipurity/webenv>'; please override
     webenv.fetchSlice(),
-    webenv.webView(),
+    webenv.visualize(),
     webenv.filter(null, 'cached'),
     webenv.const(),
     webenv.loopback(),

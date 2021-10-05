@@ -151,19 +151,16 @@ Slloooooooow.
                 obs[to++] = masked ? NaN : (2*B - 255) / 255
             }
         }, s => s.settings.width, s => s.settings.height, maskColor],
-        visState(stream) { return { width:stream.settings.width, height:stream.settings.height } },
-        visualize:visualizePageScreenshot,
+        visualize: [visualizePageScreenshot, s => s.settings.width, s => s.settings.height],
     }]
 })
 
 
 
-function visualizePageScreenshot(obs, pred, elem, vState) {
+function visualizePageScreenshot(elem, obs, pred, width, height) {
     if (obs.length % 3) throw new Error('Bad length: ' + obs.length)
     if (!elem.firstChild) {
-        const width = vState.width, height = vState.height
         const obsC = elem.appendChild(document.createElement('canvas'))
-        obsC.width = width, obsC.height = height
         elem.obsCtx = obsC.getContext('2d', {desynchronized:false})
         elem.obsData = elem.obsCtx.createImageData(width, height)
         const predC = elem.appendChild(document.createElement('canvas'))
@@ -228,8 +225,7 @@ Provide a mask color (0xRRGGBB) to mask exact matches, or \`null\` to disable th
             s => s.settings.height,
             maskColor,
         ],
-        visState(stream) { return { width, height } },
-        visualize:visualizePageScreenshot,
+        visualize: [visualizePageScreenshot, width, height],
     }]
 })
 
@@ -250,6 +246,7 @@ Provide a mask color (0xRRGGBB) to mask exact matches, or \`null\` to disable th
     const diam = 2*radius
     const points = getFoveatedCoords(radius, numPoints, RNG, density) // (x<<16) | y
     const closestPoint = invertFoveatedCoords(radius, points)
+    const closestPointArray = Array.from(closestPoint)
     return [observers, {
         reads: numPoints * 3,
         observer: [
@@ -285,7 +282,7 @@ Provide a mask color (0xRRGGBB) to mask exact matches, or \`null\` to disable th
                     to += 3
                 }
             },
-            Array.from(closestPoint),
+            closestPointArray,
             s => (s.page.mouseX || 0) - (s.page.mouseX || 0) % quantize,
             s => (s.page.mouseY || 0) - (s.page.mouseY || 0) % quantize,
             diam,
@@ -294,10 +291,7 @@ Provide a mask color (0xRRGGBB) to mask exact matches, or \`null\` to disable th
             s => s.settings.height,
             maskColor,
         ],
-        visState(stream) { return Array.from(closestPoint) },
-        // JSON doesn't even transmit u32 data.
-        // I made a better data format a few times, but it's easier to use built-ins.
-        visualize:function visualizePageFovea(obs, pred, elem, closestPoint) {
+        visualize: [function visualizePageFovea(elem, obs, pred, closestPoint) {
             if (obs.length % 3) throw new Error('Bad length: ' + obs.length)
             const diam = Math.sqrt(closestPoint.length) | 0
             if (!elem.firstChild) {
@@ -333,7 +327,7 @@ Provide a mask color (0xRRGGBB) to mask exact matches, or \`null\` to disable th
             function toByte(x, nan = -1) {
                 return Math.round(((x !== x ? nan : x) + 1) * (255/2))
             }
-        },
+        }, closestPointArray],
     }]
     function getFoveatedCoords(radius, numPoints, RNG, density) {
         if (numPoints > Math.PI * radius*radius / 2)
@@ -400,92 +394,104 @@ To calculate \`samples\`, divide \`sampleRate\` by the expected frames-per-secon
             obs.set(audio.grab(samples, sampleRate))
         }, samples, sampleRate],
         visState(stream) { return sampleRate },
-        visualize:function(obs, pred, elem, vState) {
-            let sumSqr = 0
-            for (let i=0; i < obs.length; ++i) sumSqr += obs[i] * obs[i]
-            elem.textContent = `Volume: ${(-20 * Math.log(1 / Math.sqrt(sumSqr))).toFixed(2)} dB`
+        visualize: [function(elem, obs, pred) {
+            let obsSqr = 0, predSqr = 0
+            for (let i=0; i < obs.length; ++i) obsSqr += obs[i] * obs[i] || 0
+            for (let i=0; i < pred.length; ++i) predSqr += pred[i] * pred[i] || 0
+            const obsDb = (-20 * Math.log(1 / Math.sqrt(obsSqr))).toFixed(2)
+            const predDb = (-20 * Math.log(1 / Math.sqrt(predSqr))).toFixed(2)
+            elem.textContent = `Volume: ${obsDb} dB real | ${predDb} dB predicted`
             elem.style.fontFamily = 'monospace'
-        },
+        }],
     }]
 })
 
 
 
-// TODO: ...Maybe, rename to `webenv.visualize`? (One word is twice as nice as 2.)
-exports.webView = docs(`\`webenv.webView(path = '')\`
-Allows visualizing the observation streams as they are read, by opening \`localhost:1234/path\` or similar in a browser.
+exports.visualize = docs(`\`webenv.visualize(path = '')\`
+Allows visualizing the observations and predictions, by opening \`localhost:1234/path\` or similar in a browser.
 To prevent others from seeing observations, use random characters as \`path\`.
 Other interfaces may define:
-- \`.visState(stream)=>vState\` (the result must be JSON-serializable, sent once at init-time),
-- \`.visualize(obs, pred, elem, vState)\` (serialized into web-views to visualize data there, so write the function out fully, not as \`{f(){}}\`).
-// TODO: Make these just \`.webView: [(elem, obs, pred, ...args)=>…, ...args]\`.
-`, function webView(path = '') {
+- \`.visualize: [(elem, obs, pred, ...args)=>…, ...args]\`.
+    - Computed \`args\` get \`stream\`.
+    - \`elem\` is a \`<div>\`, initially empty.
+    - \`obs\` and \`pred\` are float32 arrays of equal size.
+`, function visualize(path = '') {
     const serverSentEvents = {
         'Content-Type': 'text/event-stream',
         'Cache-Control': 'no-cache',
-        Connection: 'keep-alive',
+        'Connection': 'keep-alive',
     }
-    const pages = { // TODO: Use this.
-        'Cache-Control': 'max-age=' + (24*3600), // A kilobyte a day won't lead astray.
+    const pages = {
+        'Cache-Control': 'max-age=' + (24*3600), // A kilobyte a day is a rite away.
         'Content-Type': 'text/html',
     }
+    const key = visualize.key || (visualize.key = Symbol('visualize'))
+    function route(...p) { return '/' + p.filter(s=>s).join('/') }
+    function Spot(o) { return o[key] || (o[key] = Object.create(null)) }
     return {
-        registered:null, // For un-`listen`ing.
-        obsListConnections:new Set, // For multi-streaming.
-        connections:[], // For data stream listeners.
-        interfaces:null, // For detecting relinks.
-        lastPreds:[], // Per-ID. Not perfectly synchronized like a queue would be, but who cares. Sync requires copies anyway, so, too slow.
         async init(stream) {
             const env = stream.env, id = stream.index
-            this.registered = [...(this.registered || []), ...await Promise.all([
+            sendRestream(env, Spot(env).connections) // Adding/removing many streams at once will send quadratically-many stream indices. Who cares.
+            await Promise.all([
                 // API.
                 env.listen(route('observations', path), (req, res) => {
                     // Live stream lists.
-                    const conn = this.obsListConnections
-                    conn.add(res), res.on('close', () => conn.delete(res))
+                    const spot = Spot(env)
+                    const to = spot.connections || (spot.connections = new Set)
+                    to.add(res), res.on('close', () => to.delete(res))
                     res.writeHead(200, serverSentEvents)
-                    sendRestream(env, conn)
+                    sendRestream(env, to)
                 }),
                 env.listen(route('observations', path, ''+id), (req, res) => {
                     // Remember to later send events to here whenever observations arrive.
-                    if (!this.connections[id]) this.connections[id] = new Set
-                    const conn = this.connections[id]
-                    conn.add(res), res.on('close', () => conn.delete(res))
+                    const spot = Spot(stream)
+                    const to = spot.connections || (spot.connections = new Set)
+                    to.add(res), res.on('close', () => to.delete(res))
                     res.writeHead(200, serverSentEvents)
-                    sendRelink(stream, conn)
+                    sendRelink(stream, to)
                 }),
                 // UI.
                 env.listen(route(path), (req, res) => {
                     // List all streams, and allow switching between them.
                     //   (Very simple HTML, inlined & hardcoded.)
+                    const bpe = Observations.BYTES_PER_ELEMENT
                     res.writeHead(200, pages)
                     res.end(`
 <!DOCTYPE html>
 <style>
-    iframe { flex:1 1 100%; border-width:0 }
-    html { display:flex; flex-flow:column wrap; height:100%; justify-content:center; align-items:center; }
+    html { display:flex; flex-flow:row wrap; height:100%; justify-content:center; align-items:center; overflow:hidden; }
     button { border:none }
     button.active { background-color:#4dc1ed }
     @media (prefers-color-scheme: dark) {
         /* Glow-in-the-dark theme. */
-        html { background-color:#1f1f1f }
+        html { background-color:#1f1f1f; color:#e0e0e0 }
     }
+    #buttonContainer { display:flex; flex-flow:column wrap; justify-content:center; align-items:center }
+    #rootContainer { flex:1 1 auto; position:relative; height:100% }
+    #rootContainer>div>div { text-align:center }
+    .root { animation: .2s fade-in }
+    .removed { position:absolute; left:0;top:0;width:100%; pointer-events:none;  animation: .2s fade-out both }
+    @keyframes fade-in { from{ opacity:0; transform:translate(50em,0) } to{ opacity:1 } }
+    @keyframes fade-out { from{ opacity:1 } to{ opacity:0; transform:translate(-50em,0) } }
 </style>
 <script>
-const root = document.documentElement
-const iframe = root.appendChild(document.createElement('iframe'))
-const source = new EventSource(${JSON.stringify(route('observations', path))})
+// Selection.
+const bc = document.documentElement.appendChild(document.createElement('div'))
+const rc = document.documentElement.appendChild(document.createElement('div'))
+bc.id = 'buttonContainer', rc.id = 'rootContainer'
+const sources = new EventSource(${JSON.stringify(route('observations', path))})
 const buttons = []
 let selected
 function select(btn) {
     selected && selected.classList.remove('active')
     const sameId = selected && selected.textContent === btn.textContent
     if ((selected = btn)) {
-        if (!sameId) iframe.src = ${JSON.stringify(path ? '/'+path : '')}+'/'+btn.textContent
+        if (!sameId) changeSourceTo(${JSON.stringify(route('observations', path)+'/')}+btn.textContent)
         selected.classList.add('active')
     }
 }
-source.addEventListener('restream', function(evt) {
+sources.addEventListener('restream', function(evt) {
     const ids = JSON.parse(evt.data)
     buttons.forEach(b => b.remove())
     const prevSelected = selected && selected.textContent
@@ -493,7 +499,7 @@ source.addEventListener('restream', function(evt) {
         const b = document.createElement('button')
         b.textContent = ''+id
         if (prevSelected === b.textContent) select(b)
-        buttons.push(root.insertBefore(b, iframe))
+        buttons.push(bc.appendChild(b))
     })
     if (!ids.length) select()
     else if (!selected) select(buttons[0])
@@ -502,40 +508,70 @@ onclick = evt => {
     if (!evt.target || evt.target.tagName !== 'BUTTON') return
     select(evt.target)
 }
+// Stream visualization.
+let RCV, source
+function changeSourceTo(to) {
+    source && source.close()
+    source = new EventSource(to)
+    source.addEventListener('relink', function(evt) {
+        RCV = (new Function(evt.data))()
+    })
+    source.onmessage = function(evt) { // Receive, decode, defer.
+        if (!RCV) return
+        const parts = evt.data.split(' ')
+        decode(parts[0], RCV.obs)
+        decode(parts[1], RCV.pred)
+        RCV(parts.slice(2).join(' '))
+    }
+    RCV = null
+}
+function decode(base64, into) {
+    if (!base64) return
+    const str = atob(base64)
+    into = new Uint8Array(into.buffer, into.byteOffset, into.byteLength)
+    const end = Math.min(into.length * ${bpe}, str.length)
+    if (endian() === 'LE')
+        for (let i=0; i < end; ++i) into[i] = str.charCodeAt(i)
+    else
+        for (let i=0; i+${bpe-1} < end; i += ${bpe})
+            ${new Array(bpe).fill().map((_,j) => `into[i+${j}] = str.charCodeAt(i+${bpe-j-1})`).join(', ')}
+}
+${endian}
 </script>`)
                 }),
-                env.listen(route(path, ''+id), (req, res) => {
-                    // Serve the base visualization page.
-                    res.writeHead(200, pages)
-                    res.end(`<!DOCTYPE html><style>html>div{text-align:center}@media (prefers-color-scheme: dark) {html{color:#e0e0e0}}</style><script>${createBaseJS(route('observations', path, ''+id))}</script>`)
-                }),
-            ])]
-            sendRestream(env, this.obsListConnections) // Adding/removing many at once will send quadratically-many 'restream' events.
-            function route(...p) { return '/' + p.filter(s=>s).join('/') }
+            ])
         },
         async deinit(stream) {
-            sendRestream(stream.env, this.obsListConnections)
-            const reg = this.registered;  this.registered = null
-            reg && (await Promise.all(reg.map(path => stream.env.listen(path))))
+            // '/observations/path' and '/path' never get unlinked, causing a memory leak for closed envs.
+            //   But how often do you have closed envs anyway?
+            const env = stream.env
+            sendRestream(env, Spot(env).connections)
+            await env.listen(route('observations', path, ''+id))
         },
         priority:-1,
         async read(stream, obs, end) {
-            const id = stream.index, to = this.connections[id]
-            if (!to || !to.size || !this.lastPreds[id]) return
-            if (this.interfaces !== stream.interfaces) {
+            const spot = Spot(stream)
+            const to = spot.connections || (spot.connections = new Set)
+            if (!to.size) return
+            if (spot.interfaces !== stream.interfaces || !spot.SND) {
+                [spot.SND, spot.RCV] = await createExtendJS(stream)
                 sendRelink(stream, to)
-                this.interfaces = stream.interfaces
+                spot.interfaces = stream.interfaces
             }
+            const json = await spot.SND(stream)
             await end()
-            sendObservation(obs, this.lastPreds[id], to)
+            sendObservation(obs, spot.pred, json, to)
         },
         write(stream, pred, act) {
             // Remember prediction to send later, unless it's all-zeros|NaN.
             if (!pred) return
+            const spot = Spot(stream)
             let empty = true
             for (let i = 0; i < pred.length; ++i)
                 if (pred[i] === pred[i]) { empty = false;  break }
-            this.lastPreds[stream.index] = empty ? null : pred
+            spot.pred = empty ? null : pred // Only remember the last pred.
+            // Not perfectly synchronized like a queue would be, but, who cares.
+            //   (And `pred` changes in-place, so a queue would require expensive copies.)
         },
     }
     function sendRestream(env, to) {
@@ -547,85 +583,54 @@ onclick = evt => {
         to.forEach(res => res.write(toWrite))
     }
     function sendRelink(stream, to) {
-        if (!to || !to.size) return
-        let end = 0
-        for (let inter of stream._all)
-            if (typeof inter.reads == 'number')
-                end += inter.reads
-        const toWrite = `event:relink\ndata:${createExtendJS(stream, stream._all, end)}\n\n`
+        const spot = Spot(stream)
+        if (!to || !to.size || !spot.RCV) return
+        const toWrite = `event:relink\ndata:${spot.RCV.replace(/\n/g, '\ndata:')}\n\n`
         to.forEach(res => res.write(toWrite))
     }
-    function sendObservation(obs, pred, to) {
+    function sendObservation(obs, pred, json, to) {
         // 33% + 8 bytes of memory overhead per obs, due to base64 and Server-Sent Events.
         if (!(obs instanceof Observations)) throw new Error('Observation is not f32')
         if (pred && !(pred instanceof Observations)) throw new Error('Prediction is not f32')
         // Read all observations, not just ours.
         const obs64 = toLittleEndian(obs, Observations.BYTES_PER_ELEMENT).toString('base64')
         const pred64 = pred ? toLittleEndian(pred, Observations.BYTES_PER_ELEMENT).toString('base64') : ''
-        const toWrite = `data:${obs64} ${pred64}\n\n`
+        const toWrite = `data:${obs64} ${pred64} ${json}\n\n`
         to.forEach(res => res.write(toWrite))
     }
-    function createBaseJS(at) {
-        // Receive & decode observation and prediction, then defer to currently-linked visualizers.
-        const bpe = Observations.BYTES_PER_ELEMENT
-        return `let state = null, root = document.documentElement.appendChild(document.createElement('div'))
-const source = new EventSource(${JSON.stringify(at)})
-source.addEventListener('relink', function(evt) {
-    while (root.lastChild) root.removeChild(root.lastChild)
-    new Function('state', evt.data)(state = {}, root)
-})
-let knob = null
-source.onmessage = function(evt) {
-    if (!state) return
-    Promise.resolve(evt.data).then(data => {
-        const binary = data.split(' ').map(atob)
-        binary[0] && decode(binary[0], state.OBS_BYTES)
-        binary[1] && decode(binary[1], state.PRED_BYTES)
-        state.VISUALIZE(state)
-    })
-}
-function decode(str, into) {
-    const end = Math.min(into.length * ${bpe}, str.length)
-    if (endian() === 'LE')
-        for (let i=0; i < end; ++i) into[i] = str.charCodeAt(i)
-    else
-        for (let i=0; i+${bpe-1} < end; i += ${bpe})
-            ${new Array(bpe).fill().map((_,j) => `into[i+${j}] = str.charCodeAt(i+${bpe-j-1})`).join(', ')}
-}
-${endian}
-`
-    }
-    function createExtendJS(stream, inters, end) {
-        // Return the function body, which accepts `state` and `root` to fill them.
+    async function createExtendJS(stream) { // → [SND, RCV]
+        const inters = stream._all
         if (!inters) return ''
-        let n = 0
-        const visInits = [], visualizers = []
-        let start = 0
-        const bpe = Observations.BYTES_PER_ELEMENT
-        visInits.push(`state.OBS=new ${Observations.name}(${end})`)
-        visInits.push(`state.OBS_BYTES=new Uint8Array(state.OBS.buffer, state.OBS.byteOffset, state.OBS.byteLength)`)
-        visInits.push(`state.PRED=new ${Observations.name}(${end})`)
-        visInits.push(`state.PRED_BYTES=new Uint8Array(state.PRED.buffer, state.PRED.byteOffset, state.PRED.byteLength)`)
-        for (let i = 0; i < inters.length; ++i) {
-            const inter = inters[i]
+        const staticArgs = new Map, items = [], prelude = []
+        // Remove old root. (Only a bit of unused memory is leaked for a bit, it's okay.)
+        prelude.push(`const oldRoot = document.querySelector('.root')`)
+        prelude.push(`if (oldRoot) oldRoot.className = 'removed', setTimeout(() => oldRoot.remove(), 2000)`)
+        // Add new root.
+        prelude.push(`const root = document.querySelector('#rootContainer').appendChild(document.createElement('div'))`)
+        prelude.push(`root.className = 'root'`)
+        // Re-use obs/pred arrays for a bit more efficiency.
+        let reads = 0
+        const bpe = Observations.BYTES_PER_ELEMENT, cons = Observations.name
+        for (let inter of inters)
+            if (typeof inter.reads == 'number')
+                reads += inter.reads
+        prelude.push(`const o = RCV.obs = new ${cons}(${reads})`)
+        prelude.push(`const p = RCV.pred = new ${cons}(${reads})`)
+        let n = 0, start = 0
+        for (let inter of inters) {
             if (typeof inter.reads == 'number') start += inter.reads
-            if (typeof inter.visualize != 'function') continue
-            const elem = 'state.v'+n++, vState = 'state.v'+n++
-            const obs = 'state.v'+n++, pred = 'state.v'+n++, vis = 'state.v'+n++
-            visInits.push(`${elem}=root.appendChild(document.createElement('div'))`)
-            if (inter.visState !== undefined) {
-                const f = inter.visState
-                const v = JSON.stringify(typeof f == 'function' ? f(stream) : f)
-                visInits.push(`${vState}=JSON.parse(\`${v.replace(/`/g, '\\`')}\`)`)
-            } else visInits.push(`${vState}=undefined`)
+            const item = inter.visualize
+            if (!Array.isArray(item)) continue
+            // Prepare elem,obs,pred for each visualized interface (item).
+            const elem = 'v'+n++, o = 'v'+n++, p = 'v'+n++
+            prelude.push(`const ${elem} = root.appendChild(document.createElement('div'))`)
             const r = inter.reads || 0, realStart = start - r
-            visInits.push(`${obs}=new ${Observations.name}(state.OBS.buffer, state.OBS.byteOffset + ${realStart*bpe}, ${r})`)
-            visInits.push(`${pred}=new ${Observations.name}(state.PRED.buffer, state.PRED.byteOffset + ${realStart*bpe}, ${r})`)
-            visInits.push(`${vis}=${inter.visualize}`)
-            visualizers.push(`${vis}(${obs},${pred},${elem},${vState})`)
+            prelude.push(`const ${o} = new ${cons}(o.buffer, o.byteOffset + ${realStart*bpe}, ${r})`)
+            prelude.push(`const ${p} = new ${cons}(p.buffer, p.byteOffset + ${realStart*bpe}, ${r})`)
+            items.push(item)
+            staticArgs.set(item, `${elem},${o},${p}`)
         }
-        visInits.push(`state.VISUALIZE = function(state) { ${visualizers.join('\n')} }`)
-        return visInits.join('\n').replace(/\n/g, '\ndata:')
+        return compileSentJS(staticArgs, items, prelude.join('\n'))
     }
     function toLittleEndian(f32, bpe) {
         // Different processors can have different endian-ness (byte-order). This func allows ensuring that parses/serializations with different byte-orders arrive at the same values.
@@ -1309,8 +1314,7 @@ Provides an observation of the time between frames, relative to the expected-Fra
             await end()
             obs[0] = Math.max(-1, Math.min(duration / maxMs, 1))
         },
-        visState(stream) { return { fps, maxMs, runningAvg:null } },
-        visualize:function(obs, pred, elem, vState) { // TODO: Receive the +stream._period each frame, and report FPS based on that. (Way more reliable than an extra estimation method.)
+        visualize: [function(elem, obs, pred, period) {
             if (!elem.firstChild) {
                 elem.appendChild(document.createElement('div'))
                 elem.firstChild.style.width = '1.2em'
@@ -1321,12 +1325,10 @@ Provides an observation of the time between frames, relative to the expected-Fra
                 elem.lastChild.style.fontFamily = 'monospace,monospace'
                 elem.frame = false
             }
-            const frames = obs[0] * vState.maxMs + 1 / vState.fps
-            if (vState.runningAvg == null) vState.runningAvg = frames
-            vState.runningAvg = .95 * vState.runningAvg + (1-.95) * frames
+            const fps = 1000 / period
             elem.firstChild.style.backgroundColor = (elem.frame = !elem.frame) ? 'lightgray' : 'darkgray'
-            elem.lastChild.textContent = (1000 / vState.runningAvg).toFixed(1) + ' FPS'
-        },
+            elem.lastChild.textContent = fps.toFixed(1) + ' FPS'
+        }, s => +s._period],
     }
 })
 
@@ -1975,9 +1977,7 @@ Other interfaces that want this must define:
         if (state.snd === undefined || state.all !== stream._all) {
             // Relink extension-side observers.
             state.all = stream._all
-            const items = [], staticArgs = new Map
-            items.push([`()=>{},RCV.obs=new ${Observations.name}(${stream.reads})`])
-            const obsSlicesFunc = items.push([`()=>{}`])-1
+            const items = [], staticArgs = new Map, prelude = []
             const endFunc = items.push([`()=>{}`])-1
             const obsSlices = []
             for (let i = 0; i < stream._all.length; ++i) {
@@ -1990,13 +1990,15 @@ Other interfaces that want this must define:
                     staticArgs.set(item, `RCV.media,RCV.obsSlices[${at}],RCV.end`)
                 }
             }
-            items[obsSlicesFunc] = [`()=>{},RCV.obsSlices=[${obsSlices.join(',')}]`]
+            prelude.push(`RCV.obs=new ${Observations.name}(${stream.reads})`)
+            prelude.push(`RCV.obsSlices=[${obsSlices.join(',')}]`)
+            prelude.push(`RCV.media={video,audio}`) // Expecting those globals in the extension.
             items[endFunc] = [`() => {
                 const end = RCV.end = ${end}
                 end.items = ${staticArgs.size}, end.p = new Promise(then => end.then = then)
-            },RCV.media={video,audio}`]
+            }`]
             state.snd = null
-            const [snd, rcv] = await compileSentJS(staticArgs, items)
+            const [snd, rcv] = await compileSentJS(staticArgs, items, prelude.join('\n'))
             state.snd = snd
             const w = stream.settings.width || 0
             const h = stream.settings.height || 0
@@ -2078,10 +2080,17 @@ The result is a promise for the environment, which is an object with:
         this._lastStepEnd = performance.now() // For measuring time between steps.
         this._period = new class ObsNumber { // Measuring time between steps.
             // A number that estimates some other number, independent of context (unlike a NN).
-            constructor(x, momentum = .99) { this.x = +x, this.m = +momentum }
-            valueOf() { return this.x }
-            set(x) { return this.x = this.m * this.x + (1 - this.m) * Math.max(-this.x, Math.min(x, this.x*2)) }
-        }(env && env.streams && env.streams[0] && +env.streams[0]._period || 0)
+            // `webenv.frameTime` visualizes this.
+            constructor(maxHorizon = 10000) {
+                this.m = [0,0,0], this.maxHorizon = +maxHorizon
+            }
+            valueOf() { return this.m[1] }
+            set(x) {
+                signalUpdate(x, this.m, this.maxHorizon)
+                return this.m[1]
+            }
+        }()
+        if (env && env.streams && env.streams[0]) this._period.set(+env.streams[0]._period)
         this._stepsNow = 0 // Throughput is maximized by lowballing time-between-steps, but without too many steps at once.
         this._killed = false // `.close()` will set this to true.
         await this._relaunchRetrying()
@@ -2513,7 +2522,7 @@ To write new interfaces, look at the pre-existing interfaces.
 
 
 
-async function compileSentJS(staticArgs, items) { // TODO: Use this for visualizers.
+async function compileSentJS(staticArgs, items, prelude = '') {
     // Compiles items (`…, [thereFunc, ...sendArgs], …`) into `[sendFunc, receiveFunc]`.
     //   This handles both variables and constants, and merges receivers when they have the same body.
     //   All sent args must be JSON-serializable. And, no infinite loops.
@@ -2525,16 +2534,15 @@ async function compileSentJS(staticArgs, items) { // TODO: Use this for visualiz
     //   `receiveFunc(str)` on receiver will process the sent string.
     //     Set up via `RCV = (new Function(receiveFunc))()`. Used via `await RCV(str)`.
     //     `RCV` can be used to store globals.
-    let sendFuncs = [], receive = []
+    let sendFuncs = [], prefix = [], receive = []
     receive.push(`const sent = JSON.parse(str)`)
     receive.push(`const received = new Array(${items.length})`)
-    const consts = receive.push(``)-1
     const sentStringToIndex = new Map
     const constStringToIndex = new Map
     for (let i = 0; i < items.length; ++i) {
         const item = items[i] instanceof Promise ? await items[i] : items[i]
         if (!Array.isArray(item)) throw new Error('Can only compile arrays, first received func then sent args')
-        receive.push(`if (!RCV.F${i}) RCV.F${i} = ${item[0]}`)
+        prefix.push(`RCV.F${i} = ${item[0]}`)
         const args = []
         for (let j = 1; j < item.length; ++j) {
             const arg = item[j] instanceof Promise ? await item[j] : item[j]
@@ -2550,11 +2558,18 @@ async function compileSentJS(staticArgs, items) { // TODO: Use this for visualiz
         const st = staticArgs && staticArgs.get(item)
         receive.push(`received[${i}] = RCV.F${i}(${st ? st+',' : ''}${args.join(',')})`)
     }
-    const constStrings = []
-    constStringToIndex.forEach((i,str) => constStrings[i] = str)
-    receive[consts] = `if (!RCV.V) RCV.V = [${constStrings.join(',')}]`
     receive.push(`return Promise.all(received)`)
-    return [bindSender(sendFuncs), `return async function RCV(str){\n${receive.join('\n')}\n}`]
+    if (constStringToIndex.size) {
+        const constStrings = []
+        constStringToIndex.forEach((i,str) => constStrings[i] = str)
+        prefix.push(`RCV.V = [${constStrings.join(',')}]`)
+    }
+    prelude && prefix.push(prelude)
+    return [
+        bindSender(sendFuncs),
+        `async function RCV(str) {${receive.join('\n')}}
+        ${prefix.join('\n')}
+        return RCV`]
     function allocSent(str, m) { // Returns an index in `sent`.
         if (m.has(str)) return m.get(str)
         const i = m.size;  m.set(str, i);  return i
@@ -2579,7 +2594,7 @@ exports.defaults = [
     exports.directScore(),
     exports.userAgent(),
     exports.fetchSlice(),
-    exports.webView(),
+    exports.visualize(),
     exports.filter(null, 'cached'),
     exports.const(),
     exports.loopback(),
