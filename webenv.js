@@ -425,6 +425,10 @@ Other interfaces may define:
         'Cache-Control': 'no-cache',
         Connection: 'keep-alive',
     }
+    const pages = { // TODO: Use this.
+        'Cache-Control': 'max-age=' + (24*3600), // A kilobyte a day won't lead astray.
+        'Content-Type': 'text/html',
+    }
     return {
         registered:null, // For un-`listen`ing.
         obsListConnections:new Set, // For multi-streaming.
@@ -454,8 +458,7 @@ Other interfaces may define:
                 env.listen(route(path), (req, res) => {
                     // List all streams, and allow switching between them.
                     //   (Very simple HTML, inlined & hardcoded.)
-                    res.statusCode = 200
-                    res.setHeader('Content-Type', 'text/html')
+                    res.writeHead(200, pages)
                     res.end(`
 <!DOCTYPE html>
 <style>
@@ -503,8 +506,7 @@ onclick = evt => {
                 }),
                 env.listen(route(path, ''+id), (req, res) => {
                     // Serve the base visualization page.
-                    res.statusCode = 200
-                    res.setHeader('Content-Type', 'text/html')
+                    res.writeHead(200, pages)
                     res.end(`<!DOCTYPE html><style>html>div{text-align:center}@media (prefers-color-scheme: dark) {html{color:#e0e0e0}}</style><script>${createBaseJS(route('observations', path, ''+id))}</script>`)
                 }),
             ])]
