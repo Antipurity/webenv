@@ -460,7 +460,7 @@ Other interfaces may define:
                     res.end(`
 <!DOCTYPE html>
 <style>
-    html { display:flex; flex-flow:row wrap; height:100%; justify-content:center; align-items:center; overflow:hidden; }
+    html { display:flex; flex-flow:row wrap; height:100%; justify-content:center; align-items:center; overflow-x:hidden; }
     button { border:none }
     button.active { background-color:#4dc1ed }
     @media (prefers-color-scheme: dark) {
@@ -499,7 +499,8 @@ sources.addEventListener('restream', function(evt) {
         const b = document.createElement('button')
         b.textContent = ''+id
         if (prevSelected === b.textContent) select(b)
-        buttons.push(bc.appendChild(b))
+        if (ids.length > 1) bc.appendChild(b)
+        buttons.push(b)
     })
     if (!ids.length) select()
     else if (!selected) select(buttons[0])
