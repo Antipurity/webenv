@@ -503,7 +503,7 @@ sources.addEventListener('restream', function(evt) {
         buttons.push(b)
     })
     if (!ids.length) select()
-    else if (!selected) select(buttons[0])
+    else if (!selected || ids.length == 1) select(buttons[0])
 })
 onclick = evt => {
     if (!evt.target || evt.target.tagName !== 'BUTTON') return
