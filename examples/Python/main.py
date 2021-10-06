@@ -10,6 +10,8 @@ import torch
 # Lots of hyperparams, so code is overly complex; pretend that non-picked `if` branches do not exist, at first.
 
 hparams = {
+  'batch_size': 2,
+
   'lr': .001,
   'optim': 'Adam', # https://pytorch.org/docs/stable/optim.html
 
@@ -110,7 +112,7 @@ def loss(pred, got, obs, act_len):
       pred = pred + recurrent.webenv_merge(torch.zeros_like(pred), obs, 0.)
   L = obs_loss(pred, got) / hparams['loss_divisor']
   if hparams['console']:
-    print(obs.shape[0], L.cpu().detach().numpy()) # TODO
+    print(str(obs.shape[0])+'×', (L / pred.shape[0]).cpu().detach().numpy())
   if hparams['tensorboard']:
     writer.add_scalar('Loss', L, i-1)
   if return_model is not None or max_model is not None:
@@ -135,7 +137,7 @@ def output(lock, state, obs, act_len): # Add previous frame to next, if needed.
     state = state + recurrent.webenv_merge(state, obs, 0.)
   return recurrent.webenv_slice(lock, state, obs, act_len)
 agent = recurrent.recurrent(
-  (1,N), loss=loss, optimizer=optim,
+  (hparams['batch_size'], N), loss=loss, optimizer=optim,
   unroll_length=hparams['unroll_length'], synth_grad=synth_grad,
   input = getattr(recurrent, 'webenv_' + hparams['merge_obs']),
   output=output,
@@ -154,8 +156,5 @@ webenv.webenv(
     # Note: ideally, the homepage would be a redirector to random websites.
     #   (Install & use the RandomURL dataset if you can. No pre-existing website is good enough.)
   ],
-  ['we.browser'], # TODO
-  ['we.browser'], # TODO
-  ['we.browser'], # TODO
-  ['we.browser'], # TODO
+  *[['we.browser'] for i in range(hparams['batch_size'])],
   webenv_path=we_p)

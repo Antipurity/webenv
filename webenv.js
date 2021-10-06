@@ -1825,7 +1825,7 @@ function signalUpdate(value, moments = [0,0,0], maxHorizon = 10000) {
     // Updates count & mean & variance estimates of `moments` in-place.
     //   (Make sure that `value` is sane, such as `-1e9`…`1e9`. And not normalized.)
     const prevMean = moments[1], n1 = moments[0], n2 = n1+1, d = value - moments[1]
-    if (moments[0] + 1 <= maxHorizon)
+    if (n2 <= maxHorizon)
         moments[0] = n2
     moments[1] += d / n2
     moments[2] = (moments[2] * n1 + d * (value - prevMean)) / n2

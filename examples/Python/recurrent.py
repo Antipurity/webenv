@@ -144,8 +144,6 @@ def recurrent(
     async def step(lock, indices, obs, *args):
       # Step.
       nonlocal start_state, state, unroll_index, unroll_loss, unrolls
-      if indices == 0:
-        indices = np.array([[0]], dtype=np.int64)
       obs_t = list_to_torch(obs, device)
       state2 = gather(state, indices)
       prev_state2 = state2
@@ -212,8 +210,9 @@ if __name__ == '__main__':
 
     import time
     start = time.time()
+    indices = np.array([[0]], dtype=np.int64)
     for i in range(n):
-      preds, acts = await stream(asyncio.Future(), 0, obs, [0])
+      preds, acts = await stream(asyncio.Future(), indices, obs, [0])
       with torch.no_grad():
         print('L1:', np.nansum(np.abs(preds[0] - obs)))
     print('Time:', time.time() - start, 's')

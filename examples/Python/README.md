@@ -10,13 +10,15 @@ A PyTorch implementation of an agent.
   - `reinforcement_learning.py`: maximization code, for non-prediction goals. (Mostly by modeling the reward and maximizing that model's output.)
   - `main.py`: putting it all together.
 
-Unimplemented: save/load; multiple agents with the same model (which would reduce variance and make learning easier). Also did not implement opinions: non-static sparsity (to make [low-dimensional representations](https://arxiv.org/abs/1906.10720) high-dimensional by combining many); [Transformers](https://arxiv.org/abs/2103.03206); non-loss [exploration reward](https://arxiv.org/abs/2101.09458) to [optimize](http://proceedings.mlr.press/v32/silver14.pdf); experience replay; [GAN losses](https://phillipi.github.io/pix2pix/); [Siamese networks](https://arxiv.org/abs/2011.10566); literally anything else (use your imagination and/or ML expertise).
+Unimplemented: save/load.
+
+Did not implement opinions: non-static sparsity (to make [low-dimensional representations](https://arxiv.org/abs/1906.10720) high-dimensional by combining many); [Transformers](https://arxiv.org/abs/2103.03206); non-loss [exploration reward](https://arxiv.org/abs/2101.09458) to [optimize](http://proceedings.mlr.press/v32/silver14.pdf); experience replay; [GAN losses](https://phillipi.github.io/pix2pix/); [Siamese networks](https://arxiv.org/abs/2011.10566); literally anything else (use your imagination and/or ML expertise).
 
 ## Tutorial
 
 If you ever woke up in the middle of the night to think, "damn, I **need** to know how to run this PyTorch example!" — well, you are in luck!
 
-First, make sure to have [Python](https://www.google.com/search?q=install+python) (90 MB) and [PyTorch](https://www.google.com/search?q=install+pytorch) (1.2 GB, mostly due to CUDA) installed.
+First, make sure to have [Python](https://www.google.com/search?q=install+python) 3.7+ (90 MB) and [PyTorch](https://www.google.com/search?q=install+pytorch) (1.2 GB, mostly due to CUDA) installed. And `npm install -g webenv-ml`, obviously.
 
 Optionally, install [TensorBoard](https://www.google.com/search?q=install+tensorboard), to be able to create and view those loss plots. Pretty bad software though, would not recommend.
 

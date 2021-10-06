@@ -1,8 +1,9 @@
 // An extension for capturing video & audio.
 //   Lots of changing of data formats, but I can't find a way to have less copying.
 
-let RCV = null
+let RCV = null, STR = []
 let stream = null
+let lastRequest = performance.now(), timeBetweenRequests = [0,0,0]
 const video = {
     ctx2d:document.createElement('canvas').getContext('2d'),
     elem:null, // ImageCapture throws far too many errors for us.
@@ -39,17 +40,19 @@ const audio = {
             const scriptNode = this.ctx.createScriptProcessor(512)
             scriptNode.onaudioprocess = evt => {
                 if (!this.buf) return
-                const input = evt.inputBuffer, output = evt.outputBuffer
-                this.channels = input.numberOfChannels
-                const tmp = _allocArray(this.channels).fill()
+                const input = evt.inputBuffer
+                const channels = this.channels = input.numberOfChannels
+                const tmp = _allocArray(channels).fill()
                 const inputData = tmp.map((_,ch) => input.getChannelData(ch))
                 _allocArray(tmp)
+                let pos = this.pos, buf = this.buf
                 for (let i = 0; i < inputData[0].length; ++i) {
-                    for (let ch = 0; ch < this.channels; ++ch) {
-                        this.buf[this.pos++] = inputData[ch][i]
-                        if (this.pos >= this.buf.length) this.pos = 0
+                    for (let ch = 0; ch < channels; ++ch) {
+                        buf[pos++] = inputData[ch][i]
+                        if (pos >= buf.length) pos = 0
                     }
                 }
+                this.pos = pos
                 // Do not write anything to output, to be silent.
             }
             sourceNode.connect(scriptNode)
@@ -79,7 +82,7 @@ const audio = {
 function updateObservers(rcv, width, height) {
     RCV = (new Function(rcv))()
     // TODO: Remember the sample rate in `audio.grab()`, and when sample rate changes, reinit audio.ctx.
-    if (stream !== undefined) { // TODO: Do not kill the stream on update. (Or the audio context.)
+    if (stream !== undefined) { // TODO: Do not kill the stream on a mere update.
         // TODO: Make `video.grab()` and `audio.grab()` re/init the stream if present (reinit if width/height changed), not this.
         stream = undefined
         // TODO: If this is missing, use navigator.mediaDevices.getDisplayMedia.
@@ -100,15 +103,32 @@ function updateObservers(rcv, width, height) {
     }
 }
 
-// TODO: Call `readObservers` on a timer, estimating runtime. (To be robust to dropped packets.)
+
+
+// Desynchronize reads, to be robust to dropped packets (which "one response per one request" is not).
+function timer() {
+    setTimeout(timer, timeBetweenRequests[1])
+    processObservers()
+}
+setTimeout(timer, 0)
+
 async function readObservers(str) {
-    if (!RCV) return
-    try { await RCV(str) }
-    catch (err) { PRINT(err.stack) }
-    // Report space-separated base64 observation.
+    STR.push(str), STR.length > 16 && STR.shift()
+    const next = performance.now()
+    signalUpdate(next - lastRequest, timeBetweenRequests, 1000)
+    lastRequest = next
+}
+function processObservers() {
+    if (!STR.length) return // Wait for the first request.
+    if (STR.length == 1) STR.push(STR[0]) // Re-use the last message if we can.
+    RCV && RCV(STR.shift()).then(sendObserverDataBack, processingFailed)
+}
+function processingFailed(err) { typeof PRINT == 'function' && PRINT(err.stack) }
+function sendObserverDataBack() {
     if (typeof gotObserverData == ''+void 0) return
     toBase64(encodeInts(RCV.obs)).then(gotObserverData)
 }
+
 function encodeInts(d) {
     // Encoding floats in JSON & base64 sure is slow, so send 2 bytes per value instead of 4.
     const into = new Int16Array(d.length)
@@ -144,4 +164,16 @@ function _allocArray(a) {
     a.length = 0
     if (_allocArray.free.length > 100) return // Prevent madness.
     _allocArray.free.push(a)
+}
+function signalUpdate(value, moments = [0,0,0], maxHorizon = 10000) {
+    // Updates count & mean & variance estimates of `moments` in-place.
+    //   (Make sure that `value` is sane, such as `-1e9`…`1e9`. And not normalized.)
+    const prevMean = moments[1], n1 = moments[0], n2 = n1+1, d = value - moments[1]
+    if (n2 <= maxHorizon)
+        moments[0] = n2
+    moments[1] += d / n2
+    moments[2] = (moments[2] * n1 + d * (value - prevMean)) / n2
+    if (!isFinite(moments[1]) || !isFinite(moments[2]))
+        moments[0] = moments[1] = moments[2] = 0
+    return moments
 }
