@@ -34,12 +34,15 @@ const audio = {
     ctx:null,
     grabbed:false,
     channels:0,
+    sampleRate:null, // Re-inits .ctx on sample-rate change (so, keep it constant).
     grab(samples = 2048, sampleRate = 44100, reserve = 4) {
         // Create the capturing audio context, resize .buf and .samples, then grab most-recent samples.
         //   (The samples will be interleaved, and -1..1. See this.channels to un-interleave.)
         if (!stream) return new Float32Array(0)
-        if (!this.ctx) {
+        if (!this.ctx || this.sampleRate !== sampleRate) {
             // ScriptProcessorNode is probably fine, even though it's been deprecated since August 29 2014.
+            this.ctx && this.ctx.clise()
+            this.sampleRate = sampleRate
             this.ctx = new AudioContext({ sampleRate })
             const sourceNode = this.ctx.createMediaStreamSource(stream)
             const scriptNode = this.ctx.createScriptProcessor(512)
@@ -86,7 +89,6 @@ const audio = {
 
 function updateObservers(rcv, width, height) {
     RCV = (new Function(rcv))()
-    // TODO: Remember the sample rate in `audio.grab()`, and when sample rate changes, reinit audio.ctx.
     if (stream !== undefined) { // TODO: Do not kill the stream on a mere update.
         // TODO: Make `video.grab()` and `audio.grab()` re/init the stream if present (reinit if width/height changed), not this.
         stream = undefined
