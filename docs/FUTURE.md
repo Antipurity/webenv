@@ -1,11 +1,14 @@
 This document outlines what still needs to be done to reach MVP state (or the "ready" state).
 
 - Joint training and deployment:
-    - Make the Capture extension communicate through a Web Socket rather than CDP (gaining speed via not having to communicate through JSON+base64), AND be fully responsible for all/most reads via `remoteRead`, AND for all/most writes via `remoteWrite`.
+    - Make the Capture extension communicate through a Web Socket rather than CDP (gaining speed via not having to communicate through JSON+base64), AND be fully responsible for as many reads+writes as possible via `observers`.
+        - Protocol: `0xFFFFFFFF StrLen Str BytesPerValue` for reinitialization (execute `f = Function(Str)(socket, f, bytesPerValue=2)` to get new JS code, or update old code in-place only as needed; cancel via `f()`, even the very first `f` will do); `Index PredLen Pred WriteLen Write JsonLen Json` for an observation (which demands a `Index ReadLen Read JsonLen Json` back).
+            - The maybe-unreliable-protocol protocol, for much easier swapping: `setup(...whatever)→channel`, then `.write(bytes)` and `.skip()` (to specify a point where reading can resume after a dropped packet; does nothing for reliable streams) and `await .read()→bytes` (throws on dropped packets, so you can resume reading after the writer's `.skip()`).
+            - Make `webenv.io` use the protocol-protocol for STDIO. (And implement it, trivially.)
+            - Make `observers` use the protocol-protocol for Web Sockets, to deliver predictions & actions & JSON and receive observations. (And implement it; take the server URL.)
+            - Make `observers` use the protocol-protocol for unordered & unreliable WebRTC made skippable. (And implement it: each packet has frame ID (2B) and in-frame packet ID (2B) and payload length (2B; less than packetSize (16kB) means that this packet is the last one — writing must send a 0-len packet if msg is divisible by packetSize) payload. Receiving next-frame invalidates incomplete-prev-frames promises after 10ms; reading reconstructs messages and concatenates proper bytes.)
         - Replace as many `.page` and `.cdp` uses, in `read` and `write` and triggers, as we can with in-extension `observer` versions.
             - There is no way to send `.isTrusted` events in JS, so, if a CDP channel is available for keyboard & mouse events, must use that instead of in-extension presses+clicks.
-        - Protocol: `0xFFFFFFFF StrLen Str BytesPerValue` for reinitialization (execute `f = Function(Str)(socket, f, bytesPerValue=2)` to get new JS code, or update old code in-place only as needed; cancel via `f()`, even the very first `f` will do); `Index PredLen Pred WriteLen Write JsonLen Json` for an observation (which demands a `Index ReadLen Read JsonLen Json` back).
-        - For higher throughput at the cost of dropped packets not being re-sent, use WebRTC instead of Web Sockets.
 	- Extension-only user streams: have `webenv.remote(path='/', max=16)`, which for each incoming Web Socket connection (or WebRTC), refuses it if over the limit, else establishes the control connection, re-using all code from the Capture's rework.
         - Make sure that the Capture extension can be installed by actual humans.
     - Make the Capture extension usable by humans — or author a separate extension, so that `webenv.browser`s don't have to parse all that extra code (though it's once per startup, so it's cheap).
