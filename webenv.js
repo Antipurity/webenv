@@ -3,6 +3,7 @@
 
 
 const performance = require('perf_hooks').performance
+const channels = require('./src/data-channels.js')
 
 const Observations = Float32Array
 
@@ -698,44 +699,30 @@ Communication protocol details, simple for easy adoption:
 
 (Even though on WebEnv side, loops are separate, parallel processing on the agent side (rather than serial) should discourage resource starvation.)
 `, function io() {
-    const thens = [], reqs = []
+    if (!io.ch) io.ch = channels.streams() // STDIO
     let cons // Constructor for encoded arrays.
     let writeLock = null // No torn writes.
-    function onDrain() {
-        thens.forEach(f => f()), thens.length = 0
-    }
-    function onReadable() {
-        while (reqs.length) { // [..., len, then, ...]
-            const chunk = process.stdin.read(reqs[0])
-            if (!chunk) return
-            reqs.splice(0,2)[1](chunk)
-        }
-    }
-    function readBytes(len) { // len>0
-        if (len <= 0) throw 'no'
-        return new Promise(resolve => {
-            reqs.push(len, resolve), onReadable()
-        })
-    }
     async function readAllData(env, bs) {
-        // Infinitely read process.stdout.
+        // Infinitely read STDIO.
         while (true) {
-            const index = (await readFromStream(readBytes, 1, Uint32Array, bs))[0]
-            const predData = await readArray(cons, bs)
-            const actData = await readArray(cons, bs)
-            const s = env.streams[index]
-            if (!s) continue
-            const q = s._dataQueue
-            const item = [predData, actData]
-            if (q.items.length > s.settings.simultaneousSteps) q.items.shift()
-            if (q.waiting.length) // Resolve the first reader.
-                q.waiting.shift()(item)
-            else // Allow others to resolve the item.
-                q.items.push(item)
+            try {
+                const index = await readFromChannel(io.ch, 1, Number, bs)
+                const predData = await readArray(cons, bs)
+                const actData = await readArray(cons, bs)
+                const s = env.streams[index]
+                if (!s) continue
+                const q = s._dataQueue || (s._dataQueue = { items:[], waiting:[] })
+                const item = [predData, actData]
+                if (q.items.length > s.settings.simultaneousSteps) q.items.shift()
+                if (q.waiting.length) // Resolve the first reader.
+                    q.waiting.shift()(item)
+                else // Allow others to resolve the item.
+                    q.items.push(item)
+            } catch (err) { if (err !== 'skip') throw err }
         }
     }
-    async function getDataQueueItem(stream, dont = false) {
-        const q = stream._dataQueue
+    async function getDataQueueItem(s, dont = false) {
+        const q = s._dataQueue || (s._dataQueue = { items:[], waiting:[] })
         if (dont) return
         if (!q.items.length)
             return await new Promise(then => q.waiting.push(then))
@@ -746,24 +733,19 @@ Communication protocol details, simple for easy adoption:
         async init(stream) {
             if (io.env && io.env !== stream.env)
                 throw new Error('STDIO is once per process, but got another WebEnv trying to get in on the action')
-            if (!stream._dataQueue)
-                stream._dataQueue = { items:[], waiting:[] }
             if (io.env) return // STDIO is once per process.
             io.env = stream.env
-            process.stdin.on('readable', onReadable)
-            const magic = (await readFromStream(readBytes, 1, Uint32Array, false))[0]
+            const magic = await readFromChannel(io.ch, 1, Number, false)
             if (magic === 0x01020304)
                 this.byteswap = false
             else if (magic === 0x04030201)
                 this.byteswap = true
             else
                 throw new Error('Bad magic number:', magic)
-            const intSize = (await readFromStream(readBytes, 1, Uint32Array, this.byteswap))[0]
+            const intSize = await readFromChannel(io.ch, 1, Number, this.byteswap)
             if (![0,1,2].includes(intSize)) throw new Error('Bad intSize: '+intSize)
             cons = intSize === 0 ? Float32Array : intSize === 1 ? Int8Array : Int16Array
             this.obsCoded = new cons(0)
-            process.stdout.on('drain', onDrain)
-            process.stdout.on('error', doNothing) // Ignore "other end has closed" errors.
             readAllData(stream.env, this.byteswap) // Fill those data queues.
         },
         async deinit(stream) {
@@ -771,10 +753,10 @@ Communication protocol details, simple for easy adoption:
             // Send a dealloc event.
             let oldW = writeLock, thenW
             writeLock = new Promise(f => thenW=f);  await oldW
-            const to = process.stdout, bs = this.byteswap
-            await writeToStream(to, stream.index, bs, thens)
-            await writeToStream(to, 0, bs, thens)
-            await writeToStream(to, 0xFFFFFFFF, bs, thens)
+            const bs = this.byteswap
+            await writeToChannel(io.ch, stream.index, bs)
+            await writeToChannel(io.ch, 0, bs)
+            await writeToChannel(io.ch, 0xFFFFFFFF, bs)
             thenW()
         },
         async agent(stream, obs, pred, act) {
@@ -782,10 +764,10 @@ Communication protocol details, simple for easy adoption:
             if (!io.env) return true
             let oldW = writeLock, thenW
             writeLock = new Promise(f => thenW=f);  await oldW
-            const to = process.stdout, bs = this.byteswap
-            await writeToStream(to, stream.index, bs, thens)
-            await writeArray(to, this.obsCoded = encodeInts(obs, this.obsCoded), bs)
-            await writeToStream(to, act.length, bs, thens)
+            const bs = this.byteswap
+            await writeToChannel(io.ch, stream.index, bs)
+            await writeArray(this.obsCoded = encodeInts(obs, this.obsCoded), bs)
+            await writeToChannel(io.ch, act.length, bs)
             thenW()
             // Read from our data queue.
             const [predData, actData] = await getDataQueueItem(stream)
@@ -793,16 +775,15 @@ Communication protocol details, simple for easy adoption:
             return true
         },
     }
-    async function writeArray(stream, data, byteswap = false) {
+    async function writeArray(data, byteswap = false) {
         // Length then data.
-        await writeToStream(stream, data.length, byteswap, thens)
-        await writeToStream(stream, data, byteswap, thens)
+        await writeToChannel(io.ch, data.length, byteswap)
+        await writeToChannel(io.ch, data, byteswap)
     }
     async function readArray(format, byteswap = false) {
         // Length then data.
-        const len = (await readFromStream(readBytes, 1, Uint32Array, byteswap))[0]
-        const data = await readFromStream(readBytes, len, format, byteswap)
-        return data
+        const len = await readFromChannel(io.ch, 1, Number, byteswap)
+        return await readFromChannel(io.ch, len, format, byteswap)
     }
 })
 function encodeInts(d, into) {
@@ -841,25 +822,22 @@ function overwriteArray(arr, next) {
     else
         arr.set(new arr.constructor(next.buffer, next.byteOffset, arr.length))
 }
-function writeToStream(stream, data, byteswap = false, thens) {
+async function writeToChannel(ch, data, byteswap = false) {
     if (typeof data == 'number') data = new Uint32Array([data])
     if (byteswap) data = data.slice()
     const buf = Buffer.from(data.buffer, data.byteOffset, data.byteLength)
     byteswap && swapBytes(buf, data.constructor.BYTES_PER_ELEMENT)
-    if (!stream.UNCORK)
-        stream.UNCORK = () => stream.uncork()
-    stream.cork()
-    process.nextTick(stream.UNCORK)
-    if (!stream.write(buf) && thens) // If wrote too much, wait until the stream is drained.
-        return new Promise(then => thens.push(then))
+    await ch.write(buf)
 }
-async function readFromStream(readBytes, len, Format = Float32Array, byteswap = false) {
+async function readFromChannel(ch, len, Format = Float32Array, byteswap = false) {
     // Returns either a Buffer or a Promise of it, for convenience.
-    if (!len) return new Format(0)
-    const buf = await readBytes(len * Format.BYTES_PER_ELEMENT)
-    if (!buf || buf.length < len * Format.BYTES_PER_ELEMENT)
+    if (!len) return Format !== Number ? new Format(0) : 0
+    const bpe = Format !== Number ? Format.BYTES_PER_ELEMENT : 4
+    const buf = await ch.read(len * bpe)
+    if (!buf || buf.length < len * bpe)
         throw new Error('Unexpected end-of-stream')
-    byteswap && swapBytes(buf, Format.BYTES_PER_ELEMENT)
+    byteswap && swapBytes(buf, bpe)
+    if (Format === Number) return new Uint32Array(buf.buffer, buf.byteOffset, 1)[0]
     return new Format(buf.buffer, buf.byteOffset, len)
 }
 

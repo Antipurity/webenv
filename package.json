@@ -11,12 +11,18 @@
   "author": "Alexander Fedorov <alefedo6@gmail.com>",
   "license": "MIT",
   "description": "Extensible machine learning Web environment for training AGI.",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Antipurity/webenv.git"
+  },
   "main": "webenv.js",
   "directories": {
     "doc": "docs"
   },
   "dependencies": {
-    "puppeteer": "^10.1.0"
+    "isomorphic-ws": "^4.0.1",
+    "puppeteer": "^10.1.0",
+    "ws": "^8.2.3"
   },
   "devDependencies": {},
   "scripts": {

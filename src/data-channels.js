@@ -11,7 +11,6 @@ let WebSocket = null
 
 
 
-// TODO: Migrate `webenv.io` to using this.
 exports.streams = function streams(read = process.stdin, write = process.stdout) {
   // This simply reads from Readable and writes to Writable streams.
   // Reliable, so `.read` will never throw.
@@ -26,7 +25,7 @@ exports.streams = function streams(read = process.stdin, write = process.stdout)
   function uncork() { write.uncork() }
   function onReadable() {
     while (reqs.length) { // [..., len, then, ...]
-      const chunk = process.stdin.read(reqs[0])
+      const chunk = read.read(reqs[0])
       if (!chunk) return
       reqs.splice(0,2)[1](chunk)
     }
@@ -43,7 +42,6 @@ exports.streams = function streams(read = process.stdin, write = process.stdout)
   return {
     write(bytes) {
       // Can be `await`ed to wait until the buffer gets emptier.
-      if (!(bytes instanceof Uint8Array)) throw new Error('Expected Uint8Array')
       write.cork()
       process.nextTick(uncork)
       if (!write.write(bytes))
@@ -57,7 +55,6 @@ exports.streams = function streams(read = process.stdin, write = process.stdout)
 
 
 
-// TODO: `npm i isomorphic-ws ws`
 exports.webSocketUpgrade = function upgrade(request, socket, head) {
   // Given an HTTP/S `server`, do
   //   `server.on('upgrade', (...args) => webSocketUpgrade(...args).then(channel => …))`
@@ -108,10 +105,9 @@ exports.webSocket = function(ws) {
   ws.onmessage = onReadable
   return {
     async write(bytes) {
-      if (!(bytes instanceof Uint8Array)) throw new Error('Expected Uint8Array')
       let b = bytes.buffer
-      if (bytes.byteOffset || bytes.byteLength !== b.byteLength)
-        b = b.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength)
+      if (bytes.byteOffset || (bytes.byteLength || bytes.length) !== b.byteLength)
+        b = b.slice(bytes.byteOffset, bytes.byteOffset + (bytes.byteLength || bytes.length))
       opened && (await opened); opened = null
       ws.send(b)
     },
@@ -126,4 +122,6 @@ exports.webSocket = function(ws) {
 
 
 
-// TODO: WebRTC, with signalling atop another channel.
+// Skipped for the MVP: WebRTC, with signalling atop another channel.
+//   Should we use `wrtc` for this, which installs some extra binaries...
+//   Or https://www.npmjs.com/package/node-datachannel (as a peer dependency, to make this optional)
