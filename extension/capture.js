@@ -2,20 +2,51 @@
 //   Lots of changing of data formats, but I can't find a way to have less copying.
 
 let RCV = null, STR = []
-let stream = null
+let stream = null, streamW = 0, streamH = 0
 let lastRequest = performance.now(), timeBetweenRequests = [0,0,0]
 
 // Limit how many observers can run at once.
 //   (Don't have hanging-observer bugs, or else the page will stall forever.)
 let stepsNow = 0, simultaneousSteps = 16
 
+
+
+async function getStream(width, height) { // (Should probably also accept sampleRate.)
+    if (stream instanceof Promise || streamW >= width && streamH >= height) return stream
+    if (stream)
+        for (let track of stream.getTracks())
+            track.stop()
+    return stream = new Promise((resolve, reject) => {
+        streamW = Math.max(streamW, width), streamH = Math.max(streamH, height)
+        // TODO: If this is missing, use navigator.mediaDevices.getDisplayMedia.
+        chrome.tabCapture.capture({
+            audio:true,
+            video:true,
+            videoConstraints:{
+                mandatory:{ maxWidth:streamW, maxHeight:streamH },
+            },
+        }, s => {
+            if (s) {
+                s.w = width, s.h = height
+                stream = s
+                video.elem = document.createElement('video')
+                video.elem.srcObject = s
+                video.elem.volume = 0 // To not play audio to the human.
+                resolve(s)
+            } else
+                stream = null, streamW = streamH = 0,
+                reject(new Error('Stream capture failed; reason: ' + chrome.runtime.lastError.message))
+        })
+    })
+}
 const video = {
     ctx2d:document.createElement('canvas').getContext('2d'),
     elem:null, // ImageCapture throws far too many errors for us.
-    grab(x, y, width, height, maxW, maxH) {
+    async grab(x, y, width, height, maxW, maxH) {
         // Draws the current frame onto a canvas, and returns the u8 image data array.
         //   Call this synchronously, without `await`s between you getting called and this.
         //   Returns image data.
+        await getStream(maxW, maxH)
         if (!this.elem) return new Uint8Array(0)
         if (this.elem.paused) this.elem.play()
         const ctx = this.ctx2d, w1 = ctx.canvas.width, h1 = ctx.canvas.height
@@ -35,9 +66,10 @@ const audio = {
     grabbed:false,
     channels:0,
     sampleRate:null, // Re-inits .ctx on sample-rate change (so, keep it constant).
-    grab(samples = 2048, sampleRate = 44100, reserve = 4) {
+    async grab(samples = 2048, sampleRate = 44100, reserve = 4) {
         // Create the capturing audio context, resize .buf and .samples, then grab most-recent samples.
         //   (The samples will be interleaved, and -1..1. See this.channels to un-interleave.)
+        const stream = await getStream(0, 0)
         if (!stream) return new Float32Array(0)
         if (!this.ctx || this.sampleRate !== sampleRate) {
             // ScriptProcessorNode is probably fine, even though it's been deprecated since August 29 2014.
@@ -87,27 +119,8 @@ const audio = {
 
 
 
-function updateObservers(rcv, width, height) {
+function updateObservers(rcv) {
     RCV = (new Function(rcv))()
-    if (stream !== undefined) { // TODO: Do not kill the stream on a mere update.
-        // TODO: Make `video.grab()` and `audio.grab()` re/init the stream if present (reinit if width/height changed), not this.
-        stream = undefined
-        // TODO: If this is missing, use navigator.mediaDevices.getDisplayMedia.
-        chrome.tabCapture.capture({
-            audio:true,
-            video:true,
-            videoConstraints:{
-                mandatory:{ maxWidth:width, maxHeight:height },
-            },
-        }, s => {
-            if (s) {
-                stream = s
-                video.elem = document.createElement('video')
-                video.elem.srcObject = stream
-                video.elem.volume = 0 // To not play audio to the human.
-            } else throw stream = null, new Error('Stream capture failed; reason: ' + chrome.runtime.lastError.message)
-        })
-    }
 }
 
 

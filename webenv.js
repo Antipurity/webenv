@@ -140,7 +140,7 @@ Slloooooooow.
         },
         reads:'computed',
         observer: [async function({video, audio}, obs, end, w, h, maskColor) {
-            const d = video.grab(0, 0, w, h, w, h)
+            const d = await video.grab(0, 0, w, h, w, h)
             // Normalize and write.
             await end()
             for (let from = 0, to = 0; to < obs.length; ) {
@@ -206,7 +206,7 @@ Provide a mask color (0xRRGGBB) to mask exact matches, or \`null\` to disable th
         observer: [
             async function({video, audio}, obs, end, x, y, w, h, maxW, maxH, maskColor) {
                 x -= (w/2) | 0, y -= (h/2) | 0
-                const d = video.grab(x, y, w, h, maxW, maxH)
+                const d = await video.grab(x, y, w, h, maxW, maxH)
                 // Normalize and write.
                 await end()
                 for (let i = 0, from = 0, to = 0; to < obs.length; ++i) {
@@ -261,7 +261,7 @@ Provide a mask color (0xRRGGBB) to mask exact matches, or \`null\` to disable th
                 }
                 // Get image data.
                 x -= (w/2) | 0, y -= (h/2) | 0
-                const d = video.grab(x, y, w, h, maxW, maxH)
+                const d = await video.grab(x, y, w, h, maxW, maxH)
                 const pointSum = observeFovea.pointSum, pointNum = observeFovea.pointNum
                 // Normalize, average, and write.
                 await end()
@@ -390,8 +390,9 @@ To calculate \`samples\`, divide \`sampleRate\` by the expected frames-per-secon
         reads: samples,
         observer: [async function({video, audio}, obs, end, samples, sampleRate) {
             // A copy, but this is small-time compared to `webenv.image(...)`.
+            const data = await audio.grab(samples, sampleRate)
             await end()
-            obs.set(audio.grab(samples, sampleRate))
+            obs.set(data)
         }, samples, sampleRate],
         visState(stream) { return sampleRate },
         visualize: [function(elem, obs, pred) {
@@ -2007,9 +2008,7 @@ Other interfaces that want this must define:
             state.snd = null
             const [snd, rcv] = await compileSentJS(staticArgs, items, prelude.join('\n'))
             state.snd = snd
-            const w = stream.settings.width || 0
-            const h = stream.settings.height || 0
-            await stream.extensionPage.evaluate((rcv,w,h) => updateObservers(rcv,w,h), rcv, w, h)
+            await stream.extensionPage.evaluate((rcv,w,h) => updateObservers(rcv,w,h), rcv)
             function end() { // Resolve if the last end(), and always return a promise.
                 if (!--end.items) end.then()
                 return end.p
