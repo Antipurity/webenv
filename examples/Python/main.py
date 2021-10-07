@@ -10,7 +10,7 @@ import torch
 # Lots of hyperparams, so code is overly complex; pretend that non-picked `if` branches do not exist, at first.
 
 hparams = {
-  'batch_size': 2,
+  'batch_size': 4,
 
   'lr': .001,
   'optim': 'Adam', # https://pytorch.org/docs/stable/optim.html
@@ -132,10 +132,10 @@ def loss(pred, got, obs, act_len):
       act_only = pred
     L = L + max_model(act_only, Return.detach())
   return L
-def output(lock, state, obs, act_len): # Add previous frame to next, if needed.
+def output(lock, state, indices, obs, act_len): # Add previous frame to next, if needed.
   if hparams['merge_obs'] == 'concat' and add_input_on_concat:
     state = state + recurrent.webenv_merge(state, obs, 0.)
-  return recurrent.webenv_slice(lock, state, obs, act_len)
+  return recurrent.webenv_slice(lock, state, indices, obs, act_len)
 agent = recurrent.recurrent(
   (hparams['batch_size'], N), loss=loss, optimizer=optim,
   unroll_length=hparams['unroll_length'], synth_grad=synth_grad,

@@ -461,7 +461,7 @@ Other interfaces may define:
 <!DOCTYPE html>
 <style>
     html { display:flex; flex-flow:row wrap; height:100%; justify-content:center; align-items:center; overflow-x:hidden; }
-    button { border:none }
+    button { border:none; width:2em; height:2em }
     button.active { background-color:#4dc1ed }
     @media (prefers-color-scheme: dark) {
         /* Glow-in-the-dark theme. */
@@ -498,6 +498,7 @@ sources.addEventListener('restream', function(evt) {
     ids.forEach(id => {
         const b = document.createElement('button')
         b.textContent = ''+id
+        b.setAttribute('key', ''+id)
         if (prevSelected === b.textContent) select(b)
         if (ids.length > 1) bc.appendChild(b)
         buttons.push(b)
@@ -508,6 +509,10 @@ sources.addEventListener('restream', function(evt) {
 onclick = evt => {
     if (!evt.target || evt.target.tagName !== 'BUTTON') return
     select(evt.target)
+}
+onkeydown = evt => {
+    const b = document.querySelector(\`button[key="\${evt.key}"]\`)
+    b && b.click()
 }
 // Stream visualization.
 let RCV, source
@@ -543,8 +548,8 @@ ${endian}
             ])
         },
         async deinit(stream) {
-            // '/observations/path' and '/path' never get unlinked, causing a memory leak for closed envs.
-            //   But how often do you have closed envs anyway?
+            // '/observations/path' and '/path' never get unlinked,
+            //   but the server gets stopped for closed envs, so no memory leak.
             const env = stream.env
             sendRestream(env, Spot(env).connections)
             Spot(stream).connections && Spot(stream).connections.forEach(res => res.end())
@@ -565,7 +570,7 @@ ${endian}
             sendObservation(obs, spot.pred, json, to)
         },
         write(stream, pred, act) {
-            // Remember prediction to send later, unless it's all-zeros|NaN.
+            // Remember prediction to send later, unless it's all NaN.
             if (!pred) return
             const spot = Spot(stream)
             let empty = true
@@ -711,13 +716,13 @@ Communication protocol details, simple for easy adoption:
             reqs.push(len, resolve), onReadable()
         })
     }
-    async function readAllData(bs) {
+    async function readAllData(env, bs) {
         // Infinitely read process.stdout.
         while (true) {
             const index = (await readFromStream(readBytes, 1, Uint32Array, bs))[0]
             const predData = await readArray(cons, bs)
             const actData = await readArray(cons, bs)
-            const s = io.env.streams[index]
+            const s = env.streams[index]
             if (!s) continue
             const q = s._dataQueue
             const item = [predData, actData]
@@ -758,7 +763,7 @@ Communication protocol details, simple for easy adoption:
             this.obsCoded = new cons(0)
             process.stdout.on('drain', onDrain)
             process.stdout.on('error', doNothing) // Ignore "other end has closed" errors.
-            readAllData(this.byteswap) // Fill those data queues.
+            readAllData(stream.env, this.byteswap) // Fill those data queues.
         },
         async deinit(stream) {
             if (!io.env) return
@@ -2045,7 +2050,7 @@ The result is a promise for the environment, which is an object with:
 
     // Non-`settings` parameters, hidden from view.
     lang: 'en-US,en',
-    lowball: .95,
+    lowball: .5, // Timer is run this much faster than it seems to need.
     maxRelaunchAttempts: 32,
 
     create(relaunch = null) {

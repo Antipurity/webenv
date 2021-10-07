@@ -1,7 +1,5 @@
 This document outlines what still needs to be done to reach MVP state (or the "ready" state).
 
-(These are breaking changes. After this, there shouldn't be any breaking changes.)
-
 - Joint training and deployment:
     - Make the Capture extension communicate through a Web Socket rather than CDP (gaining speed via not having to communicate through JSON+base64), AND be fully responsible for all/most reads via `remoteRead`, AND for all/most writes via `remoteWrite`.
         - Replace as many `.page` and `.cdp` uses, in `read` and `write` and triggers, as we can with in-extension `observer` versions.
@@ -23,7 +21,8 @@ This document outlines what still needs to be done to reach MVP state (or the "r
             - An option to show `directScore` prediction through the action button's color.
 
 - Make the Python example production-ready:
-    - Save + load, checking that all unchangable hyperparams are the same; also have a list of hparams that can change, such as the learning rate. Ask the user if they want to warm-start from the previous checkpoint if changed. (No tracing: batch size could pick up the slack.) ([Should be very easy.](https://pytorch.org/tutorials/beginner/saving_loading_models.html))
+    - Save + load, checking that all unchangeable hyperparams are the same; also have a list of hparams that can change, such as the learning rate. Ask the user if they want to warm-start from the previous checkpoint if changed. (No tracing: batch size could pick up the slack.) ([Should be very easy.](https://pytorch.org/tutorials/beginner/saving_loading_models.html))
+    - Weight decay, maybe only on 95% least-magnitude weights, as a kind of soft sparsification (might have synergy with LDL's greater-than-DL capacity).
     - Efficient output slicing, by slicing weights and such. (This would allow 3× more efficiency below.)
     - `state[0]` maximization. (Sure, just giving a model a binary feedback signal may sound inconvenient, but have you ever tried using its world understanding: say, bringing up what it did long ago, possibly on the microphone, and hitting that reward button? Maybe treat your model with some respect?)
         - To make leaving holes in `state[0]` (as should be done most of the time) not screw up everything, AND to not have an extra model just for reward prediction, have to split the RNN and its gradient in twain:
@@ -31,6 +30,10 @@ This document outlines what still needs to be done to reach MVP state (or the "r
             - Transition goes from `x→f(x)` to `x→(concat f(concat O A.detach())[:mid] f(concat O.detach() A)[mid:])`.
             - Prediction error is unchanged, since it's only on the first half.
             - Goal-maximization becomes `f(concat O.detach() A)[0].sum()`.
+
+- Clean up:
+    - Make `visualize`rs also accept actions, in case we want to visualize mouse actions and button presses and such.
+    - An interface that provides stream ID observations, to guarantee that RNN states will never become indistinguishable.
 
 - An entertaining GIF in `README.md` (of an agent trained on `RandomURL` now that we have that), so that people's eyes don't glaze over from all that *text*.
 

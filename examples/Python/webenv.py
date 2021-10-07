@@ -57,15 +57,11 @@ def webenv(agent, *interfaces, int_size=0, webenv_path='webenv', js_executor=js_
     prev_write = [None] # A lock, to only do one write at a time.
     prev_flush_info = [None] # A lock on flushes. (Effectively unused.)
     read_streams = {} # index → asyncio.Queue
-
-    # Step-time estimation for sleeping, because, `read`ing in parallel isn't working.
-    last_message = time.perf_counter()
-    message_period = [0, 0.]
-    messages_per_step = [0, 0.]
+    max_index = 0
 
     async def read(reader):
         # Receive index & observations & action-length packets, and put it into `read_streams`.
-        nonlocal last_message
+        nonlocal max_index
         while True:
             index = await _read_u32(reader)
             obs = _decode(await _read_data(reader, int_size))
@@ -74,8 +70,7 @@ def webenv(agent, *interfaces, int_size=0, webenv_path='webenv', js_executor=js_
             act_len = await _read_u32(reader)
             if index not in read_streams:
                 read_streams[index] = asyncio.Queue(64)
-            _signalUpdate(time.perf_counter() - last_message, message_period, 1000)
-            last_message = time.perf_counter()
+            if index > max_index: max_index = index
             await read_streams[index].put((obs, act_len))
             read_streams['any'].put_nowait(None)
     async def step(writer, read_lock):
@@ -83,11 +78,17 @@ def webenv(agent, *interfaces, int_size=0, webenv_path='webenv', js_executor=js_
         try:
             indices, obs, act_len = [], [], []
             while True:
-                if message_period[0] > 10 and messages_per_step[0] > 10:
-                    # Delay by a step so that len(indices)>1 works.
-                    #   (Not sure why Python can't just `read` in peace.)
-                    await asyncio.sleep(message_period[1] / messages_per_step[1])
-                for i, queue in read_streams.items():
+                await asyncio.sleep(.001)
+                while True:
+                    # Wait for more data to arrive, distributing computation better.
+                    #   All these runtime adaptations at each processing step are hacky.
+                    #   Maybe if we gave feedback on how much each stream is processed to WebEnv, it could optimize throughput better?
+                    if all([q.qsize() >= 1 for (i,q) in read_streams.items() if i != 'any']): break
+                    if any([q.qsize() >= 2 for (i,q) in read_streams.items() if i != 'any']): break
+                    await asyncio.sleep(.01)
+                for i in range(max_index+1):
+                    if i not in read_streams: continue
+                    queue = read_streams[i]
                     if i == 'any': continue
                     if queue.empty(): continue # Only process available data.
                     item = queue.get_nowait()
@@ -100,7 +101,6 @@ def webenv(agent, *interfaces, int_size=0, webenv_path='webenv', js_executor=js_
                 # If all streams are empty, wait for the next item.
                 await read_streams['any'].get()
                 read_streams['any'].put_nowait(None)
-            _signalUpdate(len(indices), messages_per_step, 1000)
             indices = np.array(indices, dtype=np.int64)
             preds, acts = await agent(read_lock, indices, obs, act_len)
             prevW = prev_write[0]
@@ -211,9 +211,3 @@ def _js_code_for_args(a):
     if isinstance(a, dict):
         return "{" + ",".join([k + ":" + _js_code_for_args(a[k]) for k in a]) + "}"
     raise TypeError('Bad arg')
-
-def _signalUpdate(value, moments, maxHorizon):
-    n2 = moments[0] + 1
-    if n2 <= maxHorizon:
-        moments[0] = n2
-    moments[1] += (value - moments[1]) / n2

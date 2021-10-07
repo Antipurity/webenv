@@ -4,6 +4,11 @@
 let RCV = null, STR = []
 let stream = null
 let lastRequest = performance.now(), timeBetweenRequests = [0,0,0]
+
+// Limit how many observers can run at once.
+//   (Don't have hanging-observer bugs, or else the page will stall forever.)
+let stepsNow = 0, simultaneousSteps = 16
+
 const video = {
     ctx2d:document.createElement('canvas').getContext('2d'),
     elem:null, // ImageCapture throws far too many errors for us.
@@ -107,13 +112,14 @@ function updateObservers(rcv, width, height) {
 
 // Desynchronize reads, to be robust to dropped packets (which "one response per one request" is not).
 function timer() {
-    setTimeout(timer, timeBetweenRequests[1])
-    processObservers()
+    const t = timeBetweenRequests[1]
+    setTimeout(timer, STR.length < 2 ? t : t*.9)
+    if (stepsNow < simultaneousSteps) processObservers()
 }
 setTimeout(timer, 0)
 
 async function readObservers(str) {
-    STR.push(str), STR.length > 16 && STR.shift()
+    STR.push(str), STR.length > 8 && STR.shift()
     const next = performance.now()
     signalUpdate(next - lastRequest, timeBetweenRequests, 1000)
     lastRequest = next
@@ -121,10 +127,12 @@ async function readObservers(str) {
 function processObservers() {
     if (!STR.length) return // Wait for the first request.
     if (STR.length == 1) STR.push(STR[0]) // Re-use the last message if we can.
+    ++stepsNow
     RCV && RCV(STR.shift()).then(sendObserverDataBack, processingFailed)
 }
-function processingFailed(err) { typeof PRINT == 'function' && PRINT(err.stack) }
+function processingFailed(err) { --stepsNow, typeof PRINT == 'function' && PRINT(err.stack) }
 function sendObserverDataBack() {
+    --stepsNow
     if (typeof gotObserverData == ''+void 0) return
     toBase64(encodeInts(RCV.obs)).then(gotObserverData)
 }

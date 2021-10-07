@@ -18,7 +18,7 @@ def webenv_merge(state, obs_t, pad_with=np.nan):
 
   Note that this overwrites predictions, so the model cannot access them. If you want your model to know both real and predicted numbers, use `input=webenv_concat` in `recurrent`.
   """
-  padded = torch.nn.functional.pad(obs_t, (0, state.shape[-1] - obs_t.shape[-1]), value=pad_with)
+  padded = torch.nn.functional.pad(obs_t, (0, state.shape[-1] - obs_t.shape[-1], 0,0), value=pad_with)
   return torch.where(torch.isnan(padded), state, padded)
 def webenv_concat(state, obs_t):
   """
@@ -32,7 +32,7 @@ def webenv_concat(state, obs_t):
 
 
 # Output.
-async def webenv_slice(lock, state, obs, act_len):
+async def webenv_slice(lock, state, indices, obs, act_len):
   """
   Turns two PyTorch state tensors (pre-step and pre-output) (and what WebEnv received: observations and action lengths) into post-step state and lists of predictions and actions, asynchronously.
   """
@@ -42,8 +42,9 @@ async def webenv_slice(lock, state, obs, act_len):
     preds, acts = [], []
     for i in range(len(obs)):
       # Slice obs and actions from ends. (Reverse actions for stability.)
-      pred_t = state[i, 0:min(max_slice, obs[i].shape[-1])]
-      act_t = state[i, max_slice - min(max_slice, act_len[i]):max_slice].flip(-1)
+      ind = indices[i, 0]
+      pred_t = state[ind, 0:min(max_slice, obs[i].shape[-1])]
+      act_t = state[ind, max_slice - min(max_slice, act_len[i]):max_slice].flip(-1)
       # Asynchronously copy to CPU.
       pred = torch.zeros_like(pred_t, layout=torch.strided, device='cpu', memory_format=torch.contiguous_format)
       act = torch.zeros_like(act_t, layout=torch.strided, device='cpu', memory_format=torch.contiguous_format)
@@ -56,7 +57,7 @@ async def webenv_slice(lock, state, obs, act_len):
     event = torch.cuda.Event()
     event.record()
     while not event.query():
-      await asyncio.sleep(0)
+      await asyncio.sleep(.001)
     return [p.numpy() for p in preds], [a.numpy() for a in acts]
 
 
@@ -65,16 +66,16 @@ async def webenv_slice(lock, state, obs, act_len):
 def webenv_gather(state1, indices): # → state2
   if state1.shape[0] == 1: return state1
   indices = torch.tensor(indices, device = state1.device)
-  indices = indices.broadcast_to(state1.shape) # Apparently required for the backward pass to work.
+  indices = indices.expand(indices.shape[0], *state1.shape[1:]) # Apparently required for the backward pass to work.
   return torch.gather(state1, 0, indices)
 def webenv_scatter(state1, indices, state2): # → state1
   if state1.shape[-1] != state2.shape[-1]:
-    raise TypeError('Pre/post transition shapes mismatch')
+    raise TypeError('Pre/post transition sizes mismatch')
   if state1.shape[0] == 1: return state2
   indices = torch.tensor(indices, device = state1.device) # Double op; inefficient.
-  indices = indices.broadcast_to(state2.shape) # Apparently required for the backward pass to work:
+  indices = indices.expand(indices.shape[0], *state1.shape[1:]) # Apparently required for the backward pass to work:
   #   https://pytorch.org/docs/stable/generated/torch.Tensor.scatter_.html
-  return torch.scatter(state1, 0, indices, state2)
+  return state1.clone().scatter_(0, indices, state2)
 
 
 
@@ -170,7 +171,7 @@ def recurrent(
           optimizer.zero_grad()
         start_state = state = state.detach().requires_grad_(True)
         unroll_index = 0
-      return await output(lock, state, obs, *args)
+      return await output(lock, state, indices, obs, *args)
     return step
   return rec
 def list_to_torch(xs, device):
