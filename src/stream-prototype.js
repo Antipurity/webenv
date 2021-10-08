@@ -66,7 +66,7 @@ The result is a promise for the environment, which is an object with:
         })
         // Private state.
         this._stall = null // A promise when a `relaunch` is in progress.
-        this._unlink = new Set
+        this._unlink = new Set, this._pendingUnlink = new WeakSet
         this._watchdogCheckId = setInterval(() => { // This watchdog timer is easier than fixing rare-hang-on-navigation bugs.
             if (performance.now()-this._lastStepEnd < 15000) return
             this._relaunchRetrying()
@@ -100,11 +100,12 @@ The result is a promise for the environment, which is an object with:
         try {
             // Defer observations to interfaces.
             let waitingOn = 0, endPromise = new Promise(f => then=f)
-            const inds = this._obsInds, obs = this._obsSlice
+            const inds = this._obsInds, a = this._all, obs = this._obsSlice
             const tmp = this._allocArray(0)
             waitingOn = inds.length
             for (let i = 0; i < inds.length; ++i) {
-                const j = inds[i], r = this._all[j].read(this, obs[i], end)
+                if (!a[inds[i]] || this._pendingUnlink.has(a[inds[i]])) continue
+                const r = a[inds[i]].read(this, obs[i], end)
                 if (r instanceof Promise) tmp.push(r.then(end))
                 else end()
             }
@@ -136,7 +137,7 @@ The result is a promise for the environment, which is an object with:
             const pred = this._predSlice, act = this._actSlice
             const tmp = this._allocArray(0)
             for (let i = 0; i < inds.length; ++i) {
-                if (!a[inds[i]]) continue
+                if (!a[inds[i]] || this._pendingUnlink.has(a[inds[i]])) continue
                 const r = a[inds[i]].write(this, pred[i], act[i])
                 if (r instanceof Promise) tmp.push(r)
             }
@@ -329,15 +330,19 @@ The result is a promise for the environment, which is an object with:
 
                 const results = res._allocArray(res._agentInds.length).fill()
                 for (let i = 0; i < results.length; ++i)
-                    try { results[i] = res._all[res._agentInds[i]].agent(...res._agentArgs[i]) }
-                    catch (err) { console.error(err) } // Unlink on exception.
+                    try {
+                        const o = res._all[res._agentInds[i]]
+                        results[i] = !res._pendingUnlink.has(o) && o.agent(...res._agentArgs[i])
+                    } catch (err) { console.error(err) } // Unlink on exception.
                 for (let i = 0; i < results.length; ++i)
                     if (results[i] instanceof Promise)
                         try { results[i] = await results[i] }
-                        catch (err) { results[i] = undefined } // Unlink on exception.
+                        catch (err) { console.error(err),  results[i] = undefined } // Unlink on exception.
                 for (let i = 0; i < results.length; ++i)
-                    if (!results[i])
-                        res._unlink.add(res._all[res._agentInds[i]])
+                    if (!results[i]) {
+                        const o = res._all[res._agentInds[i]]
+                        res._unlink.add(o), res._pendingUnlink.add(o)
+                    }
                 res._allocArray(results)
 
                 await res.write(res._actFloats)
@@ -348,8 +353,11 @@ The result is a promise for the environment, which is an object with:
                 // Unlink the agents that do not want to live on.
                 //   (Unless they're copied from the top-level, because, too much work to support that.)
                 if (res._unlink.size) {
-                    let prevStall = res._stall;  res._stall = res.relink(res.interfaces.filter(o => !res._unlink.has(o))), res._unlink.clear();  await prevStall
+                    const bad = new Set(res._unlink)
+                    res._unlink.clear()
+                    let prevStall = res._stall;  res._stall = res.relink(res.interfaces.filter(o => !bad.has(o)));  await prevStall
                     prevStall = res._stall;  res._stall = null;  await prevStall
+                    bad.forEach(o => res._pendingUnlink.delete(o))
                 }
             }
 

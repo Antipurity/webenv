@@ -5,6 +5,9 @@
 const channels = require('./src/data-channels.js')
 const { signalUpdate, signalNormalize } = require('./src/signal-stats.js')
 const { Observations, performance, streamPrototype } = require('./src/stream-prototype.js')
+const { observers } = require('./src/observers.js')
+const { compileSentJS } = require('./src/compile-sent-js.js')
+const { encodeInts, decodeInts, overwriteArray } = require('./src/int-encoding.js')
 
 
 
@@ -564,10 +567,13 @@ ${endian}
             const to = spot.connections || (spot.connections = new Set)
             if (!to.size) return
             if (spot.interfaces !== stream.interfaces || !spot.SND) {
-                [spot.SND, spot.RCV] = await createExtendJS(stream)
-                sendRelink(stream, to)
+                spot.SND = 'waiting'
                 spot.interfaces = stream.interfaces
+                spot.interfaces.ID = Math.random()
+                ;[spot.SND, spot.RCV] = await createExtendJS(stream)
+                sendRelink(stream, to)
             }
+            if (spot.SND === 'waiting') return
             const json = await spot.SND(stream)
             await end()
             sendObservation(obs, spot.pred, json, to)
@@ -787,42 +793,6 @@ Communication protocol details, simple for easy adoption:
         return await readFromChannel(io.ch, len, format, byteswap)
     }
 })
-function encodeInts(d, into) {
-    // -1…1|NaN floats to i8/i16.
-    // This can return a different object as `into` to resize; store it.
-    if (into === null || into instanceof Float32Array) return d
-    if (!(d instanceof Float32Array)) throw new Error('Not floats')
-    const intSize = into instanceof Int8Array ? 1 : into instanceof Int16Array ? 2 : null
-    if (intSize === null) throw new Error('Unrecognized int format')
-    if (into.length !== d.length) // Resize.
-        into = new into.constructor(d.length)
-    const scale = 2 ** (intSize * 8 - 1) - 1, masked = -(2 ** (intSize * 8 - 1))
-    const end = Math.min(d.length, into.length)
-    for (let i = 0; i < end; ++i) // Encode.
-        into[i] = d[i] !== d[i] ? masked : Math.round(Math.max(-1, Math.min(d[i], 1)) * scale)
-    return into
-}
-function decodeInts(d, into) {
-    // i8/i16 to -1…1|NaN floats.
-    // On size mismatch, this only writes the beginning.
-    if (!(into instanceof Float32Array)) throw new Error('Not floats')
-    if (d instanceof Float32Array) return overwriteArray(into, d)
-    const intSize = d instanceof Int8Array ? 1 : d instanceof Int16Array ? 2 : null
-    if (intSize === null) throw new Error('Unrecognized int format: ' + d.constructor.name)
-    const scale = 2 ** (intSize * 8 - 1) - 1, masked = -(2 ** (intSize * 8 - 1))
-    const end = Math.min(d.length, into.length)
-    for (let i = 0; i < end; ++i) // Decode.
-        into[i] = d[i] === masked ? NaN : d[i] / scale
-    if (d.length < into.length) into.fill(NaN, d.length)
-}
-function overwriteArray(arr, next) {
-    // This doesn't sweat size differences, not touching numbers at the end.
-    if (!next) return
-    if (next.length <= arr.length)
-        arr.set(next)
-    else
-        arr.set(new arr.constructor(next.buffer, next.byteOffset, arr.length))
-}
 async function writeToChannel(ch, data, byteswap = false) {
     if (typeof data == 'number') data = new Uint32Array([data])
     if (byteswap) data = data.slice()
@@ -1913,83 +1883,6 @@ These include:
 
 
 
-const observers = {
-    docs:`The shared interface for extension-side video and audio grabbing.
-
-To be used by bundling other interfaces with this; duplicate occurences will be merged.
-
-May be replaced by ALL observations coming from the extension. And through WebRTC, not CDP. And with properly-varying bytes-per-value.
-
-Other interfaces that want this must define:
-- \`.observer: [({video, audio}, obs, end, ...args)=>…, ...args]\`
-    - Computed args get the \`stream\`.
-    - Communication cost is reduced as much as possible without compression, don't worry.
-    - Calling \`await end()\` at the end or just before writing to \`obs\` (f32 array) is mandatory.
-    - \`video:{grab(x,y,w,h)=>pixels}\`
-    - \`audio:{grab(sampleN=2048, sampleRate=44100)=>samples\`
-// TODO: Connect & communicate through a WebSocket. (If Puppeteer-controlled, auto-call \`connect(\`ws://localhost/\${s.env.settings.port}\`)\`.)
-// TODO: Also give the previous actions to observers, so that the extension can perform them for us. (Would need a separate binary-ish stream for this, to not waste time+bandwidth on base64+JSON-encoding actions. Post-web-socket.)
-//   (And the previous predictions, so that users can visualize those.)
-`,
-    key: Symbol('observers'),
-    init(stream) {
-        if (!stream.extensionPage) return
-        stream.extensionPage.exposeFunction('gotObserverData', gotObserverData)
-        stream.extensionPage.exposeFunction('PRINT', console.error) // For debugging.
-        function gotObserverData(b64) {
-            // Yeah, sure, u16 per color per pixel is 2× the inefficiency. But. Audio.
-            //   TODO: Make the extension communicate through a WebSocket, not CDP.
-            const obsBuf = Buffer.from(b64 || '', 'base64') // Int16; decode into floats.
-            const obsLen = obsBuf.byteLength / Int16Array.BYTES_PER_ELEMENT | 0
-            decodeInts(new Int16Array(obsBuf.buffer, obsBuf.byteOffset, obsLen), stream._obsFloats)
-            // (Technically, this can overwrite other `read`s, but `await end()` should prevent that.)
-        }
-    },
-    async read(stream, obs, _) {
-        if (!stream.page || !stream.extensionPage || stream.extensionPage.isClosed()) return
-        const state = stream[this.key] || (stream[this.key] = Object.create(null))
-        if (state.snd === undefined || state.all !== stream._all) {
-            // Relink extension-side observers.
-            state.all = stream._all
-            const items = [], staticArgs = new Map, prelude = []
-            const endFunc = items.push([`()=>{}`])-1
-            const obsSlices = []
-            for (let i = 0; i < stream._all.length; ++i) {
-                const o = stream._all[i]
-                if (Array.isArray(o.observer)) {
-                    const item = o.observer
-                    const off = stream._allReadOffsets[i]
-                    const at = obsSlices.push(`RCV.obs.subarray(${off}, ${off + (o.reads || 0)})`)-1
-                    items.push(item)
-                    staticArgs.set(item, `RCV.media,RCV.obsSlices[${at}],RCV.end`)
-                }
-            }
-            prelude.push(`RCV.obs=new ${Observations.name}(${stream.reads})`)
-            prelude.push(`RCV.obsSlices=[${obsSlices.join(',')}]`)
-            prelude.push(`RCV.media={video,audio}`) // Expecting those globals in the extension.
-            items[endFunc] = [`() => {
-                const end = RCV.end = ${end}
-                end.items = ${staticArgs.size}, end.p = new Promise(then => end.then = then)
-            }`]
-            state.snd = null
-            const [snd, rcv] = await compileSentJS(staticArgs, items, prelude.join('\n'))
-            state.snd = snd
-            await stream.extensionPage.evaluate((rcv,w,h) => updateObservers(rcv,w,h), rcv)
-            function end() { // Resolve if the last end(), and always return a promise.
-                if (!--end.items) end.then()
-                return end.p
-            }
-        }
-        if (!state.snd) return
-        // Call observers. The extension will call `gotObserverData` for future frames.
-        //   (No `await`: the observer stream is delayed by at least a frame, to not stall.)
-        const str = await state.snd(stream)
-        stream.extensionPage.evaluate(str => readObservers(str), str).catch(doNothing)
-    },
-}
-
-
-
 exports.browser = docs(`\`webenv.browser(...interfaces)\`
 Creates a data stream from a 'Puppeteer'ed browser.
 
@@ -2116,68 +2009,6 @@ To write new interfaces, look at the pre-existing interfaces.
         this._lastStepEnd = performance.now()
     }
 })
-
-
-
-async function compileSentJS(staticArgs, items, prelude = '') {
-    // Compiles items (`…, [thereFunc, ...sendArgs], …`) into `[sendFunc, receiveFunc]`.
-    //   This handles both variables and constants, and merges receivers when they have the same body.
-    //   All sent args must be JSON-serializable. And, no infinite loops.
-    //   `staticArgs` is a Map from items to strings of args that go before sent args.
-    //   `thereFunc` can be a string or a JS function (turned into a string).
-    //     Called as `thereFunc(...staticArgs, ...sentArgs)`.
-    //   `sendArgs` can be either `data` or `(...args)=>Promise<data>`.
-    //   `sendFunc(...args)` will generate the string to send.
-    //   `receiveFunc(str)` on receiver will process the sent string.
-    //     Set up via `RCV = (new Function(receiveFunc))()`. Used via `await RCV(str)`.
-    //     `RCV` can be used to store globals.
-    let sendFuncs = [], prefix = [], receive = []
-    receive.push(`const sent = JSON.parse(str)`)
-    receive.push(`const received = new Array(${items.length})`)
-    const sentStringToIndex = new Map
-    const constStringToIndex = new Map
-    for (let i = 0; i < items.length; ++i) {
-        const item = items[i] instanceof Promise ? await items[i] : items[i]
-        if (!Array.isArray(item)) throw new Error('Can only compile arrays, first received func then sent args')
-        prefix.push(`RCV.F${i} = ${item[0]}`)
-        const args = []
-        for (let j = 1; j < item.length; ++j) {
-            const arg = item[j] instanceof Promise ? await item[j] : item[j]
-            if (typeof arg == 'function') { // Unknown; send it each time.
-                const at = allocSent(''+arg, sentStringToIndex)
-                sendFuncs[at] = arg
-                args.push(`sent[${at}]`)
-            } else { // Known; pre-send it.
-                const at = allocSent(JSON.stringify(arg), constStringToIndex)
-                args.push(`RCV.V[${at}]`)
-            }
-        }
-        const st = staticArgs && staticArgs.get(item)
-        receive.push(`received[${i}] = RCV.F${i}(${st ? st+',' : ''}${args.join(',')})`)
-    }
-    receive.push(`return Promise.all(received)`)
-    if (constStringToIndex.size) {
-        const constStrings = []
-        constStringToIndex.forEach((i,str) => constStrings[i] = str)
-        prefix.push(`RCV.V = [${constStrings.join(',')}]`)
-    }
-    prelude && prefix.push(prelude)
-    return [
-        bindSender(sendFuncs),
-        `async function RCV(str) {${receive.join('\n')}}
-        ${prefix.join('\n')}
-        return RCV`]
-    function allocSent(str, m) { // Returns an index in `sent`.
-        if (m.has(str)) return m.get(str)
-        const i = m.size;  m.set(str, i);  return i
-    }
-    function bindSender(sendFuncs) {
-        return async function SND(...args) {
-            // `await` this call to get the string that the receiver has to receive.
-            return JSON.stringify(await Promise.all(sendFuncs.map(f => f(...args))))
-        }
-    }
-}
 
 
 
