@@ -65,6 +65,7 @@ These include:
 - If for `webenv.browser`, `userProfile`, which is a function from stream to the user profile directory. The default is `webenv/puppeteer-chrome-profile-INDEX`.
 - `port:1234` and `httpsOptions:null`: the server's options.
     - Optionally, specify key and certificate in `httpsOptions`, [as specified here](https://nodejs.org/en/knowledge/HTTP/servers/how-to-create-a-HTTPS-server/).
+- `hidePredictions:false`: whether extensions cannot see predictions (to really cut off all copyright complaints).
 
 ```js
 webenv.userAgent(agent = 'WebEnv agent <https://github.com/Antipurity/webenv>')

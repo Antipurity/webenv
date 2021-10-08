@@ -8,6 +8,7 @@ const { Observations, performance, streamPrototype } = require('./src/stream-pro
 const { observers } = require('./src/observers.js')
 const { compileSentJS } = require('./src/compile-sent-js.js')
 const { encodeInts, decodeInts, overwriteArray } = require('./src/int-encoding.js')
+const { writeToChannel, readFromChannel, swapBytes } = channels
 
 
 
@@ -22,37 +23,21 @@ Env's methods:
 - \`.reinit(...streams)\`: for dynamically changing the set of streams/interfaces; \`await\` it.
     - To modify \`env\`'s streams, use \`await env.reinit(MODIFY(env.streams))\`.
     - To close streams without closing NodeJS, use \`await env.reinit()\`.
-- \`.listen(path='/', func)\`: router, for making the HTTP/S server listen at \`path\` (such as \`\`), via \`func(req, res)\`; \`await\` it.
+- \`.listen(path='/', func)\`: router, for making the HTTP/S server listen at \`path\` (such as \`/observations/0\`), via \`func(req, res)\`; \`await\` it.
     - Returns \`null\` if path was already listening, else \`path\`.
     - If \`func\` is \`null\` but \`path\` is not, this cancels the subscription.
     - Port & HTTPS settings are taken from \`webenv.settings(…)\` of the first stream.
+- \`.upgrade(path='/', func)\`: routes upgrade requests to \`func\`, for establishing Web Socket connections. Same semantics as \`.listen\`.
 `, async function init(...interfaces) {
     const env = {
         streams: [],
         interfaces: [],
         _reinitLock: null,
         _server: null,
-        _serverPaths: Object.create(null),
-        async listen(path='/', func) {
-            if (!this._server) {
-                const opt = this.streams[0].settings.httpsOptions
-                const http = require('http'), https = require('https')
-                const server = !opt ? (f => http.createServer(f)) : (f => https.createServer(opt, f))
-                this._server = server((req, res) => {
-                    const u = req.url, paths = this._serverPaths
-                    if (u in paths) paths[u](req, res)
-                    else res.statusCode = 404, res.end()
-                })
-                await new Promise(then => this._server.listen(this.streams[0].settings.port, then))
-            }
-            const paths = this._serverPaths
-            const had = path in paths
-            if (!func && path != null) delete paths[path]
-            else if (typeof func != 'function')
-                throw new Error('Listener is not a function')
-            if (!had) paths[path] = func
-            return had ? path : null
-        },
+        _listenPaths: Object.create(null),
+        _upgradePaths: Object.create(null),
+        async listen(path='/', func) { return listen(this, this._listenPaths, path, func) },
+        async upgrade(path='/', func) { return listen(this, this._upgradePaths, path, func) },
         async reinit(...interfaces) {
             let p = this._reinitLock, then
             this._reinitLock = new Promise(f => then=f)
@@ -61,7 +46,8 @@ Env's methods:
                 // Kill the server if no interfaces.
                 if (!interfaces.length) {
                     const server = this._server;  this._server = null
-                    this._serverPaths = Object.create(null)
+                    this._listenPaths = Object.create(null)
+                    this._upgradePaths = Object.create(null)
                     await new Promise(then => server.close(then))
                 }
                 // Remember the top-level interfaces, in `.interfaces`.
@@ -100,6 +86,31 @@ Env's methods:
         },
     }
     return await env.reinit(...interfaces)
+    async function listen(env, paths, path, func) {
+        if (!env._server) await setupServer(env)
+        const had = path in paths
+        if (!func && path != null) delete paths[path]
+        else if (typeof func != 'function')
+            throw new Error('Listener is not a function')
+        if (!had) paths[path] = func
+        return had ? path : null
+    }
+    async function setupServer(env) {
+        const opt = env.streams[0].settings.httpsOptions
+        const http = require('http'), https = require('https')
+        const server = !opt ? (f => http.createServer(f)) : (f => https.createServer(opt, f))
+        env._server = server((req, res) => {
+            const u = req.url, paths = env._listenPaths
+            if (u in paths) paths[u](req, res)
+            else res.statusCode = 404, res.end()
+        })
+        env._server.on('upgrade', (req, socket, head) => {
+            const u = req.url, paths = env._upgradePaths
+            if (u in paths) paths[u](req, socket, head)
+            else socket.end()
+        })
+        return new Promise(then => env._server.listen(env.streams[0].settings.port, then))
+    }
 })
 
 
@@ -144,8 +155,8 @@ Slloooooooow.
             this.reads = stream.settings.width * stream.settings.height * 3
         },
         reads:'computed',
-        observer: [async function({video, audio}, obs, end, w, h, maskColor) {
-            const d = await video.grab(0, 0, w, h, w, h)
+        observer: [async function(media, {obs}, end, w, h, maskColor) {
+            const d = await media.video(0, 0, w, h, w, h)
             // Normalize and write.
             await end()
             for (let from = 0, to = 0; to < obs.length; ) {
@@ -166,6 +177,7 @@ function visualizePageScreenshot(elem, obs, pred, width, height) {
     if (obs.length % 3) throw new Error('Bad length: ' + obs.length)
     if (!elem.firstChild) {
         const obsC = elem.appendChild(document.createElement('canvas'))
+        obsC.width = width, obsC.height = height
         elem.obsCtx = obsC.getContext('2d', {desynchronized:false})
         elem.obsData = elem.obsCtx.createImageData(width, height)
         const predC = elem.appendChild(document.createElement('canvas'))
@@ -209,9 +221,9 @@ Provide a mask color (0xRRGGBB) to mask exact matches, or \`null\` to disable th
     return [observers, {
         reads: width * height * 3,
         observer: [
-            async function({video, audio}, obs, end, x, y, w, h, maxW, maxH, maskColor) {
+            async function(media, {obs}, end, x, y, w, h, maxW, maxH, maskColor) {
                 x -= (w/2) | 0, y -= (h/2) | 0
-                const d = await video.grab(x, y, w, h, maxW, maxH)
+                const d = await media.video(x, y, w, h, maxW, maxH)
                 // Normalize and write.
                 await end()
                 for (let i = 0, from = 0, to = 0; to < obs.length; ++i) {
@@ -255,7 +267,7 @@ Provide a mask color (0xRRGGBB) to mask exact matches, or \`null\` to disable th
     return [observers, {
         reads: numPoints * 3,
         observer: [
-            async function observeFovea({video, audio}, obs, end, closestPoint, x, y, w, h, maxW, maxH, maskColor) {
+            async function observeFovea(media, {obs}, end, closestPoint, x, y, w, h, maxW, maxH, maskColor) {
                 if (!observeFovea.pointSum) { // Prepare data, if not prepared already.
                     let max = 0
                     for (let i = 0; i < closestPoint.length; ++i)
@@ -266,7 +278,7 @@ Provide a mask color (0xRRGGBB) to mask exact matches, or \`null\` to disable th
                 }
                 // Get image data.
                 x -= (w/2) | 0, y -= (h/2) | 0
-                const d = await video.grab(x, y, w, h, maxW, maxH)
+                const d = await media.video(x, y, w, h, maxW, maxH)
                 const pointSum = observeFovea.pointSum, pointNum = observeFovea.pointNum
                 // Normalize, average, and write.
                 await end()
@@ -346,7 +358,12 @@ Provide a mask color (0xRRGGBB) to mask exact matches, or \`null\` to disable th
             if (points.has(hash)) continue
             points.add(hash)
         }
-        return [...points].sort()
+        return [...points].sort((a,b) => { // Split into 16×16 blocks, and sort sort by x in each block.
+            const xa = a>>>16, ya = a&65535, blocka = (xa>>>4)*200 + (ya>>>4)
+            const xb = a>>>16, yb = a&65535, blockb = (xb>>>4)*200 + (yb>>>4)
+            if (blocka===blockb) return a-b
+            return blocka - blockb
+        })
     }
     function invertFoveatedCoords(radius, points) {
         // `image`, returned: from x+radius + 2*radius*(y+radius) to the index into `points`.
@@ -393,9 +410,9 @@ To calculate \`samples\`, divide \`sampleRate\` by the expected frames-per-secon
 `, function imageRect(samples = 2048, sampleRate = 44100) {
     return [observers, {
         reads: samples,
-        observer: [async function({video, audio}, obs, end, samples, sampleRate) {
+        observer: [async function(media, {obs}, end, samples, sampleRate) {
             // A copy, but this is small-time compared to `webenv.image(...)`.
-            const data = await audio.grab(samples, sampleRate)
+            const data = await media.audio(samples, sampleRate)
             await end()
             obs.set(data)
         }, samples, sampleRate],
@@ -658,12 +675,6 @@ ${endian}
 function endian() {
     return endian.cache || (endian.cache = (new Uint8Array(new Uint16Array([1]).buffer))[0] === 1 ? 'LE' : 'BE')
 }
-function swapBytes(buf, bpe = 4) {
-    if (bpe === 8) buf.swap64()
-    else if (bpe === 4) buf.swap32()
-    else if (bpe === 2) buf.swap16()
-    return buf
-}
 
 
 
@@ -793,24 +804,6 @@ Communication protocol details, simple for easy adoption:
         return await readFromChannel(io.ch, len, format, byteswap)
     }
 })
-async function writeToChannel(ch, data, byteswap = false) {
-    if (typeof data == 'number') data = new Uint32Array([data])
-    if (byteswap) data = data.slice()
-    const buf = Buffer.from(data.buffer, data.byteOffset, data.byteLength)
-    byteswap && swapBytes(buf, data.constructor.BYTES_PER_ELEMENT)
-    await ch.write(buf)
-}
-async function readFromChannel(ch, len, Format = Float32Array, byteswap = false) {
-    // Returns either a Buffer or a Promise of it, for convenience.
-    if (!len) return Format !== Number ? new Format(0) : 0
-    const bpe = Format !== Number ? Format.BYTES_PER_ELEMENT : 4
-    const buf = await ch.read(len * bpe)
-    if (!buf || buf.length < len * bpe)
-        throw new Error('Unexpected end-of-stream')
-    byteswap && swapBytes(buf, bpe)
-    if (Format === Number) return new Uint32Array(buf.buffer, buf.byteOffset, 1)[0]
-    return new Format(buf.buffer, buf.byteOffset, len)
-}
 
 
 
@@ -1879,6 +1872,7 @@ These include:
 - If for \`webenv.browser\`, \`userProfile\`, which is a function from stream to the user profile directory. The default is \`webenv/puppeteer-chrome-profile-INDEX\`.
 - \`port:1234\` and \`httpsOptions:null\`: the server's options.
     - Optionally, specify key and certificate in \`httpsOptions\`, as in https://nodejs.org/en/knowledge/HTTP/servers/how-to-create-a-HTTPS-server/
+- \`hidePredictions:false\`: whether extensions cannot see predictions (to really cut off all copyright complaints).
 `, function(settings) { return { settings } })
 
 

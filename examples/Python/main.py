@@ -105,6 +105,7 @@ if hparams['tensorboard']:
   writer.add_hparams(hparams, {}) # Would have been nice if this worked without TF.
 i = 0
 def loss(pred, got, obs, act_len):
+  # BUG: NaNs in observations still cause loss.
   global i;  i += 1
   if hparams['merge_obs'] == 'concat': # Un-concat if needed.
     got = got[..., pred.shape[-1]:].detach()

@@ -63,6 +63,7 @@ The result is a promise for the environment, which is an object with:
             userProfile: stream => require('path').join(__dirname, '..', 'puppeteer-chrome-profile-' + stream.index),
             port: 1234,
             httpsOptions: null,
+            hidePredictions: false,
         })
         // Private state.
         this._stall = null // A promise when a `relaunch` is in progress.
@@ -188,10 +189,11 @@ The result is a promise for the environment, which is an object with:
         for (let i = 0; i < all.length; ++i) {
             const o = all[i], prev = oldIndices.get(o)
             seen.add(o)
-            if (typeof o.init == 'function') {
-                const r = prev === undefined && o.init(this)
-                if (r instanceof Promise) tmp.push(r)
-            }
+            if (typeof o.init == 'function')
+                try {
+                    const r = prev === undefined && o.init(this)
+                    if (r instanceof Promise) tmp.push(r)
+                } catch (err) { console.error(err) }
             allReadOffsets[i] = reads, allWriteOffsets[i] = writes
             if (typeof o.reads == 'number') {
                 if (o.reads < 0 || o.reads !== o.reads>>>0)
@@ -206,7 +208,9 @@ The result is a promise for the environment, which is an object with:
             if (o.settings && typeof o.settings == 'object')
                 Object.assign(this.settings, o.settings)
         }
-        for (let i = 0; i < tmp.length; ++i) await tmp[i]
+        for (let i = 0; i < tmp.length; ++i)
+            try { await tmp[i] }
+            catch (err) { console.error(err) }
         this._allocArray(tmp)
         if (this._all) {
             const a = this._all, tmp = this._allocArray(0)

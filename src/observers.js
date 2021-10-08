@@ -6,79 +6,305 @@
 const { Observations } = require('./stream-prototype.js')
 const { compileSentJS } = require('./compile-sent-js.js')
 const { encodeInts, decodeInts } = require('./int-encoding.js')
+const { webSocketUpgrade, webSocket, writeToChannel, readFromChannel } = require('./data-channels.js')
 
 
 
-exports.observers = {
+const observers = exports.observers = {
     docs:`The shared interface for extension-side video and audio grabbing.
 
 To be used by bundling other interfaces with this; duplicate occurences will be merged.
 
 Other interfaces that want this must define:
-- \`.observer: [({video, audio}, obs, end, ...args)=>…, ...args]\`
+- \`.observer: [(media, {pred, act, obs}, end, ...args)=>…, ...args]\`
   - Computed args get the \`stream\`.
   - Communication cost is reduced as much as possible without compression, don't worry.
   - Calling \`await end()\` at the end or just before writing to \`obs\` (f32 array) is mandatory.
-  - \`video:{grab(x,y,w,h)=>pixels}\`
-  - \`audio:{grab(sampleN=2048, sampleRate=44100)=>samples\`
-// TODO: Connect & communicate through a WebSocket. (If Puppeteer-controlled, auto-call \`connect(\`ws://localhost/\${s.env.settings.port}\`)\`.)
-// TODO: Also give the previous actions to observers, so that the extension can perform them for us. (Would need a separate binary-ish stream for this, to not waste time+bandwidth on base64+JSON-encoding actions. Post-web-socket.)
-//   (And the previous predictions, so that users can visualize those. But only if a setting is checked.)
+  - \`await media.video(x,y,w,h)=>pixels\`
+  - \`await media.audio(sampleN=2048, sampleRate=44100)=>samples\`
 `,
     key: Symbol('observers'),
-    init(stream) {
+    async init(stream) {
+        const spot = Spot(stream)
+        stream.env.upgrade('/'+spot.id, (...args) => webSocketUpgrade(...args).then(ch => {
+            spot.ch = ch
+            readAllData(stream, ch)
+        }))
         if (!stream.extensionPage) return
-        stream.extensionPage.exposeFunction('gotObserverData', gotObserverData)
         stream.extensionPage.exposeFunction('PRINT', console.error) // For debugging.
-        function gotObserverData(b64) {
-            // Yeah, sure, u16 per color per pixel is 2× the inefficiency. But. Audio.
-            //   TODO: Make the extension communicate through a WebSocket, not CDP.
-            const obsBuf = Buffer.from(b64 || '', 'base64') // Int16; decode into floats.
-            const obsLen = obsBuf.byteLength / Int16Array.BYTES_PER_ELEMENT | 0
-            decodeInts(new Int16Array(obsBuf.buffer, obsBuf.byteOffset, obsLen), stream._obsFloats)
-            // (Technically, this can overwrite other `read`s, but `await end()` should prevent that.)
-        }
+        // Auto-connect if Puppeteer-controlled.
+        const secure = stream.settings.httpsOptions ? 's' : ''
+        await stream.extensionPage.evaluate(
+            (bpv, code, url) => connectChannel(bpv, code, url),
+            1,
+            'return '+webSocket,
+            `ws${secure}://localhost:${stream.settings.port}/${spot.id}`,
+        )
+    },
+    deinit(stream) {
+        const spot = Spot(stream)
+        stream.env.upgrade(spot.id)
+        spot.ended = true
     },
     async read(stream, obs, _) {
-        if (!stream.page || !stream.extensionPage || stream.extensionPage.isClosed()) return
-        const state = stream[this.key] || (stream[this.key] = Object.create(null))
-        if (state.snd === undefined || state.all !== stream._all) {
+        const spot = Spot(stream)
+        if (!spot.ch || spot.byteswap == null || !spot.cons || !spot.pred || !spot.act) return
+        if (spot.snd === undefined || spot.all !== stream._all) {
             // Relink extension-side observers.
-            state.all = stream._all
-            const items = [], staticArgs = new Map, prelude = []
-            const endFunc = items.push([`()=>{}`])-1
-            const obsSlices = []
-            for (let i = 0; i < stream._all.length; ++i) {
-                const o = stream._all[i]
-                if (Array.isArray(o.observer)) {
-                    const item = o.observer
-                    const off = stream._allReadOffsets[i]
-                    const at = obsSlices.push(`RCV.obs.subarray(${off}, ${off + (o.reads || 0)})`)-1
-                    items.push(item)
-                    staticArgs.set(item, `RCV.media,RCV.obsSlices[${at}],RCV.end`)
-                }
-            }
-            prelude.push(`RCV.obs=new ${Observations.name}(${stream.reads})`)
-            prelude.push(`RCV.obsSlices=[${obsSlices.join(',')}]`)
-            prelude.push(`RCV.media={video,audio}`) // Expecting those globals in the extension.
-            items[endFunc] = [`() => {
-                const end = RCV.end = ${end}
-                end.items = ${staticArgs.size}, end.p = new Promise(then => end.then = then)
-            }`]
-            state.snd = null
-            const [snd, rcv] = await compileSentJS(staticArgs, items, prelude.join('\n'))
-            state.snd = snd
-            await stream.extensionPage.evaluate((rcv,w,h) => updateObservers(rcv,w,h), rcv)
-            function end() { // Resolve if the last end(), and always return a promise.
-                if (!--end.items) end.then()
-                return end.p
-            }
+            spot.all = stream._all
+            const [snd, rcv] = await compileJS(stream)
+            spot.snd = snd
+            const rcvBuf = new Uint8Array(Buffer.from(rcv))
+            await Promise.all([
+                writeToChannel(spot.ch, 0xffffffff, false),
+                writeToChannel(spot.ch, rcvBuf.length, spot.byteswap),
+                writeToChannel(spot.ch, rcvBuf, false),
+                spot.ch.skip(),
+            ])
         }
-        if (!state.snd) return
+        if (!spot.snd) return
         // Call observers. The extension will call `gotObserverData` for future frames.
         //   (No `await`: the observer stream is delayed by at least a frame, to not stall.)
-        const str = await state.snd(stream)
-        stream.extensionPage.evaluate(str => readObservers(str), str).catch(doNothing)
+        const str = await spot.snd(stream)
+        const strBuf = new Uint8Array(Buffer.from(str))
+        if (!spot.predEncoded) spot.predEncoded = new spot.cons(0)
+        if (!spot.actEncoded) spot.actEncoded = new spot.cons(0)
+        await Promise.all([
+            writeToChannel(spot.ch, spot.pred.length, spot.byteswap),
+            writeToChannel(spot.ch, spot.predEncoded = encodeInts(spot.pred, spot.predEncoded), spot.byteswap),
+            writeToChannel(spot.ch, spot.act.length, spot.byteswap),
+            writeToChannel(spot.ch, spot.actEncoded = encodeInts(spot.act, spot.actEncoded), spot.byteswap),
+            writeToChannel(spot.ch, strBuf.length, spot.byteswap),
+            writeToChannel(spot.ch, strBuf, false),
+            spot.ch.skip(),
+        ])
+    },
+    write(stream, pred, act) {
+        const spot = Spot(stream)
+        if (!spot.ch) return
+        const show = !stream.settings.hidePredictions
+        spot.pred = show ? pred : (spot.pred || new pred.constructor(0)), spot.act = act
     },
 }
-function doNothing() {}
+
+
+
+async function readAllData(stream, ch) {
+    // Protocol (we're right-to-left):
+    //   Start → 0xFFFFFFFF 0x01020304 JsonLen Json (For {bytesPerValue: 0|1|2}.)
+    //   0xFFFFFFFF JsLen Js → update (`RCV = new Function(Js)()`)
+    //   PredLen Pred ActLen Act JsonLen Json → ObsLen Obs
+    const spot = Spot(stream)
+    while (!spot.ended) {
+        try {
+            const obsLen = await readFromChannel(ch, 1, Number, spot.byteswap)
+            if (obsLen === 0xffffffff) {
+                const magic = await readFromChannel(ch, 1, Number, false)
+                if (magic === 0x01020304) spot.byteswap = false
+                else if (magic === 0x04030201) spot.byteswap = true
+                else return ch.close()
+                const jsonLen = await readFromChannel(ch, 1, Number, spot.byteswap)
+                const json = await readFromChannel(ch, jsonLen, Uint8Array, false)
+                const jsonStr = Buffer.from(json).toString('utf8')
+                const obj = JSON.parse(jsonStr)
+                const intSize = obj.bytesPerValue
+                if (![0,1,2].includes(intSize)) throw new Error('Bad intSize: '+intSize)
+                spot.cons = intSize === 0 ? Float32Array : intSize === 1 ? Int8Array : Int16Array
+            } else {
+                const obs = await readFromChannel(ch, obsLen, spot.cons, spot.byteswap)
+                decodeInts(obs, stream._obsFloats)
+            }
+        } catch (err) { if (err !== 'skip') throw ch.close(), err }
+    }
+    ch.close()
+}
+
+
+
+async function compileJS(stream) {
+    const spot = Spot(stream)
+    const items = [], staticArgs = new Map, prelude = []
+    const cons = spot.cons, bpe = cons.BYTES_PER_ELEMENT
+    items.push([`() => {
+        const p = RCV.pred;  RCV.P = decodeInts(new ${cons.name}(p.buffer, p.byteOffset, p.byteLength/${bpe} | 0), RCV.P, true)
+        const a = RCV.act;  RCV.A = decodeInts(new ${cons.name}(a.buffer, a.byteOffset, a.byteLength/${bpe} | 0), RCV.A, true)
+    }`]) // Reinterpret pred/act bytes as f32/i8/i16.
+    const endFunc = items.push([`()=>{}`])-1
+    const obsSlices = []
+    for (let i = 0; i < stream._all.length; ++i) {
+        const o = stream._all[i]
+        if (Array.isArray(o.observer)) {
+            const item = o.observer
+            const offR = stream._allReadOffsets[i], lenR = o.reads || 0
+            const offW = stream._allWriteOffsets[i], lenW = o.writes || 0
+            const at = obsSlices.push(`RCV.obs.subarray(${offR}, ${offR + lenR})`)-1
+            items.push(item)
+            const p = `RCV.P.subarray(${offR}, ${offR + lenR})`
+            const a = `RCV.A.subarray(${offW}, ${offW + lenW})`
+            const obs = `RCV.obsSlices[${at}]`
+            staticArgs.set(item, `RCV.media,{pred:${p},act:${a},obs:${obs}},RCV.end`)
+        }
+    }
+    items.push([`async function encode() {
+        await RCV.end(), await Promise.resolve()
+        RCV.obsEncoded = encodeInts(RCV.obs, RCV.obsEncoded)
+    }`])
+    prelude.push(`RCV.obs=new ${Observations.name}(${stream.reads})`)
+    prelude.push(`RCV.obsSlices=[${obsSlices.join(',')}]`)
+    // Imagine not having JS highlighting for strings, and considering such code unreadable.
+    prelude.push(`RCV.media={
+        stream:null, w:0, h:0, sr:0,
+        async getStream(width, height, sampleRate) {
+            // (Should probably also measure frame-rate, and re-request the stream on too much deviation.)
+            if (this.stream instanceof Promise || this.w >= width && this.h >= height && this.sr >= sampleRate)
+                return this.stream
+            const haveTabCapture = typeof chrome != ''+void 0 && chrome.tabCapture && chrome.tabCapture.capture
+            this.w = Math.max(this.w, width)
+            this.h = Math.max(this.h, height)
+            this.sr = Math.max(this.sr, sampleRate)
+            const opt = haveTabCapture ? {
+                audio:true,
+                video:true,
+                videoConstraints:{
+                    // Docs are sparse.
+                    mandatory:{ maxWidth:this.w, maxHeight:this.h },
+                },
+            } : {
+                audio:{
+                    channelCount: 1,
+                    sampleRate:this.sr, sampleSize:512,
+                },
+                video:{
+                    logicalSurface: true,
+                    displaySurface: 'browser',
+                    width:this.w, height:this.h,
+                },
+            }
+            let reapplied = false
+            if (this.stream)
+                for (let track of this.stream.getTracks())
+                    if (track.applyConstraints)
+                        track.applyConstraints(opt), reapplied = true
+            if (reapplied) return
+            if (this.stream)
+                for (let track of this.stream.getTracks())
+                    track.stop()
+            return this.stream = new Promise((resolve, reject) => {
+                const gotStream = s => {
+                    if (s) {
+                        this.stream = s
+                        this.elem = document.createElement('video')
+                        this.elem.srcObject = s
+                        this.elem.volume = 0 // To not play audio to the human.
+                        resolve(s)
+                    } else
+                        this.stream = null, this.w = this.h = 0,
+                        reject(new Error('Stream capture failed; reason: ' + chrome.runtime.lastError.message))
+                }
+                if (haveTabCapture)
+                    chrome.tabCapture.capture(opt, gotStream)
+                else
+                    navigator.mediaDevices.getDisplayMedia(opt).then(gotStream).catch(err => gotStream(null))
+            })
+        },
+        ctx2d:document.createElement('canvas').getContext('2d'),
+        elem:null, // ImageCapture throws far too many errors for us.
+        async video(x, y, width, height, maxW, maxH) {
+            // Draws the current frame onto a canvas, and returns the u8 image data array.
+            //   Call this synchronously, without \`await\`s between you getting called and this.
+            //   Returns image data.
+            await this.getStream(maxW, maxH, 44100)
+            if (!this.elem) return new Uint8Array(0)
+            if (this.elem.paused) this.elem.play()
+            const ctx = this.ctx2d, w1 = ctx.canvas.width, h1 = ctx.canvas.height
+            const w2 = this.elem.videoWidth, h2 = this.elem.videoHeight
+            if (w1 < w2 || h1 < h2) ctx.canvas.width = w2, ctx.canvas.height = h2
+            const sx = w2 / maxW || 0, sy = h2 / maxH || 0
+            ctx.clearRect(0, 0, width, height)
+            ctx.drawImage(this.elem, x * sx, y * sy, width * sx, height * sy, 0, 0, width, height)
+            return this.ctx2d.getImageData(0, 0, width, height).data
+        },
+    
+        pos:0,
+        buf:null,
+        samples:null,
+        ctx:null,
+        grabbed:false,
+        channels:0,
+        sampleRate:null, // Re-inits .ctx on sample-rate change (so, keep it constant).
+        async audio(samples = 2048, sampleRate = 44100, reserve = 4) {
+            // Create the capturing audio context, resize .buf and .samples, then grab most-recent samples.
+            //   (The samples will be interleaved, and -1..1. See this.channels to un-interleave.)
+            const stream = await this.getStream(0, 0, sampleRate)
+            if (!stream) return new Float32Array(0)
+            if (!this.ctx || this.sampleRate !== sampleRate) {
+                // ScriptProcessorNode is probably fine, even though it's been deprecated since August 29 2014.
+                this.ctx && this.ctx.clise()
+                this.sampleRate = sampleRate
+                this.ctx = new AudioContext({ sampleRate })
+                const sourceNode = this.ctx.createMediaStreamSource(stream)
+                const scriptNode = this.ctx.createScriptProcessor(512)
+                const inputData = []
+                scriptNode.onaudioprocess = evt => {
+                    if (!this.buf) return
+                    const input = evt.inputBuffer
+                    const channels = this.channels = input.numberOfChannels
+                    inputData.length = channels
+                    for (let i = 0; i < inputData[0].length; ++i)
+                        inputData[i] = input.getChannelData(i)
+                    let pos = this.pos, buf = this.buf
+                    for (let i = 0; i < inputData[0].length; ++i) {
+                        for (let ch = 0; ch < channels; ++ch) { // Interleave.
+                            buf[pos++] = inputData[ch][i]
+                            if (pos >= buf.length) pos = 0
+                        }
+                    }
+                    this.pos = pos
+                    // Do not write anything to output, to be silent.
+                }
+                sourceNode.connect(scriptNode)
+                scriptNode.connect(this.ctx.destination)
+            }
+            const bufLen = samples * reserve | 0
+            if (!this.buf) this.buf = new Float32Array(bufLen)
+            else if (this.buf.length < bufLen) {
+                const prev = this.buf
+                this.buf = new Float32Array(bufLen)
+                this.buf.set(prev)
+            }
+            if (this.grabbed && this.samples && this.samples.length === samples) return this.samples
+            this.grabbed = true
+            if (!this.samples || this.samples.length !== samples) this.samples = new Float32Array(samples)
+            const start = Math.max(0, this.pos - samples), initialLen = this.pos - start
+            const extra = Math.max(0, samples - this.pos)
+            const buf = this.buf.buffer, offset = this.buf.byteOffset, bpe = Float32Array.BYTES_PER_ELEMENT
+            this.samples.set(new Float32Array(buf, offset + start * bpe, initialLen), 0)
+            extra && this.samples.set(new Float32Array(buf, offset + (this.buf.length - extra) * bpe, extra), initialLen)
+            return this.samples
+        },
+    }`)
+    prelude.push(''+encodeInts)
+    prelude.push(''+decodeInts)
+    prelude.push(`RCV.obsEncoded=new ${cons.name}(0)`)
+    items[endFunc] = [`() => {
+        const end = RCV.end = ${end}
+        end.items = ${staticArgs.size}, end.p = new Promise(then => end.then = then)
+    }`]
+    spot.snd = null
+    return await compileSentJS(staticArgs, items, prelude.join('\n'))
+    function end() { // Resolve if the last end(), and always return a promise.
+        if (!--end.items) end.then()
+        return end.p
+    }
+}
+
+
+
+function Spot(s) {
+    s = s[observers.key] || (s[observers.key] = Object.create(null))
+    if (!s.id) s.id = randomChars(32)
+    return s
+}
+function randomChars(len) {
+    return new Array(len).fill().map((_,i) => (Math.random()*16 | 0).toString(16)).join('')
+}

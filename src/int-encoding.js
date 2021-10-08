@@ -20,11 +20,12 @@ function encodeInts(d, into) {
       into[i] = d[i] !== d[i] ? masked : Math.round(Math.max(-1, Math.min(d[i], 1)) * scale)
   return into
 }
-function decodeInts(d, into) {
+function decodeInts(d, into, allowResize = false) {
   // i8/i16 to -1…1|NaN floats.
-  // On size mismatch, this only writes the beginning.
+  // On size mismatch, this only writes the beginning, unless `allowResize`.
+  if (allowResize && (into == null || d.length !== into.length)) into = new Float32Array(d.length)
   if (!(into instanceof Float32Array)) throw new Error('Not floats')
-  if (d instanceof Float32Array) return overwriteArray(into, d)
+  if (d instanceof Float32Array) return !allowResize ? overwriteArray(into, d) : d
   const intSize = d instanceof Int8Array ? 1 : d instanceof Int16Array ? 2 : null
   if (intSize === null) throw new Error('Unrecognized int format: ' + d.constructor.name)
   const scale = 2 ** (intSize * 8 - 1) - 1, masked = -(2 ** (intSize * 8 - 1))
@@ -32,6 +33,7 @@ function decodeInts(d, into) {
   for (let i = 0; i < end; ++i) // Decode.
       into[i] = d[i] === masked ? NaN : d[i] / scale
   if (d.length < into.length) into.fill(NaN, d.length)
+  return into
 }
 function overwriteArray(arr, next) {
     // This doesn't sweat size differences, not touching numbers at the end.
