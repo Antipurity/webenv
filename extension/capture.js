@@ -2,7 +2,7 @@
 //   Lots of changing of data formats, but I can't find a way to have less copying.
 
 let RCV = null, STR = []
-let stream = null, streamW = 0, streamH = 0
+let stream = null, streamW = 0, streamH = 0, streamSR = 0
 let lastRequest = performance.now(), timeBetweenRequests = [0,0,0]
 
 // Limit how many observers can run at once.
@@ -11,21 +11,47 @@ let stepsNow = 0, simultaneousSteps = 16
 
 
 
-async function getStream(width, height) { // (Should probably also accept sampleRate.)
-    if (stream instanceof Promise || streamW >= width && streamH >= height) return stream
+async function getStream(width, height, sampleRate) {
+    // (Should probably also measure frame-rate, and re-request the stream on too much deviation.)
+    if (stream instanceof Promise || streamW >= width && streamH >= height && streamSR >= sampleRate)
+        return stream
+    const haveTabCapture = typeof chrome != ''+void 0 && chrome.tabCapture && chrome.tabCapture.capture
+    streamW = Math.max(streamW, width)
+    streamH = Math.max(streamH, height)
+    streamSR = Math.max(streamSR, sampleRate)
+    const opt = haveTabCapture ? {
+        audio:true,
+        video:true,
+        videoConstraints:{
+            // Docs are sparse.
+            mandatory:{ maxWidth:streamW, maxHeight:streamH },
+        },
+    } : {
+        audio:{
+            channelCount: 1,
+            sampleRate:streamSR, sampleSize:512,
+        },
+        video:{
+            logicalSurface: true,
+            displaySurface: 'browser',
+            width:streamW, height:streamH,
+        },
+    }
+    let reapplied = false
+    if (stream)
+        for (let track of stream.getTracks())
+            if (track.applyConstraints)
+                track.applyConstraints(opt), reapplied = true
+    if (reapplied) return
     if (stream)
         for (let track of stream.getTracks())
             track.stop()
     return stream = new Promise((resolve, reject) => {
-        streamW = Math.max(streamW, width), streamH = Math.max(streamH, height)
-        // TODO: If this is missing, use navigator.mediaDevices.getDisplayMedia.
-        chrome.tabCapture.capture({
-            audio:true,
-            video:true,
-            videoConstraints:{
-                mandatory:{ maxWidth:streamW, maxHeight:streamH },
-            },
-        }, s => {
+        if (haveTabCapture)
+            chrome.tabCapture.capture(opt, gotStream)
+        else
+            navigator.mediaDevices.getDisplayMedia(opt).then(gotStream).catch(err => gotStream(null))
+        function gotStream(s) {
             if (s) {
                 s.w = width, s.h = height
                 stream = s
@@ -36,7 +62,7 @@ async function getStream(width, height) { // (Should probably also accept sample
             } else
                 stream = null, streamW = streamH = 0,
                 reject(new Error('Stream capture failed; reason: ' + chrome.runtime.lastError.message))
-        })
+        }
     })
 }
 const video = {
@@ -46,7 +72,7 @@ const video = {
         // Draws the current frame onto a canvas, and returns the u8 image data array.
         //   Call this synchronously, without `await`s between you getting called and this.
         //   Returns image data.
-        await getStream(maxW, maxH)
+        await getStream(maxW, maxH, 44100)
         if (!this.elem) return new Uint8Array(0)
         if (this.elem.paused) this.elem.play()
         const ctx = this.ctx2d, w1 = ctx.canvas.width, h1 = ctx.canvas.height
@@ -69,7 +95,7 @@ const audio = {
     async grab(samples = 2048, sampleRate = 44100, reserve = 4) {
         // Create the capturing audio context, resize .buf and .samples, then grab most-recent samples.
         //   (The samples will be interleaved, and -1..1. See this.channels to un-interleave.)
-        const stream = await getStream(0, 0)
+        const stream = await getStream(0, 0, sampleRate)
         if (!stream) return new Float32Array(0)
         if (!this.ctx || this.sampleRate !== sampleRate) {
             // ScriptProcessorNode is probably fine, even though it's been deprecated since August 29 2014.

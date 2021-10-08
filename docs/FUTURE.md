@@ -10,7 +10,6 @@ This document outlines what still needs to be done to reach MVP state (or the "r
         - Make sure that the Capture extension can be installed by actual humans.
     - Make the Capture extension usable by humans — or author a separate extension, so that `webenv.browser`s don't have to parse all that extra code (though it's once per startup, so it's cheap).
         - If `!navigator.webdriver`, do not start control automatically, but only manually. Provide a nice UI, with the server URL and the button to control the current tab, canceling if it gets closed.
-        - In non-Chromium browsers (wherever `chrome.tabCapture` is unavailable, [mainly Firefox](https://bugzilla.mozilla.org/show_bug.cgi?id=1391223)), use [`navigator.mediaDevices.getDisplayMedia`](https://developer.mozilla.org/en-US/docs/Web/API/Screen_Capture_API), even though it is much more error-prone for users (have to manually select the tab, and not anything else since there's no way to constrain the shown options).
         - Extra features for better control, mostly controlled through the popup:
             - 2 buttons for ±1 `directScore`, with the ability to bind them to in-page keybindings for convenience;
             - Allow viewing observations+predictions, exactly like `webenv.webView` does;
@@ -30,10 +29,6 @@ This document outlines what still needs to be done to reach MVP state (or the "r
             - Transition goes from `x→f(x)` to `x→(concat f(concat O A.detach())[:mid] f(concat O.detach() A)[mid:])`.
             - Prediction error is unchanged, since it's only on the first half.
             - Goal-maximization becomes `f(concat O.detach() A)[0].sum()`.
-
-- Clean up:
-    - Make `visualize`rs also accept actions, in case we want to visualize mouse actions and button presses and such.
-    - An interface that provides stream ID observations, to guarantee that RNN states will never become indistinguishable.
 
 - An entertaining GIF in `README.md` (of an agent trained on `RandomURL` now that we have that), so that people's eyes don't glaze over from all that *text*.
 
