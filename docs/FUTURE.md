@@ -4,8 +4,12 @@ This document outlines what still needs to be done to reach MVP state (or the "r
     - Make the Capture extension communicate through a Web Socket rather than CDP (gaining speed via not having to communicate through JSON+base64), AND be fully responsible for as many reads+writes as possible via `observers`.
         - Protocol: `0xFFFFFFFF JsLen Js BytesPerValue` for reinitialization (execute `f = Function('...args', Js)(socket, f=null, bytesPerValue=1)` to get new JS code, or update old code in-place only as needed; cancel via `f()`, even the very first `f` will do); `Index PredLen Pred WriteLen Write JsonLen Json` for an observation (which demands a `Index ReadLen Read JsonLen Json` back).
             - Make `observers` use the protocol-protocol for Web Sockets, to deliver predictions & actions & JSON and receive observations.
-        - Replace as many `.page` and `.cdp` uses, in `read` and `write` and triggers, as we can with in-extension `observer` versions.
-            - There is no way to send `.isTrusted` events in JS, so, if a CDP channel is available for keyboard & mouse events, must use that instead of in-extension presses+clicks.
+        - In-extension `scrollBy`.
+        - In-ext visual augmentations.
+        - In-ext mouse events if not Puppeteered. (No way to send `.isTrusted` events in JS, so must use the CDP channel if available.)
+        - In-ext keyboard events if not Puppeteered.
+        - In-ext `directLink`.
+        - In-ext `interval` and `triggers`, in particular, `goBack` and `homepage` and `randomLink`.
 	- Extension-only user streams: have `webenv.remote(path='/', max=16)`, which for each incoming Web Socket connection (or WebRTC), refuses it if over the limit, else establishes the control connection, re-using all code from the Capture's rework.
         - Make sure that the Capture extension can be installed by actual humans.
     - Make the Capture extension usable by humans — or author a separate extension, so that `webenv.browser`s don't have to parse all that extra code (though it's once per startup, so it's cheap).

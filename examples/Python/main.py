@@ -10,7 +10,7 @@ import torch
 # Lots of hyperparams, so code is overly complex; pretend that non-picked `if` branches do not exist, at first.
 
 hparams = {
-  'batch_size': 4,
+  'batch_size': 1,
 
   'lr': .001,
   'optim': 'Adam', # https://pytorch.org/docs/stable/optim.html
