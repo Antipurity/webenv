@@ -1,4 +1,5 @@
-// To go to a particular interface, search for `exports.XXXXX =`.
+// Here are all WebEnv interface modules, in chronological order.
+//   To go to a particular interface, search for `exports.XXXXX =`.
 
 
 
@@ -424,7 +425,7 @@ To calculate \`samples\`, divide \`sampleRate\` by the expected frames-per-secon
             const obsDb = (-20 * Math.log(1 / Math.sqrt(obsSqr))).toFixed(2)
             const predDb = (-20 * Math.log(1 / Math.sqrt(predSqr))).toFixed(2)
             elem.textContent = `Volume: ${obsDb} dB real | ${predDb} dB predicted`
-            elem.style.fontFamily = 'monospace'
+            elem.style.fontFamily = 'monospace, monospace'
         }],
     }]
 })
@@ -1266,17 +1267,25 @@ Provides an observation of the time between frames, relative to the expected-Fra
         visualize: [function(elem, obs, pred, period) {
             if (!elem.firstChild) {
                 elem.appendChild(document.createElement('div'))
-                elem.firstChild.style.width = '1.2em'
-                elem.firstChild.style.height = '1.2em'
-                elem.firstChild.style.borderRadius = '50%'
-                elem.firstChild.style.display = 'inline-block'
+                Object.assign(elem.firstChild.style, {
+                    width:'1.2em',
+                    height:'1.2em',
+                    borderRadius:'50%',
+                    display:'inline-block',
+                    verticalAlign:'bottom',
+                })
                 elem.appendChild(document.createElement('div'))
-                elem.lastChild.style.fontFamily = 'monospace,monospace'
+                Object.assign(elem.lastChild.style, {
+                    fontFamily:'monospace,monospace',
+                    whiteSpace:'pre',
+                    display:'inline-block',
+                    verticalAlign:'bottom',
+                })
                 elem.frame = false
             }
             const fps = 1000 / period
             elem.firstChild.style.backgroundColor = (elem.frame = !elem.frame) ? 'lightgray' : 'darkgray'
-            elem.lastChild.textContent = fps.toFixed(1) + ' FPS'
+            elem.lastChild.textContent = ' ' + fps.toFixed(1) + ' FPS'
         }, s => +s._period],
     }
 })
@@ -1744,6 +1753,10 @@ Args:
         deinit(stream) {
             return active = false, saveData(true)
         },
+        visualize: !hidden ? [function(elem, obs, pred) {
+            elem.textContent = `Score: ${obs[0].toFixed(2)} real | ${pred[0].toFixed(2)} predicted`
+            elem.style.fontFamily = 'monospace, monospace'
+        }] : undefined,
     }
     async function saveData(stop = false) {
         limitStreamCount()
