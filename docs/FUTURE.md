@@ -40,13 +40,14 @@ With that, this really will be all I can do. Besides, who would ever be impresse
 
 ## Post-MVP (when useful)
 
-- Replace Web Socket communication with WebRTC.
+- Communication:
+    - Replace Web Socket communication with WebRTC.
+    - Compress communication.
 
-- Compress communication.
-
-- Allow listening to real & predicted audio.
-
-- Plots of numbers-over-time, like the score.
+- Visualization:
+    - Track observation delay, and make `webenv.imageRect` and `webenv.imageFovea` positioning account for that. (It lags a bit now.)
+    - Allow listening to real & predicted audio.
+    - Plots of numbers-over-time, like the score.
 
 - Extra features for better control in `webenv.remote`, mostly controlled through the popup:
     - Allow viewing observations+predictions, exactly like `webenv.visualize` does;
