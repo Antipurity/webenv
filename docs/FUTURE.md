@@ -4,18 +4,7 @@ This document outlines what still needs to be done to reach MVP state (or the "r
 	- Extension-only user streams: have `webenv.remote(path='/', max=16)`, which for each incoming Web Socket connection, refuses it if over the limit, else establishes the control connection, re-using all code from the Capture's rework.
         - Make sure that the Capture extension can be installed by actual humans.
         - If `!navigator.webdriver`, do not start control automatically, but only manually. Provide a nice UI, with the server URL and the button to control the current tab, canceling if it gets closed.
-    - Replace Puppeteer JS injection (`webenv.injectScript`) with extension JS injection.
-        - Make `observers` react to all `inject: [fn, ...args]` definitions:
-            - Make `observers` also notice `inject` definers, and collect them all into one `compileSentJS` item (in one big list) which simply sends a message to content (and on success or rejection or 1s timeout, fulfills `end()`).
-                - Send message via `browser.runtime.sendMessage(msg).then(report=>…).catch(()=>{})` (via structured clone, so, plain JS objects are OK).
-            - Every frame, execute `if (!window.code) ….sendMessage('GIMME').then(c => window.code = new Function(c)())` to easily ensure injection without executing *too* much code-per-frame.
-                - Execute via `browser.tabs.executeScript(tabId, { code, runAt:'document_start', allFrames:true })`.
-                - In code, `browser.runtime.onMessage.addListener(window.onmsg = …)` after `window.onmsg && .removeListener(window.onmsg)`.
-                    - On message (`observers`' prelude should listen for that), `return Promise.all([… injected(...args) …])`. (`injected` funcs are setup during the initial execution, which returns the func that does this.)
-                    - Make `observers`' `end()` return the sent-message-to-`inject` result.
-                - On relink, execute `window.code=null`.
     - Make the Capture extension usable by humans.
-        - In-extension `scrollBy`.
         - In-ext visual augmentations (no communication, apart from "we're still going, don't cancel the interval").
         - In-ext mouse events if not Puppeteered. (No way to send `.isTrusted` events in JS, so must use the CDP channel if available.)
         - In-ext keyboard events if not Puppeteered.
@@ -42,7 +31,7 @@ With that, this really will be all I can do. Besides, who would ever be impresse
 
 - Communication:
     - Replace Web Socket communication with WebRTC.
-    - Compress communication.
+    - Compression.
 
 - Visualization:
     - Track observation delay, and make `webenv.imageRect` and `webenv.imageFovea` positioning account for that. (It lags a bit now.)
@@ -56,3 +45,5 @@ With that, this really will be all I can do. Besides, who would ever be impresse
     - Directly link [microphone/camera/etc](https://developer.mozilla.org/en-US/docs/Web/API/Media_Streams_API) data (play audio-only data in-page, to re-use a data channel that agents should already understand);
     - An option to (try to) disable navigation for less user annoyance, via https://stackoverflow.com/questions/821011/prevent-a-webpage-from-navigating-away-using-javascript when all else fails.
     - (And other potential 'prompt-engineering' helpers.)
+
+- Non-extension connections, where the video+audio stream is explicitly provided (so, a fullscreen canvas is essentially required, meaning, games) and navigation is disabled.

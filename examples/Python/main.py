@@ -153,7 +153,7 @@ webenv.webenv(
   'we.defaults',
   [
     'we.settings',
-    '{ homepage:"about:blank" }', # TODO: https://www.google.com/
+    '{ homepage:"https://www.google.com/" }',
     # Note: ideally, the homepage would be a redirector to random websites.
     #   (Install & use the RandomURL dataset if you can. No pre-existing website is good enough.)
   ],

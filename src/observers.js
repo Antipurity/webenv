@@ -11,17 +11,22 @@ const { webSocketUpgrade, webSocket, writeToChannel, readFromChannel } = require
 
 
 const observers = exports.observers = {
-    docs:`The shared interface for extension-side video and audio grabbing.
+    docs:`The shared interface for extension-side code, such as video/audio grabbing.
 
 To be used by bundling other interfaces with this; duplicate occurences will be merged.
 
-Other interfaces that want this must define:
+Other interfaces that want this ought to define:
 - \`.observer: [(media, {pred, act, obs}, end, ...args)=>…, ...args]\`
-  - Computed args get the \`stream\`.
+  - Can access video/audio; cannot access the DOM.
+  - Calling \`await end()\` at the end or just before writing to \`obs\` (f32 array) is MANDATORY.
   - Communication cost is reduced as much as possible without compression, don't worry.
-  - Calling \`await end()\` at the end or just before writing to \`obs\` (f32 array) is mandatory.
-  - \`await media.video(x,y,w,h)=>pixels\`
-  - \`await media.audio(sampleN=2048, sampleRate=44100)=>samples\`
+  - Computed args get the \`stream\`.
+  - Media access:
+    - \`await media.video(x,y,w,h)=>pixels\`
+    - \`await media.audio(sampleN=2048, sampleRate=44100)=>samples\`
+- \`.inject: [(...args)=>report, ...args]\`
+  - Cannot access video/audio; can access the DOM.
+  - Result must be JSON-serializable. It will become the result of \`await end()\` in \`.observer\`.
 `,
     key: Symbol('observers'),
     async init(stream) {
@@ -130,27 +135,50 @@ async function compileJS(stream) {
         const a = RCV.act;  RCV.A = decodeInts(new ${cons.name}(a.buffer, a.byteOffset, a.byteLength/${bpe} | 0), RCV.A, true)
     }`]) // Reinterpret pred/act bytes as f32/i8/i16.
     const endFunc = items.push([`()=>{}`])-1
-    const obsSlices = []
+    const injected = [(end, ...args) => { // Handle `inject` definers.
+        if (tabId != null) {
+            return new Promise(then => {
+                // Send a message to the active tab.
+                chrome.tabs.sendMessage(tabId, args, then)
+                setTimeout(then, 200) // Don't wait for stalls infinitely.
+            }).then(a => end(a))
+        }
+    }], injectedParts = [];  items.push(injected)
     for (let i = 0; i < stream._all.length; ++i) {
         const o = stream._all[i]
         if (Array.isArray(o.observer)) {
+            // Prepare the observer's extra args.
             const item = o.observer
             const offR = stream._allReadOffsets[i], lenR = o.reads || 0
             const offW = stream._allWriteOffsets[i], lenW = o.writes || 0
-            const at = obsSlices.push(`RCV.obs.subarray(${offR}, ${offR + lenR})`)-1
             items.push(item)
             const p = `RCV.P.subarray(${offR}, ${offR + lenR})`
             const a = `RCV.A.subarray(${offW}, ${offW + lenW})`
-            const obs = `RCV.obsSlices[${at}]`
-            staticArgs.set(item, `RCV.media,{pred:${p},act:${a},obs:${obs}},RCV.end`)
+            const obs = `RCV.obs.subarray(${offR}, ${offR + lenR})`
+            // Injectors read injection results; all others do not have closures allocated on each step.
+            const e = !Array.isArray(o.inject) ? `RCV.end` : `bindInjEnd(RCV.end, ${injectedParts.length})`
+            staticArgs.set(item, `RCV.media,{pred:${p},act:${a},obs:${obs}},${e}`)
+        }
+        if (Array.isArray(o.inject)) {
+            // Its args will be `injected`'s args (so that they go through `compileSentJS`).
+            // The injected code will (receive them and) access those args (and send result back).
+            const from = injected.length, to = from + o.inject.length-1
+            injected.push(...o.inject.slice(1))
+            const args = new Array(to-from).fill().map((_,i) => `a[${from + i}]`)
+            injectedParts.push([''+o.inject[0], ...args])
         }
     }
-    items.push([`async function encode() {
+    items.push([async function encode() {
         await RCV.end(), await Promise.resolve()
         RCV.obsEncoded = encodeInts(RCV.obs, RCV.obsEncoded)
-    }`])
+    }])
+    items[endFunc] = [`() => {
+        const end = RCV.end = ${end}
+        end.inj = null, end.items = ${staticArgs.size + (injectedParts.length ? 2 : 1)}, end.p = new Promise(then => end.then = then)
+    }`] // Account for all end() calls: injector, obs-encoder, and all observers.
+    staticArgs.set(injected, `RCV.end`)
+    prelude.push(`function bindInjEnd(end,i) { return ()=>end().then(a=>a&&a[i]) }`)
     prelude.push(`RCV.obs=new ${Observations.name}(${stream.reads})`)
-    prelude.push(`RCV.obsSlices=[${obsSlices.join(',')}]`)
     // Imagine not having JS highlighting for strings, and considering such code unreadable.
     prelude.push(`RCV.media={
         stream:null, w:0, h:0, sr:0,
@@ -286,14 +314,36 @@ async function compileJS(stream) {
     prelude.push(''+encodeInts)
     prelude.push(''+decodeInts)
     prelude.push(`RCV.obsEncoded=new ${cons.name}(0)`)
-    items[endFunc] = [`() => {
-        const end = RCV.end = ${end}
-        end.items = ${staticArgs.size}, end.p = new Promise(then => end.then = then)
-    }`]
+    if (injectedParts.length) {
+        // JS-`inject`ion stuff:
+        //   Update the injected code on startup and page navigation (and relink).
+        prelude.push(`chrome.tabs.executeScript({ code:'window.code=null', runAt:'document_start' })`)
+        prelude.push(`function updateInjection() {
+            if (tabId == null) return
+            const injection = ${JSON.stringify(`
+                if (window.onMSG) chrome.runtime.onMessage.removeListener(window.onMSG)
+                ${injectedParts.map((a,i) => 'const F'+i + '=' + a[0])}
+                chrome.runtime.onMessage.addListener(window.onMSG = (a, sender, sendResponse) => {
+                    Promise.all([${injectedParts.map((a,i) => 'F'+i+'('+a.slice(1)+')')}]).then(sendResponse, sendResponse)
+                    return true
+                })
+            `)}
+            chrome.tabs.executeScript(tabId, { code:injection, runAt:'document_start' })
+        }`)
+        prelude.push(`
+        if (window.onNavigation) chrome.tabs.onUpdated.removeListener(window.onNavigation)
+        chrome.tabs.onUpdated.addListener(window.onNavigation = updateInjection)
+        `)
+        //   Remember the tab ID that started this.
+        prelude.push(`let tabId`)
+        prelude.push(`chrome.tabs.query({active:true, currentWindow:true}, tabs => tabs[0] && (tabId = tabs[0].id, updateInjection()))`)
+    } else items.splice(items.indexOf(injected), 1)
+    // And compile to [sendFunc, receiveStr].
     spot.snd = null
     return await compileSentJS(staticArgs, items, prelude.join('\n'))
-    function end() { // Resolve if the last end(), and always return a promise.
-        if (!--end.items) end.then()
+    function end(inj) { // Resolve if the last end(), and always return a promise.
+        if (Array.isArray(inj)) end.inj = inj
+        if (!--end.items) end.then(end.inj)
         return end.p
     }
 }

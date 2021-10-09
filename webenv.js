@@ -1025,15 +1025,17 @@ If \`relative\` is not \`0\`, the agent meanders its action instead of jumping c
 exports.scrollBy = docs(`\`webenv.scrollBy(sensitivity = 100)\`
 Exposes 2 actions, which add to viewport scroll position (in pixels).
 `, function(sensitivity = 100) {
-    return {
+    const DX = Symbol('scrollDX'), DY = Symbol('scrollDY')
+    return [observers, {
         writes:2,
         write(stream, pred, act) {
-            if (!stream.page || stream.page.isClosed()) return
-            const dx = sensitivity * Math.max(-1, Math.min(act[0], 1))
-            const dy = sensitivity * Math.max(-1, Math.min(act[1], 1))
-            stream.page.evaluate((dx, dy) => scrollBy(dx, dy), dx, dy).catch(doNothing)
+            const dx = Math.round(sensitivity * Math.max(-1, Math.min(act[0], 1)))
+            const dy = Math.round(sensitivity * Math.max(-1, Math.min(act[1], 1)))
+            stream[DX] = dx, stream[DY] = dy
         },
-    }
+        observer: [(media,{obs},end)=>{end()}],
+        inject: [(dx, dy) => scrollBy(dx, dy), s => s[DX], s => s[DY]],
+    }]
 })
 
 
