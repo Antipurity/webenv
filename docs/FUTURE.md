@@ -1,8 +1,6 @@
 This document outlines what still needs to be done to reach MVP state (or the "ready" state).
 
 - Joint training and deployment:
-    - Better visualization:
-        - Make visualizers display image observations & predictions not separately but on the same elem, moving the module's canvas if needed.
 	- Extension-only user streams: have `webenv.remote(path='/', max=16)`, which for each incoming Web Socket connection, refuses it if over the limit, else establishes the control connection, re-using all code from the Capture's rework.
         - Make sure that the Capture extension can be installed by actual humans.
         - If `!navigator.webdriver`, do not start control automatically, but only manually. Provide a nice UI, with the server URL and the button to control the current tab, canceling if it gets closed.

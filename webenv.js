@@ -168,42 +168,63 @@ Slloooooooow.
                 obs[to++] = masked ? NaN : (2*B - 255) / 255
             }
         }, s => s.settings.width, s => s.settings.height, maskColor],
-        visualize: [visualizePageScreenshot, s => s.settings.width, s => s.settings.height],
+        visualize: [
+            visualizePageScreenshot,
+            s => -s.settings.width/2 | 0,
+            s => -s.settings.height/2 | 0,
+            s => s.settings.width,
+            s => s.settings.height,
+            s => s.settings.width,
+            s => s.settings.height,
+        ],
     }]
 })
 
 
 
-function visualizePageScreenshot(elem, obs, pred, width, height) {
+function visualizePageScreenshot(elem, obs, pred, x, y, width, height, maxW, maxH) {
+    x -= (width/2) | 0, y -= (height/2) | 0
     if (obs.length % 3) throw new Error('Bad length: ' + obs.length)
-    if (!elem.firstChild) {
-        const obsC = elem.appendChild(document.createElement('canvas'))
+    if (!elem.obs) {
+        elem.obs = globalElem('div', 'imageObs')
+        elem.pred = globalElem('div', 'imagePred')
+        const obsC = elem.obs.appendChild(document.createElement('canvas'))
         obsC.width = width, obsC.height = height
         elem.obsCtx = obsC.getContext('2d', {desynchronized:false})
         elem.obsData = elem.obsCtx.createImageData(width, height)
-        const predC = elem.appendChild(document.createElement('canvas'))
+        const predC = elem.pred.appendChild(document.createElement('canvas'))
         predC.width = width, predC.height = height
         elem.predCtx = predC.getContext('2d', {desynchronized:false})
         elem.predData = elem.predCtx.createImageData(width, height)
     }
-    let d = elem.obsData.data
-    for (let from = 0, to = 0; to < d.length; from += 3) {
-        d[to++] = toByte(obs[from+0], pred[from+0])
-        d[to++] = toByte(obs[from+1], pred[from+1])
-        d[to++] = toByte(obs[from+2], pred[from+2])
-        d[to++] = 255
-    }
-    elem.obsCtx.putImageData(elem.obsData, 0, 0)
-    d = elem.predData.data
-    for (let from = 0, to = 0; to < d.length; ) {
-        d[to++] = toByte(pred[from++])
-        d[to++] = toByte(pred[from++])
-        d[to++] = toByte(pred[from++])
-        d[to++] = 255
-    }
-    elem.predCtx.putImageData(elem.predData, 0, 0)
+    const style = { position:'absolute', left:x+'px', top:y+'px', }
+    Object.assign(elem.obsCtx.canvas.style, style)
+    Object.assign(elem.predCtx.canvas.style, style)
+    put(elem.obsCtx, elem.obsData, obs, pred)
+    put(elem.predCtx, elem.predData, pred)
     function toByte(x, nan = -1) {
         return Math.round(((x !== x ? nan : x) + 1) * (255/2))
+    }
+    function put(ctx, data, obs, fallback) {
+        let d = data.data
+        for (let from = 0, to = 0; to < d.length; from += 3) {
+            d[to++] = toByte(obs[from+0], fallback ? fallback[from+0] : -1)
+            d[to++] = toByte(obs[from+1], fallback ? fallback[from+1] : -1)
+            d[to++] = toByte(obs[from+2], fallback ? fallback[from+2] : -1)
+            d[to++] = 255
+        }
+        ctx.putImageData(data, 0, 0)
+    }
+    function globalElem(tag, withClass) {
+        let e, q = elem.parentNode.querySelector(tag+'.'+withClass)
+        if (q) return q
+        e = elem.appendChild(document.createElement(tag)), e.className = withClass
+        Object.assign(e.style, {
+            position:'relative', display:'inline-block',
+            width:maxW+'px', height:maxH+'px', overflow:'hidden',
+            border:'1px solid',
+        })
+        return e
     }
 }
 
@@ -243,7 +264,15 @@ Provide a mask color (0xRRGGBB) to mask exact matches, or \`null\` to disable th
             s => s.settings.height,
             maskColor,
         ],
-        visualize: [visualizePageScreenshot, width, height],
+        visualize: [
+            visualizePageScreenshot,
+            s => (s.page.mouseX || 0) - (s.page.mouseX || 0) % quantize,
+            s => (s.page.mouseY || 0) - (s.page.mouseY || 0) % quantize,
+            width,
+            height,
+            s => s.settings.width,
+            s => s.settings.height,
+        ],
     }]
 })
 
@@ -269,6 +298,7 @@ Provide a mask color (0xRRGGBB) to mask exact matches, or \`null\` to disable th
         reads: numPoints * 3,
         observer: [
             async function observeFovea(media, {obs}, end, closestPoint, x, y, w, h, maxW, maxH, maskColor) {
+                x -= (w/2) | 0, y -= (h/2) | 0
                 if (!observeFovea.pointSum) { // Prepare data, if not prepared already.
                     let max = 0
                     for (let i = 0; i < closestPoint.length; ++i)
@@ -278,7 +308,6 @@ Provide a mask color (0xRRGGBB) to mask exact matches, or \`null\` to disable th
                     observeFovea.pointNum = new Int32Array(numPoints)
                 }
                 // Get image data.
-                x -= (w/2) | 0, y -= (h/2) | 0
                 const d = await media.video(x, y, w, h, maxW, maxH)
                 const pointSum = observeFovea.pointSum, pointNum = observeFovea.pointNum
                 // Normalize, average, and write.
@@ -309,43 +338,62 @@ Provide a mask color (0xRRGGBB) to mask exact matches, or \`null\` to disable th
             s => s.settings.height,
             maskColor,
         ],
-        visualize: [function visualizePageFovea(elem, obs, pred, closestPoint) {
-            if (obs.length % 3) throw new Error('Bad length: ' + obs.length)
-            const diam = Math.sqrt(closestPoint.length) | 0
-            if (!elem.firstChild) {
-                const obsC = elem.appendChild(document.createElement('canvas'))
-                obsC.style.borderRadius = '50%'
-                obsC.width = obsC.height = diam
-                elem.obsCtx = obsC.getContext('2d', {desynchronized:false})
-                elem.obsData = elem.obsCtx.createImageData(diam, diam)
-                const predC = elem.appendChild(document.createElement('canvas'))
-                predC.style.borderRadius = '50%'
-                predC.width = predC.height = diam
-                elem.predCtx = predC.getContext('2d', {desynchronized:false})
-                elem.predData = elem.predCtx.createImageData(diam, diam)
-            }
-            let d = elem.obsData.data
-            for (let j = 0, to = 0; to < d.length; ++j) {
-                const i = closestPoint[j]*3
-                d[to++] = toByte(obs[i+0], pred[i+0])
-                d[to++] = toByte(obs[i+1], pred[i+1])
-                d[to++] = toByte(obs[i+2], pred[i+2])
-                d[to++] = 255
-            }
-            elem.obsCtx.putImageData(elem.obsData, 0, 0)
-            d = elem.predData.data
-            for (let j = 0, to = 0; to < d.length; ++j) {
-                const i = closestPoint[j]*3
-                d[to++] = toByte(pred[i+0])
-                d[to++] = toByte(pred[i+1])
-                d[to++] = toByte(pred[i+2])
-                d[to++] = 255
-            }
-            elem.predCtx.putImageData(elem.predData, 0, 0)
-            function toByte(x, nan = -1) {
-                return Math.round(((x !== x ? nan : x) + 1) * (255/2))
-            }
-        }, closestPointArray],
+        visualize: [
+            function visualizePageFovea(elem, obs, pred, closestPoint, diam, x, y, maxW, maxH) {
+                x -= (diam/2) | 0, y -= (diam/2) | 0
+                if (obs.length % 3) throw new Error('Bad length: ' + obs.length)
+                if (!elem.obs) {
+                    elem.obs = globalElem('div', 'imageObs')
+                    elem.pred = globalElem('div', 'imagePred')
+                    const obsC = elem.obs.appendChild(document.createElement('canvas'))
+                    obsC.style.borderRadius = '50%'
+                    obsC.width = obsC.height = diam
+                    elem.obsCtx = obsC.getContext('2d', {desynchronized:false})
+                    elem.obsData = elem.obsCtx.createImageData(diam, diam)
+                    const predC = elem.pred.appendChild(document.createElement('canvas'))
+                    predC.style.borderRadius = '50%'
+                    predC.width = predC.height = diam
+                    elem.predCtx = predC.getContext('2d', {desynchronized:false})
+                    elem.predData = elem.predCtx.createImageData(diam, diam)
+                }
+                const style = { position:'absolute', left:x+'px', top:y+'px', }
+                Object.assign(elem.obsCtx.canvas.style, style)
+                Object.assign(elem.predCtx.canvas.style, style)
+                put(elem.obsCtx, elem.obsData, obs, pred)
+                put(elem.predCtx, elem.predData, pred)
+                function toByte(x, nan = -1) {
+                    return Math.round(((x !== x ? nan : x) + 1) * (255/2))
+                }
+                function put(ctx, data, obs, fallback) {
+                    let d = data.data
+                    for (let j = 0, to = 0; to < d.length; ++j) {
+                        const from = closestPoint[j]*3
+                        d[to++] = toByte(obs[from+0], fallback ? fallback[from+0] : -1)
+                        d[to++] = toByte(obs[from+1], fallback ? fallback[from+1] : -1)
+                        d[to++] = toByte(obs[from+2], fallback ? fallback[from+2] : -1)
+                        d[to++] = 255
+                    }
+                    ctx.putImageData(data, 0, 0)
+                }
+                function globalElem(tag, withClass) {
+                    let e, q = elem.parentNode.querySelector(tag+'.'+withClass)
+                    if (q) return q
+                    e = elem.appendChild(document.createElement(tag)), e.className = withClass
+                    Object.assign(e.style, {
+                        position:'relative', display:'inline-block',
+                        width:maxW+'px', height:maxH+'px', overflow:'hidden',
+                        border:'1px solid',
+                    })
+                    return e
+                }
+            },
+            closestPointArray,
+            diam,
+            s => (s.page.mouseX || 0) - (s.page.mouseX || 0) % quantize,
+            s => (s.page.mouseY || 0) - (s.page.mouseY || 0) % quantize,
+            s => s.settings.width,
+            s => s.settings.height,
+        ],
     }]
     function getFoveatedCoords(radius, numPoints, RNG, density) {
         if (numPoints > Math.PI * radius*radius / 2)
