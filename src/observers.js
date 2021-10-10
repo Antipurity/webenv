@@ -162,7 +162,7 @@ async function compileJS(stream) {
         if (Array.isArray(o.inject)) {
             // Its args will be `injected`'s args (so that they go through `compileSentJS`).
             // The injected code will (receive them and) access those args (and send result back).
-            const from = injected.length, to = from + o.inject.length-1
+            const from = injected.length-1, to = from + o.inject.length-1
             injected.push(...o.inject.slice(1))
             const args = new Array(to-from).fill().map((_,i) => `a[${from + i}]`)
             injectedParts.push([''+o.inject[0], ...args])
@@ -322,7 +322,7 @@ async function compileJS(stream) {
             if (tabId == null) return
             const injection = ${JSON.stringify(`
                 if (window.onMSG) chrome.runtime.onMessage.removeListener(window.onMSG)
-                ${injectedParts.map((a,i) => 'const F'+i + '=' + a[0])}
+                ${injectedParts.map((a,i) => 'window.F'+i + '=' + a[0]).join('\n')}
                 chrome.runtime.onMessage.addListener(window.onMSG = (a, sender, sendResponse) => {
                     Promise.all([${injectedParts.map((a,i) => 'F'+i+'('+a.slice(1)+')')}]).then(sendResponse, sendResponse)
                     return true

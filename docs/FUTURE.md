@@ -5,12 +5,12 @@ This document outlines what still needs to be done to reach MVP state (or the "r
         - Make sure that the Capture extension can be installed by actual humans.
         - If `!navigator.webdriver`, do not start control automatically, but only manually. Provide a nice UI, with the server URL and the button to control the current tab, canceling if it gets closed.
     - Make the Capture extension usable by humans.
-        - In-ext visual augmentations (no communication, apart from "we're still going, don't cancel the interval").
         - In-ext mouse events if not Puppeteered. (No way to send `.isTrusted` events in JS, so must use the CDP channel if available.)
         - In-ext keyboard events if not Puppeteered.
         - In-ext `interval` and `triggers`, in particular, `goBack` and `homepage` and `randomLink`.
         - In-ext `directLink`. (Should allow linking without `.relink`, for max efficiency, including not re-sending all the JS code on each link.)
         - No-Puppeteer `directScore`, which needs current-URL-getting and moments-for-current-URL-using, including on `visualize`.
+            - Make `observers` react to `reactToObserver(stream, result)`, which would cause the result to be included in the JSON sent back with observations. (This would also allow around-mouse images to be positioned correctly. In addition to knowing the visited URL.)
 
 - Make the Python example production-ready:
     - Save + load, checking that all unchangeable hyperparams are the same; also have a list of hparams that can change, such as the learning rate. Ask the user if they want to warm-start from the previous checkpoint if changed. (No tracing: batch size could pick up the slack.) ([Should be very easy.](https://pytorch.org/tutorials/beginner/saving_loading_models.html))

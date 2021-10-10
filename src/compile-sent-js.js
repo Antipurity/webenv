@@ -62,7 +62,7 @@ exports.compileSentJS = async function compileSentJS(staticArgs, items, prelude 
     }
     function collapseWhitespace(str) {
         // Not all valid JS whitespace, but this is good enough.
-        str = str.replace(/[ \t]*\n[ \t\n]*/g, '\n')
+        str = str.replace(/[ \t]*[\r\n][ \t\r\n]*/g, '\n')
         str = str.replace(/[ \t]+/g, ' ')
         return str
     }

@@ -385,16 +385,8 @@ Simply puts random `-1`..`1` floats as actions on each step, for testing.
 If `relative` is not `0`, the agent meanders its action instead of jumping constantly.
 
 ```js
-webenv.injectScript(...functions)
-```
-
-Executes JS functions on every new document.
-
-`functions` are either strings or functions that are converted to strings for in-page execution, no closure state, no NodeJS functions.
-
-```js
-webenv.injectScript.augmentations()
-webenv.injectScript(webenv.injectScript.augmentations(severity = 1, transition = 1))
+webenv.augmentations()
+webenv.augmentations(severity = 1, transition = 2)
 ```
 
 Some DOM-aware image augmentations: random [transforms](https://developer.mozilla.org/en-US/docs/Web/CSS/transform) and [filters](https://developer.mozilla.org/en-US/docs/Web/CSS/filter).
@@ -403,7 +395,7 @@ Some DOM-aware image augmentations: random [transforms](https://developer.mozill
 
 `transition` is the max duration of smooth transitions in seconds.
 
-(This makes every frame very open-ended, since augmentations can happen at any time. Losses that average outcomes would blur all predictions, unlike GANs.)
+(This makes every frame open-ended, since augmentations can happen at any time. Losses that average outcomes would blur all predictions a little; plausibility-maximizing losses would not.)
 
 # Defaults
 
@@ -423,7 +415,7 @@ webenv.defaults = [
     webenv.scrollBy(),
     webenv.mouse({ absolute:false, relative:50 }),
     webenv.keyboard(),
-    webenv.injectScript(webenv.injectScript.augmentations()),
+    webenv.augmentations(),
     webenv.interval(webenv.triggers.homepage), // Every minute, a random website
     webenv.triggers(
         [webenv.triggers.goBack, webenv.triggers.randomLink],

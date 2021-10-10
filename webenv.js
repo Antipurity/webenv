@@ -1633,116 +1633,99 @@ function doNothing() {}
 
 
 
-exports.injectScript = docs(`\`webenv.injectScript(...functions)\`
-Executes JS functions on every new document.
-
-See this object's properties for examples of \`functions\`.
-`, function(...funcs) {
-    if (!funcs.every(f => typeof f == 'function' || typeof f == 'string'))
-        throw new Error('Not-a-function cannot be injected')
-    const source = funcs.map(f => '(' + (''+f) + ')();').join('\n')
-    return {
-        priority:1,
-        async init(stream) {
-            if (!stream.cdp) return
-            this.script = (await stream.cdp.send('Page.addScriptToEvaluateOnNewDocument', {
-                source, worldName:'webenvJS',
-            })).identifier
-        },
-        deinit(stream) {
-            if (!stream.cdp) return
-            stream.cdp.send('Page.removeScriptToEvaluateOnNewDocument', { identifier: this.script })
-        },
-    }
-})
-
-
-
-exports.injectScript.augmentations = docs(`\`webenv.injectScript(webenv.injectScript.augmentations(severity = 1, transition = 1))\`
+exports.augmentations = docs(`\`webenv.augmentations(severity = 1, transition = 2)\`
 Some DOM-aware image augmentations: random transforms and filters.
 \`severity\` is the multiplier for many effects.
 \`transition\` is the max duration of smooth transitions in seconds.
 
-(This makes every frame very open-ended. Losses that average outcomes would blur all predictions; make sure to use plausibility-maximizing losses instead.)
-`, function(SEVERITY = 1, TRANSITION = 1) {
-    return String(async function aug() {
-        while (!document.body)
-            await new Promise(requestAnimationFrame)
-        const transforms = [
-            ['matrix', num, num, num, num, num, num],
-            ['translate', px, px],
-            ['translateX', px],
-            ['translateY', px],
-            ['scale', num, num],
-            ['scaleX', num],
-            ['scaleY', num],
-            ['rotate', rad],
-            ['skew', rad, rad],
-            ['skewX', rad],
-            ['skewY', rad],
-            ['matrix3d', num, num, num, num, num, num, num, num, num, num, num, num, num, num, num, num],
-            ['translate3d', px, px, px],
-            ['scale3d', num, num, num],
-            ['rotate3d', num, num, num, rad],
-            ['perspective', px],
-        ]
-        const filters = [
-            ['blur', smallPx],
-            ['brightness', perc],
-            ['contrast', perc],
-            ['grayscale', smallPerc],
-            ['hue-rotate', rad],
-            ['invert', smallPerc],
-            ['opacity', perc],
-            ['saturate', perc],
-            ['sepia', smallPerc],
-        ]
-        augmentLater()
-        function one(a) {
-            return typeof a == 'number' ? Math.floor(Math.random() * a) : a[one(a.length)]
-        }
-        function augmentLater() {
-            setTimeout(augment, Math.random() * 1000 * (1/SEVERITY))
-        }
-        function augment() {
-            // Apply a random augmentation to a random element, then repeat.
-            augmentLater()
-            const el = randomElem()
-            if (!el.style) return
-            const aug = randomAug()
-            const prop = Object.keys(aug)[0]
-            if (el.style[prop] || el.style.transition) return
-            el.style.setProperty(prop, aug[prop])
-            const duration = Math.random() * TRANSITION
-            if (duration) el.style.setProperty('transition', `${prop} ${duration}s`)
-            setTimeout(() => {
-                el.style.removeProperty(prop)
-                if (duration)
-                    setTimeout(() => el.style.removeProperty('transition'), duration * 1000)
-            }, Math.random() * 10000 * SEVERITY)
-        }
-        function randomElem() {
-            // Descend randomly, accumulating the parent array, then pick a random parent.
-            let el = document.body, p = []
-            while (el && el.firstChild) p.push(el = one(el.childNodes))
-            return one(p)
-        }
-        function randomAug() {
-            const source = one(2) ? transforms : filters
-            let str = ''
-            while (!str || one(2)) {
-                const t = one(source)
-                str += (str ? ' ' : '') + `${t[0]}(${t.slice(1).map(f => f()).join(',')})`
+(This makes every frame open-ended. Losses that average outcomes would blur all predictions a little; plausibility-maximizing losses would not.)
+`, function(severity = 1, transition = 2) {
+    return {
+        inject: [async function aug(severity, transition) {
+            while (!document.body)
+                await new Promise(requestAnimationFrame)
+            // There's no "deinit" in injection, but we can simulate that by stopping if we were not called for 2s+.
+            aug.cancel && clearTimeout(aug.cancel)
+            aug.cancel = setTimeout(() => aug.augment && clearTimeout(aug.augment, aug.augment = null), 2000)
+            if (!aug.augment) startAugment()
+            function startAugment() {
+                const transforms = [
+                    ['matrix', num, num, num, num, num, num],
+                    ['translate', px, px],
+                    ['translateX', px],
+                    ['translateY', px],
+                    ['scale', num, num],
+                    ['scaleX', num],
+                    ['scaleY', num],
+                    ['rotate', rad],
+                    ['skew', rad, rad],
+                    ['skewX', rad],
+                    ['skewY', rad],
+                    ['matrix3d', num, num, num, num, num, num, num, num, num, num, num, num, num, num, num, num],
+                    ['translate3d', px, px, px],
+                    ['scale3d', num, num, num],
+                    ['rotate3d', num, num, num, rad],
+                    ['perspective', px],
+                ]
+                const filters = [
+                    ['blur', smallPx],
+                    ['brightness', perc],
+                    ['contrast', perc],
+                    ['grayscale', smallPerc],
+                    ['hue-rotate', rad],
+                    ['invert', smallPerc],
+                    ['opacity', perc],
+                    ['saturate', perc],
+                    ['sepia', smallPerc],
+                ]
+                augmentLater()
+                function augmentLater() {
+                    aug.augment = setTimeout(augment, Math.random() * 1000 * (1/severity))
+                }
+                function augment() {
+                    // Apply a random augmentation to a random element, then repeat.
+                    augmentLater()
+                    const el = randomElem()
+                    if (!el.style) return
+                    const aug = randomAug()
+                    const prop = Object.keys(aug)[0]
+                    if (el.style[prop] || el.style.transition) return
+                    el.style.setProperty(prop, aug[prop])
+                    const duration = Math.random() * transition
+                    if (duration) el.style.setProperty('transition', `${prop} ${duration}s`)
+                    setTimeout(() => {
+                        el.style.removeProperty(prop)
+                        if (duration)
+                            setTimeout(() => el.style.removeProperty('transition'), duration * 1000)
+                    }, Math.random() * 10000 * severity)
+                }
+                function one(a) {
+                    return typeof a == 'number' ? Math.floor(Math.random() * a) : a[one(a.length)]
+                }
+                function randomElem() {
+                    // Descend randomly, accumulating the parent array, then pick a random parent.
+                    let el = document.body, p = []
+                    while (el && el.firstChild) p.push(el = one(el.childNodes))
+                    return one(p)
+                }
+                function randomAug() {
+                    const source = one(2) ? transforms : filters
+                    let str = ''
+                    while (!str || one(2)) {
+                        const t = one(source)
+                        str += (str ? ' ' : '') + `${t[0]}(${t.slice(1).map(f => f()).join(',')})`
+                    }
+                    return source === transforms ? { transform:str } : { filter:str }
+                }
+                function px() { return Math.random()*50*severity + 'px' }
+                function rad() { return (Math.random()-.5)*2*Math.PI*severity  + 'rad' }
+                function num() { return (Math.random()-.5)*3*severity + '' }
+                function smallPx() { return Math.random()*10*severity + 'px' }
+                function smallPerc() { return Math.random()*severity*100 + '%' }
+                function perc() { return Math.random()*2*severity*100 + '%' }
             }
-            return source === transforms ? { transform:str } : { filter:str }
-        }
-        function px() { return Math.random()*50*SEVERITY + 'px' }
-        function rad() { return (Math.random()-.5)*2*Math.PI*SEVERITY  + 'rad' }
-        function num() { return (Math.random()-.5)*3*SEVERITY + '' }
-        function smallPx() { return Math.random()*10*SEVERITY + 'px' }
-        function smallPerc() { return Math.random()*SEVERITY*100 + '%' }
-        function perc() { return Math.random()*2*SEVERITY*100 + '%' }
-    }).replace(/SEVERITY/g, SEVERITY).replace(/TRANSITION/g, TRANSITION)
+        }, severity, transition],
+    }
 })
 
 
@@ -2088,7 +2071,7 @@ exports.defaults = [
     exports.scrollBy(),
     exports.mouse({ absolute:false, relative:50 }),
     exports.keyboard(),
-    exports.injectScript(exports.injectScript.augmentations()),
+    exports.augmentations(),
     exports.interval(exports.triggers.homepage),
     exports.triggers(
         [exports.triggers.goBack, exports.triggers.randomLink],
