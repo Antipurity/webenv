@@ -265,40 +265,48 @@ Exposes keyboard actions as buttons.
 `Keys` is a space-separated string of [keys](https://developer.mozilla.org/en-US/docs/Web/API/KeyboardEvent/key/Key_Values) (or `Spacebar`). `Shift`ed variants of keys have to be manually included.
 
 ```js
-webenv.interval(func, ms = 60000)
+webenv.interval(func, sec = 60)
 ```
 
-Periodically runs a function, such as `webenv.triggers.homepage` (which is particularly good when the homepage opens a random Web page).
+Periodically runs a trigger's start, such as `webenv.triggers.homepage` (which is particularly good when the homepage opens a random Web page).
+
+Training-only (Puppeteer-only).
 
 ```js
-webenv.triggers([...start], [...stop], {
-  threshold=.5, resetOnNewPage=true, maxAtOnce=0, cooldown=0, priority=0
-})
+webenv.triggers({
+  threshold=.5, resetOnNewPage=true, maxAtOnce=0, cooldown=0, priority=0,
+}, ...triggers)
 ```
 
-Actions which, when over `threshold`, execute their `start` functions, and execute their `stop` functions when under `threshold`.
+Exposes a group of triggers, such as keys on a keyboard.
 
-For example: `webenv.triggers([page => page.goto('https://www.youtube.com/watch?v=dQw4w9WgXcQ')], null, { maxAtOnce:1, cooldown:600 })`
+Each trigger is `{ start, stop,  injectStart, injectStop }`, all functions if defined.
+
+(`start`/`stop` are functions if defined. `injectStart`/`injectStop` are arrays, where the first item is the funcs and the rest are its args; try to keep args static.)
+
+For example: `webenv.triggers({ maxAtOnce:1, cooldown:600 }, {start(stream) { stream.page.goto('https://www.youtube.com/watch?v=dQw4w9WgXcQ') }})`
 
 `cooldown` is in agent steps, not real time.
 
 ```js
 webenv.triggers.homepage
-webenv.triggers([webenv.triggers.homepage])
+webenv.triggers({}, webenv.triggers.homepage)
 ```
 
 Back to homepage.
 
+Training-only (Puppeteer-only): users should not be asked to sample random web pages, or look at the datasets.
+
 ```js
 webenv.triggers.goBack
-webenv.triggers([webenv.triggers.goBack])
+webenv.triggers({}, webenv.triggers.goBack)
 ```
 
 The back-button.
 
 ```js
 webenv.triggers.randomLink
-webenv.triggers([webenv.triggers.randomLink])
+webenv.triggers({}, webenv.triggers.randomLink)
 ```
 
 Picks a random file: or http: or https: link on the current page, and follows it.
@@ -405,11 +413,11 @@ webenv.defaults = [
     webenv.mouse({ absolute:false, relative:50 }),
     webenv.keyboard(),
     webenv.augmentations(),
-    webenv.interval(webenv.triggers.homepage), // Every minute, a random website
-    webenv.triggers(
-        [webenv.triggers.goBack, webenv.triggers.randomLink],
-        null,
-        { maxAtOnce:1, cooldown:3600 }),
+    webenv.interval(webenv.triggers.homepage, 60),
+    exports.triggers(
+        { maxAtOnce:1, cooldown:3600 },
+        exports.triggers.goBack,
+        exports.triggers.randomLink),
 ]
 ```
 

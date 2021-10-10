@@ -1040,129 +1040,196 @@ Exposes 2 actions, which add to viewport scroll position (in pixels).
 
 
 
-exports.interval = docs(`\`webenv.interval(func, ms = 60000)\`
-Runs a func on an interval, with page and env as args (for example, use \`webenv.triggers.homepage\`, especially if that opens a random page).
-`, function(func, ms = 60000) {
+exports.interval = docs(`\`webenv.interval(trigger, sec = 60)\`
+Runs a trigger's start on an interval, with the stream as the arg (for example, use \`webenv.triggers.homepage\`, especially if that opens a random page).
+Training-only (Puppeteer-only).
+`, function(trigger, sec = 60) {
     let id = null
     return {
-        init(stream) { clearInterval(id), id = setInterval(func, ms, stream) },
+        init(stream) { clearInterval(id), id = setInterval(trigger.start, sec*1000, stream) },
         deinit(stream) { clearInterval(id), id = null },
     }
 })
 
 
 
-exports.triggers = docs(`\`webenv.triggers([...start], [...stop], { threshold=.5, resetOnNewPage=true, maxAtOnce=0, cooldown=0, priority=0 })\`
-Exposes a group of triggers, such as keys on a keyboard.
-For example: \`webenv.triggers([page => page.goto('https://www.youtube.com/watch?v=dQw4w9WgXcQ')], null, { maxAtOnce:1, cooldown:600 })\` (the cooldown is in frames)
-`, function(start, stop, opt) {
-    if (!Array.isArray(start) || stop && (!Array.isArray(stop) || start.length !== stop.length))
-        throw new Error('Bad start/end triggers')
-    const triggers = start.length
-    const threshold = get(opt, 'threshold', .5)
-    const resetOnNewPage = get(opt, 'resetOnNewPage', true)
-    const maxAtOnce = get(opt, 'maxAtOnce', 0)
-    const cooldown = get(opt, 'cooldown', 0)
-    const prev = new Uint8Array(triggers)
-    const next = new Uint8Array(triggers)
-    const sorted = new Observations(triggers)
-    const framesUntilReady = new Uint8Array(maxAtOnce || triggers)
+exports.triggers = docs(`\`webenv.triggers({ threshold=.5, resetOnNewPage=true, maxAtOnce=0, cooldown=0, priority=0 }, ...triggers)\`
+
+Exposes a group of triggers, such as keys on a keyboard: actions which \`start\` when over \`threshold\` and \`stop\` when under \`threshold\`.
+
+Each trigger is \`{ start, stop,  injectStart, injectStop }\`, all functions if defined.
+(\`start\`/\`stop\` are functions if defined. \`injectStart\`/\`injectStop\` are arrays, where the first item is the funcs and the rest are its args; try to keep args static.)
+For example: \`webenv.triggers({ maxAtOnce:1, cooldown:600 }, {start(stream) { stream.page.goto('https://www.youtube.com/watch?v=dQw4w9WgXcQ') }})\`
+The cooldown is in agent steps, not real time.
+`, function(opt, ...triggers) {
+    if (!Array.isArray(triggers)) throw new Error('Not an array')
+    const opts = Object.assign({
+        threshold: .5,
+        resetOnNewPage: true,
+        maxAtOnce: 0,
+        cooldown: 0,
+    }, opt || {})
+    const hasInject = triggers.some(t => t.injectStart || t.injectStop)
+    let toInject
+    if (hasInject) {
+        const bods = [], args = []
+        for (let t of triggers) {
+            const argInds = []
+            bods.push((t.injectStart || t.injectStop) ? {
+                start: t.injectStart && ''+t.injectStart[0],
+                stop: t.injectStop && ''+t.injectStop[0],
+                args: argInds,
+            } : null)
+            const subargs = [
+                ...(Array.isArray(t.injectStart) ? t.injectStart.slice(1) : []),
+                ...(Array.isArray(t.injectStop) ? t.injectStop.slice(1) : []),
+            ]
+            if (subargs.length)
+                argInds.push(...subargs.map((_,i) => args.length+i)),
+                args.push(...subargs)
+        }
+        toInject = [
+            // There's no observer→inject communication, so we use webenv→inject (JSON).
+            `function f(triggerBodies, ...active) {
+                if (!f.triggers) {
+                    f.triggers = triggerBodies.map(t => t ? {
+                        start:t.start && new Function('return '+t.start)(),
+                        stop:t.stop && new Function('return '+t.stop)(),
+                        args: t.args,
+                    } : null)
+                    f.prev = new Uint8Array(triggerBodies.length)
+                    f.next = new Uint8Array(triggerBodies.length)
+                    f.argsLen = triggerBodies.reduce((s,t) => t ? s+t.args.length : s, 0)
+                }
+                const prev = f.prev, next = f.next, tr = f.triggers
+                const args = active.splice(0, f.argsLen)
+                for (let i = 0; i < tr.length; ++i) // Access i-th bit.
+                    next[i] = (active[i/32|0] >>> (i%32)) & 1
+                for (let i = 0; i < tr.length; ++i)
+                    if (tr[i] && tr[i].start && !prev[i] && next[i]) tr[i].start(...tr[i].args.map(a=>args[a]))
+                    else if (tr[i] && tr[i].stop && prev[i] && !next[i]) tr[i].stop(...tr[i].args.map(a=>args[a]))
+                prev.set(next)
+                
+            }
+            `,
+            bods,
+            ...args,
+            // Encode trigger.next in u32 numbers, to not be TOO egregious with bandwidth.
+            ...(new Array(Math.ceil(triggers.length / 32)).fill().map((_,at) => stream => {
+                // Not completely sure whether 32th bit gets encoded correctly.
+                if (!trigger.next) return 0
+                let n = 0
+                for (let i = at*32; i < triggers.length && i < (at+1)*32; ++i)
+                    n |= (trigger.next[i] & 1) << (i%32)
+                return n
+            })),
+        ]
+    }
     return {
         init(stream) {
             const p = stream.page
-            if (!resetOnNewPage || !p) return
-            p.on('framenavigated', frame => frame === p.mainFrame() && prev.fill(0))
-            p.on('domcontentloaded', () => prev.fill(0))
+            if (!opts.resetOnNewPage || !p) return
+            p.on('framenavigated', frame => frame === p.mainFrame() && reset())
+            p.on('domcontentloaded', reset)
         },
         priority: typeof opt.priority == 'number' ? opt.priority : 0,
-        writes:triggers,
-        write(stream, pred, act) {
-            let oldThreshold = threshold, oldMax = maxAtOnce || triggers
-            let newThreshold = threshold, newMax = maxAtOnce || triggers
-            // Disallow new triggers when we don't have enough cooled-down slots.
-            if (cooldown) {
-                let free = 0
-                for (let j = 0; j < framesUntilReady.length; ++j)
-                    if (framesUntilReady[j] === 0) ++free
-                newMax = Math.min(newMax, free)
-            }
-            // Handle `maxAtOnce`.
-            if (oldMax < triggers || newMax < triggers) {
-                sorted.set(act), sorted.sort()
-                oldThreshold = Math.max(oldThreshold, oldMax ? sorted[sorted.length - oldMax] : Infinity)
-                newThreshold = Math.max(newThreshold, newMax ? sorted[sorted.length - newMax] : Infinity)
-            }
-            // Read what is triggered.
-            if (oldMax > 0)
-                for (let i = 0; i < triggers; ++i)
-                    next[i] = act[i] >= (prev[i] ? oldThreshold : newThreshold) ? 1 : 0
-            else
-                next.fill(0)
-            // Allocate new triggers, and cooldown.
-            if (cooldown) {
-                let newTriggers = 0
-                for (let i = 0; i < triggers; ++i)
-                    if (!prev[i] && next[i]) ++newTriggers
-                for (let j = 0; j < framesUntilReady.length; ++j)
-                    if (framesUntilReady[j] === 0)
-                        newTriggers && (framesUntilReady[j] = cooldown, --newTriggers)
-                    else --framesUntilReady[j]
-            }
-            // Un/trigger.
-            for (let i = 0; i < triggers; ++i)
-                if (!prev[i] && next[i]) start[i](stream)
-                else if (stop && prev[i] && !next[i]) stop[i](stream)
-            prev.set(next)
-        },
+        writes:triggers.length,
+        write(stream, pred, act) { trigger(triggers, opts, act, stream) },
+        inject: toInject,
     }
-    function get(obj, at, def) { return obj && obj[at] !== undefined ? obj[at] : def }
+    function reset() { trigger.prev && trigger.prev.fill(0) }
+    function trigger(tr, opts, act, ...args) {
+        const f = trigger
+        if (!f.prev) {
+            f.prev = new Uint8Array(tr.length)
+            f.next = new Uint8Array(tr.length)
+            f.sorted = new Float32Array(tr.length)
+            f.framesUntilReady = new Uint8Array(opts.maxAtOnce || tr.length)
+        }
+        const prev = f.prev, next = f.next
+        const sorted = f.sorted
+        const framesUntilReady = f.framesUntilReady
+        const { threshold, maxAtOnce, cooldown } = opts
+        let oldThr = threshold, oldMax = maxAtOnce || tr.length
+        let newThr = threshold, newMax = maxAtOnce || tr.length
+        // Disallow new triggers when we don't have enough cooled-down slots.
+        if (cooldown) {
+            let free = 0
+            for (let j = 0; j < framesUntilReady.length; ++j)
+                if (framesUntilReady[j] === 0) ++free
+            newMax = Math.min(newMax, free)
+        }
+        // Handle `maxAtOnce`.
+        if (oldMax < tr.length || newMax < tr.length) {
+            sorted.set(act), sorted.sort()
+            oldThr = Math.max(oldThr, oldMax ? sorted[sorted.length - oldMax] : Infinity)
+            newThr = Math.max(newThr, newMax ? sorted[sorted.length - newMax] : Infinity)
+        }
+        // Read what is triggered.
+        if (oldMax > 0)
+            for (let i = 0; i < tr.length; ++i)
+                next[i] = act[i] >= (prev[i] ? oldThr : newThr) ? 1 : 0
+        else
+            next.fill(0)
+        // Allocate new triggers, and cooldown.
+        if (cooldown) {
+            let newTriggers = 0
+            for (let i = 0; i < tr.length; ++i)
+                if (!prev[i] && next[i]) ++newTriggers
+            for (let j = 0; j < framesUntilReady.length; ++j)
+                if (framesUntilReady[j] === 0)
+                    newTriggers && (framesUntilReady[j] = cooldown, --newTriggers)
+                else --framesUntilReady[j]
+        }
+        // Un/trigger.
+        for (let i = 0; i < tr.length; ++i)
+            if (tr[i].start && !prev[i] && next[i]) tr[i].start(...args)
+            else if (tr[i].stop && prev[i] && !next[i]) tr[i].stop(...args)
+        prev.set(next)
+    }
 })
 
 
 
-exports.triggers.homepage = docs(`\`webenv.triggers([webenv.triggers.homepage])\`
+exports.triggers.homepage = docs(`\`webenv.triggers({}, webenv.triggers.homepage)\`
 Back to homepage, please.
-`, function(stream) {
-    if (!stream.page) return
-    stream.mouseX = stream.settings.width/2 | 0 // TODO: ...But if injecting, how would this be done? Don't we need a separate in-Puppeteer thing?
-    stream.mouseY = stream.settings.height/2 | 0 // Center the mouse too.
-    // TODO: How would we receive the homepage? Should it be an arg? Then, should all triggers be arrays?
-    //   Or should they actually be not just arrays, but also `{ injectStart:[…], … }`, so that there's only one array of triggers?
-    return stream.page.goto(stream.settings.homepage || 'about:blank', {waitUntil:'domcontentloaded'}).catch(doNothing)
+Training-only (Puppeteer-only): users should not be asked to sample random web pages, or look at the datasets.
+`, {
+    start(stream) {
+        if (!stream.page) return
+        stream.mouseX = stream.settings.width/2 | 0
+        stream.mouseY = stream.settings.height/2 | 0 // Center the mouse too.
+        return stream.page.goto(stream.settings.homepage || 'about:blank', {waitUntil:'domcontentloaded'}).catch(doNothing)
+    },
 })
 
 
 
-exports.triggers.goBack = docs(`\`webenv.triggers([webenv.triggers.goBack])\`
+exports.triggers.goBack = docs(`\`webenv.triggers({}, webenv.triggers.goBack)\`
 Back to the previous page, please.
-`, function(stream) {
-    // TODO: Rewrite as an injection.
-    return stream.page && stream.page.goBack().catch(doNothing)
+`, {
+    injectStart: [function() { history.go(-1) }],
 })
 
 
 
-exports.triggers.randomLink = docs(`\`webenv.triggers([webenv.triggers.randomLink])\`
+exports.triggers.randomLink = docs(`\`webenv.triggers({}, webenv.triggers.randomLink)\`
 Picks a random file: or http: or https: link on the current page, and follows it.
-`, async function(stream) {
-    // TODO: Rewrite as an injection.
-    if (!stream.page) return
-    let place = stream.page.url(), i = place.lastIndexOf('#')
-    if (i >= 0) place = place.slice(0, i) // `URL#ID` → `URL`
-    const selector = 'a'
-    let urls
-    try { urls = await stream.page.$$eval(selector, links => links.map(a => a.href)) }
-    catch (err) { return }
-    urls = urls.filter(u => {
-        if (u.slice(0, place.length) === place && u[place.length] === '#') return false
-        if (u.slice(0,7) === 'file://') return true
-        if (u.slice(0,7) === 'http://') return true
-        if (u.slice(0,8) === 'https://') return true
-        // Relative links are already resolved by .href.
-    })
-    if (!urls.length) return
-    const url = urls[Math.random() * urls.length | 0]
-    return stream.page.goto(url, {waitUntil:'domcontentloaded'}).catch(doNothing)
+`, {
+    injectStart: [function() {
+        let place = ''+location.href, i = place.lastIndexOf('#')
+        if (i >= 0) place = place.slice(0, i) // `URL#ID` → `URL`
+        const urls = [...document.querySelectorAll('a')].map(a => a.href)
+        urls = urls.filter(u => {
+            // Relative links are already resolved by .href.
+            if (u.slice(0, place.length) === place && u[place.length] === '#') return false
+            if (u.slice(0,7) === 'file://') return true
+            if (u.slice(0,7) === 'http://') return true
+            if (u.slice(0,8) === 'https://') return true
+        })
+        if (!urls.length) return
+        location.href = urls[Math.random() * urls.length | 0]
+    }],
 })
 
 
@@ -1174,11 +1241,12 @@ For more details on \`Options\`, see \`webenv.triggers\`.
 `, function(opt = {maxAtOnce:3}, kb = 'Alt Control Shift Enter Tab Spacebar ArrowDown ArrowLeft ArrowRight ArrowUp End Home PageDown PageUp Backspace Delete Escape ` ~ 1 2 3 4 5 6 7 8 9 0 ! @ # $ % ^ & * ( ) q w e r t y u i o p [ ] \\ a s d f g h j k l ; \' z x c v b n m , . / Q W E R T Y U I O P { } | A S D F G H J K L : " Z X C V B N M < > ?') {
     const keys = kb.split(' ').map(k => k === 'Spacebar' ? ' ' : k)
     return exports.triggers(
-        // TODO: Rewrite as arrays, & injected code... But what about in-Puppeteer control?
-        //   Should `.triggers` support both?
-        keys.map(k => stream => stream.page && stream.page.keyboard.down(k, k.length > 1 ? undefined : {text:k}).catch(doNothing)),
-        keys.map(k => stream => stream.page && stream.page.keyboard.up(k).catch(doNothing)),
-        opt
+        opt,
+        ...keys.map(k => ({
+            start: stream => stream.page && stream.page.keyboard.down(k, k.length > 1 ? undefined : {text:k}).catch(doNothing),
+            stop: stream => stream.page && stream.page.keyboard.up(k).catch(doNothing),
+        }))
+        // TODO: Rewrite as injected code (how does Puppeteer send those events, exactly?).
     )
 })
 
@@ -1192,7 +1260,8 @@ Exposes all mouse-related actions.
 
 (Neural networks have trouble distinguishing per-pixel differences in page offsets, so a non-learned loss makes predictions very blurry, even when the RNN has settled into a point-like attractor.)
 `, function(opt = {}) {
-    const start = [], stop = [], inters = []
+    const triggers = [], inters = []
+    // TODO: Rewrite mouse move/wheel/clicks as injected JS. (...But how to also use Puppeteer if available?)
     if (opt.wheel && typeof opt.wheel == 'number') {
         const sensitivity = opt.wheel
         inters.push({
@@ -1245,15 +1314,21 @@ Exposes all mouse-related actions.
     }
     let curButtons = 0
     if (opt.left !== false)
-        start.push(stream => mouseButton(stream, 1, true)),
-        stop.push(stream => mouseButton(stream, 1, false))
+        triggers.push({
+            start: stream => mouseButton(stream, 1, true),
+            stop: stream => mouseButton(stream, 1, false),
+        })
     if (opt.right === true)
-        start.push(stream => mouseButton(stream, 2, true)),
-        stop.push(stream => mouseButton(stream, 2, false))
+        triggers.push({
+            start: stream => mouseButton(stream, 2, true),
+            stop: stream => mouseButton(stream, 2, false),
+        })
     if (opt.middle === true)
-        start.push(stream => mouseButton(stream, 4, true)),
-        stop.push(stream => mouseButton(stream, 4, false))
-    if (start.length) inters.push(exports.triggers(start, stop, {...opt, priority:-2}))
+        triggers.push({
+            start: stream => mouseButton(stream, 4, true),
+            stop: stream => mouseButton(stream, 4, false),
+        })
+    if (triggers.length) inters.push(exports.triggers({...opt, priority:-2}, ...triggers))
     return inters
     function mouseButton(stream, button, pressed) {
         // `page.mouse.down(...)`/`.up(...)` have proven unreliable, so, CDP.
@@ -1657,7 +1732,7 @@ Some DOM-aware image augmentations: random transforms and filters.
                     // Apply a random augmentation to a random element, then repeat.
                     augmentLater()
                     const el = randomElem()
-                    if (!el.style) return
+                    if (!el || !el.style) return
                     const aug = randomAug()
                     const prop = Object.keys(aug)[0]
                     if (el.style[prop] || el.style.transition) return
@@ -2043,9 +2118,9 @@ exports.defaults = [
     exports.mouse({ absolute:false, relative:50 }),
     exports.keyboard(),
     exports.augmentations(),
-    exports.interval(exports.triggers.homepage),
+    exports.interval(exports.triggers.homepage, 60),
     exports.triggers(
-        [exports.triggers.goBack, exports.triggers.randomLink],
-        null,
-        { maxAtOnce:1, cooldown:3600 }),
+        { maxAtOnce:1, cooldown:3600 },
+        exports.triggers.goBack,
+        exports.triggers.randomLink),
 ]
