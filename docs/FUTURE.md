@@ -9,8 +9,6 @@ This document outlines what still needs to be done to reach MVP state (or the "r
             - Request access to `*://*/*` in `manifest.json`'s `permissions`.
             - Design a web page that connects to a remote port to be controlled.
     - Make the Capture extension usable by humans.
-        - In-ext mouse events if not Puppeteered. (No way to send `.isTrusted` events in JS, so must use the CDP channel if available.)
-        - In-ext keyboard events if not Puppeteered.
         - In-ext `directLink`. (Should allow linking without `.relink`, for max efficiency, including not re-sending all the JS code on each link.)
         - No-Puppeteer `directScore`, which needs current-URL-getting and moments-for-current-URL-using, including on `visualize`.
             - Make `observers` react to `reactToObserver(stream, result)`, which would cause the result to be included in the JSON sent back with observations. (This would also allow around-mouse images to be positioned correctly. In addition to knowing the visited URL.)

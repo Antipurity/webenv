@@ -1069,62 +1069,6 @@ The cooldown is in agent steps, not real time.
         maxAtOnce: 0,
         cooldown: 0,
     }, opt || {})
-    const hasInject = triggers.some(t => t.injectStart || t.injectStop)
-    let toInject
-    if (hasInject) {
-        const bods = [], args = []
-        for (let t of triggers) {
-            const argInds = []
-            bods.push((t.injectStart || t.injectStop) ? {
-                start: t.injectStart && ''+t.injectStart[0],
-                stop: t.injectStop && ''+t.injectStop[0],
-                args: argInds,
-            } : null)
-            const subargs = [
-                ...(Array.isArray(t.injectStart) ? t.injectStart.slice(1) : []),
-                ...(Array.isArray(t.injectStop) ? t.injectStop.slice(1) : []),
-            ]
-            if (subargs.length)
-                argInds.push(...subargs.map((_,i) => args.length+i)),
-                args.push(...subargs)
-        }
-        toInject = [
-            // There's no observer→inject communication, so we use webenv→inject (JSON).
-            `function f(triggerBodies, ...active) {
-                if (!f.triggers) {
-                    f.triggers = triggerBodies.map(t => t ? {
-                        start:t.start && new Function('return '+t.start)(),
-                        stop:t.stop && new Function('return '+t.stop)(),
-                        args: t.args,
-                    } : null)
-                    f.prev = new Uint8Array(triggerBodies.length)
-                    f.next = new Uint8Array(triggerBodies.length)
-                    f.argsLen = triggerBodies.reduce((s,t) => t ? s+t.args.length : s, 0)
-                }
-                const prev = f.prev, next = f.next, tr = f.triggers
-                const args = active.splice(0, f.argsLen)
-                for (let i = 0; i < tr.length; ++i) // Access i-th bit.
-                    next[i] = (active[i/32|0] >>> (i%32)) & 1
-                for (let i = 0; i < tr.length; ++i)
-                    if (tr[i] && tr[i].start && !prev[i] && next[i]) tr[i].start(...tr[i].args.map(a=>args[a]))
-                    else if (tr[i] && tr[i].stop && prev[i] && !next[i]) tr[i].stop(...tr[i].args.map(a=>args[a]))
-                prev.set(next)
-                
-            }
-            `,
-            bods,
-            ...args,
-            // Encode trigger.next in u32 numbers, to not be TOO egregious with bandwidth.
-            ...(new Array(Math.ceil(triggers.length / 32)).fill().map((_,at) => stream => {
-                // Not completely sure whether 32th bit gets encoded correctly.
-                if (!trigger.next) return 0
-                let n = 0
-                for (let i = at*32; i < triggers.length && i < (at+1)*32; ++i)
-                    n |= (trigger.next[i] & 1) << (i%32)
-                return n
-            })),
-        ]
-    }
     return {
         init(stream) {
             const p = stream.page
@@ -1135,7 +1079,7 @@ The cooldown is in agent steps, not real time.
         priority: typeof opt.priority == 'number' ? opt.priority : 0,
         writes:triggers.length,
         write(stream, pred, act) { trigger(triggers, opts, act, stream) },
-        inject: toInject,
+        inject: getCodeToInject(),
     }
     function reset() { trigger.prev && trigger.prev.fill(0) }
     function trigger(tr, opts, act, ...args) {
@@ -1187,6 +1131,62 @@ The cooldown is in agent steps, not real time.
             else if (tr[i].stop && prev[i] && !next[i]) tr[i].stop(...args)
         prev.set(next)
     }
+    async function getCodeToInject() {
+        const bods = [], args = []
+        for (let t of triggers) {
+            const iStart = await t.injectStart, iStop = await t.injectStop
+            const argInds = []
+            bods.push((iStart || iStop) ? {
+                start: iStart && (''+iStart[0]),
+                stop: iStop && (''+iStop[0]),
+                args: argInds,
+            } : null)
+            const subargs = [
+                ...(Array.isArray(iStart) ? iStart.slice(1) : []),
+                ...(Array.isArray(iStop) ? iStop.slice(1) : []),
+            ]
+            if (subargs.length)
+                argInds.push(...subargs.map((_,i) => args.length+i)),
+                args.push(...subargs)
+        }
+        if (!bods.length) return
+        return [
+            // There's no observer→inject communication, so we use webenv→inject (JSON).
+            `function f(triggerBodies, ...active) {
+                if (!f.triggers) {
+                    f.triggers = triggerBodies.map(t => t ? {
+                        start:t.start && new Function('return '+t.start)(),
+                        stop:t.stop && new Function('return '+t.stop)(),
+                        args: t.args,
+                    } : null)
+                    f.prev = new Uint8Array(triggerBodies.length)
+                    f.next = new Uint8Array(triggerBodies.length)
+                    f.argsLen = triggerBodies.reduce((s,t) => t ? s+t.args.length : s, 0)
+                }
+                const prev = f.prev, next = f.next, tr = f.triggers
+                const args = active.splice(0, f.argsLen)
+                for (let i = 0; i < tr.length; ++i) // Access i-th bit.
+                    next[i] = (active[i/32|0] >>> (i%32)) & 1
+                for (let i = 0; i < tr.length; ++i)
+                    if (tr[i] && tr[i].start && !prev[i] && next[i]) tr[i].start(...tr[i].args.map(a=>args[a]))
+                    else if (tr[i] && tr[i].stop && prev[i] && !next[i]) tr[i].stop(...tr[i].args.map(a=>args[a]))
+                prev.set(next)
+                
+            }
+            `,
+            bods,
+            ...args,
+            // Encode trigger.next in u32 numbers, to not be TOO egregious with bandwidth.
+            ...(new Array(Math.ceil(triggers.length / 32)).fill().map((_,at) => stream => {
+                // Not completely sure whether 32th bit gets encoded correctly.
+                if (!trigger.next) return 0
+                let n = 0
+                for (let i = at*32; i < triggers.length && i < (at+1)*32; ++i)
+                    n |= (trigger.next[i] & 1) << (i%32)
+                return n
+            })),
+        ]
+    }
 })
 
 
@@ -1208,7 +1208,7 @@ Training-only (Puppeteer-only): users should not be asked to sample random web p
 exports.triggers.goBack = docs(`\`webenv.triggers({}, webenv.triggers.goBack)\`
 Back to the previous page, please.
 `, {
-    injectStart: [function() { history.go(-1) }],
+    injectStart: [function() { typeof chrome!=''+void 0 && history.go(-1) }],
 })
 
 
@@ -1227,7 +1227,7 @@ Picks a random file: or http: or https: link on the current page, and follows it
             if (u.slice(0,7) === 'http://') return true
             if (u.slice(0,8) === 'https://') return true
         })
-        if (!urls.length) return
+        if (!urls.length || typeof chrome==''+void 0) return
         location.href = urls[Math.random() * urls.length | 0]
     }],
 })
@@ -1237,19 +1237,59 @@ Picks a random file: or http: or https: link on the current page, and follows it
 exports.keyboard = docs(`\`webenv.keyboard(Options={maxAtOnce:3}, Keys='...')\`
 Exposes the keyboard as actions. https://developer.mozilla.org/en-US/docs/Web/API/KeyboardEvent/key/Key_Values
 For more details on \`Options\`, see \`webenv.triggers\`.
-\`Keys\` is a space-separated string of keys or \`'Spacebar'\`. (Shift does not modify keys, so, with-Shift versions have to be manually included.)
-`, function(opt = {maxAtOnce:3}, kb = 'Alt Control Shift Enter Tab Spacebar ArrowDown ArrowLeft ArrowRight ArrowUp End Home PageDown PageUp Backspace Delete Escape ` ~ 1 2 3 4 5 6 7 8 9 0 ! @ # $ % ^ & * ( ) q w e r t y u i o p [ ] \\ a s d f g h j k l ; \' z x c v b n m , . / Q W E R T Y U I O P { } | A S D F G H J K L : " Z X C V B N M < > ?') {
-    const keys = kb.split(' ').map(k => k === 'Spacebar' ? ' ' : k)
-    return exports.triggers(
-        opt,
-        ...keys.map(k => ({
-            // TODO: Rewrite with stream.cdp.send('Input.dispatchKeyEvent', {…})
-            //   https://chromedevtools.github.io/devtools-protocol/tot/Input/#method-dispatchKeyEvent
-            start: stream => stream.page && stream.page.keyboard.down(k, k.length > 1 ? undefined : {text:k}).catch(doNothing),
-            stop: stream => stream.page && stream.page.keyboard.up(k).catch(doNothing),
-        }))
-        // TODO: Rewrite as injected code (how does Puppeteer send those events, exactly?).
-    )
+\`Keys\` is a space-separated string of keys or \`'Space'\`. (Shift does not modify keys, so, with-Shift versions have to be manually included.)
+`, function(opt = {maxAtOnce:3}, kb = 'Alt Control Shift Enter Tab Space ArrowDown ArrowLeft ArrowRight ArrowUp End Home PageDown PageUp Backspace Delete Escape ` ~ 1 2 3 4 5 6 7 8 9 0 ! @ # $ % ^ & * ( ) q w e r t y u i o p [ ] \\ a s d f g h j k l ; \' z x c v b n m , . / Q W E R T Y U I O P { } | A S D F G H J K L : " Z X C V B N M < > ?') {
+    const keys = kb.split(' ').map(k => k === 'Space' ? ' ' : k)
+    const info = require('puppeteer/lib/cjs/puppeteer/common/USKeyboardLayout.js').keyDefinitions
+    let inj, injP = new Promise(then => inj = then)
+    return [
+        { init(stream) { inj(stream.cdp ? undefined : true) } },
+        exports.triggers(
+            opt,
+            ...keys.map(k => {
+                const desc = info[k]
+                const down = keyOpts(desc, 'down'), up = keyOpts(desc, 'up')
+                return {
+                    start: stream => CDP(stream, down),
+                    stop: stream => CDP(stream, up),
+                    injectStart: injP.then(b => b && [
+                        (desc,txt) => {
+                            const t = document.activeElement || document.body
+                            t.dispatchEvent(new KeyboardEvent('keydown', desc))
+                            txt && t.dispatchEvent(new InputEvent('beforeinput', { data:txt, bubbles:true, cancelable:true, composed:true }))
+                            txt && t.dispatchEvent(new InputEvent('input', { data:txt, bubbles:true, cancelable:true, composed:true }))
+                            // Text-insertion has to be manual.
+                            //   `execCommand` is deprecated, but works nicely.
+                            //   Why is everything nice deprecated?
+                            desc.key==='Backspace' && document.execCommand('delete', false, '')
+                            desc.key==='Delete' && document.execCommand('forward-delete', false, '')
+                            txt && document.execCommand('insertText', false, txt)
+                        },
+                        { ...desc, bubbles:true, cancelable:true, composed:true },
+                        desc.key.length === 1 ? desc.key : '',
+                    ]),
+                    injectStop: injP.then(b => b && [desc => {
+                        const t = document.activeElement || document.body
+                        t.dispatchEvent(new KeyboardEvent('keyup', desc))
+                    }, desc, desc.key.length === 1 ? desc.key : '']),
+                }
+            }),
+        ),
+    ]
+    function CDP(stream, opts) {
+        if (!stream.cdp) return
+        stream.cdp.send('Input.dispatchKeyEvent', opts).catch(doNothing)
+    }
+    function keyOpts(desc, type) { // type: down|up
+        const text = desc.key.length === 1 ? desc.key : ''
+        return {
+            type: type==='down' ? (text ? 'keyDown' : 'rawKeyDown') : 'keyUp',
+            windowsVirtualKeyCode: desc.keyCode || 0,
+            code: desc.code, key: desc.key,
+            text, unmodifiedText: text,
+            location: desc.location || 0,
+        }
+    }
 })
 
 
@@ -1275,8 +1315,7 @@ Exposes all mouse-related actions.
                 stream.mouseY = stream.settings.height/2 | 0
                 if (!stream.cdp) {
                     injected([
-                        `
-                        function mouse(x,y,dx,dy) {
+                        `function mouse(x,y,dx,dy) {
                             if (!mouse.page) {
                                 ${mouseEventInit}
                                 mouse.page = ${page}
@@ -1293,8 +1332,7 @@ Exposes all mouse-related actions.
                             ${R ? "stop&2 && p(t, 'up', 2, x, y)" : ''}
                             ${M ? "stop&4 && p(t, 'up', 4, x, y)" : ''}
                             ${L||R||M ? "mouse.b = window.$_mouse|0" : ''}
-                        }
-                        `,
+                        }`,
                         s => s.mouseX,
                         s => s.mouseY,
                         wheel ? (s => s.deltaX || 0) : 0,
@@ -1361,7 +1399,7 @@ Exposes all mouse-related actions.
         const pressed = type==='down' ? true : type==='up' ? false : null
         for (let T of page.table[type]) {
             const opts = mouseEventInit(page, 'mouse', x, y, button, pressed, deltaX, deltaY)
-            target.dispatchEvent(new MouseEvent(T, opts))
+            target.dispatchEvent(new (type === 'wheel' ? WheelEvent : MouseEvent)(T, opts))
         }
     }
     function mouseEventInit(s, type, x, y, button, pressed, deltaX=0, deltaY=0) {
@@ -1374,6 +1412,7 @@ Exposes all mouse-related actions.
             button: button===1 ? 'left' : button===2 ? 'right' : button===4 ? 'middle' : 'none',
             buttons: s.cur,
             clickCount: 1, detail: 1,
+            bubbles:true, cancelable:true, composed:true,
         }
         if (pressed === false) s.cur &= ~button
         return result
@@ -2154,8 +2193,8 @@ exports.defaults = [
     exports.keyboard(),
     exports.augmentations(),
     exports.interval(exports.triggers.homepage, 60),
-    // exports.triggers( // TODO
-    //     { maxAtOnce:1, cooldown:3600 },
-    //     exports.triggers.goBack,
-    //     exports.triggers.randomLink),
+    exports.triggers(
+        { maxAtOnce:1, cooldown:3600 },
+        exports.triggers.goBack,
+        exports.triggers.randomLink),
 ]
