@@ -256,8 +256,8 @@ Provide a mask color (0xRRGGBB) to mask exact matches, or \`null\` to disable th
                     obs[to++] = masked ? NaN : (2*B - 255) / 255
                 }
             },
-            s => (s.page.mouseX || 0) - (s.page.mouseX || 0) % quantize,
-            s => (s.page.mouseY || 0) - (s.page.mouseY || 0) % quantize,
+            s => (s.mouseX || 0) - (s.mouseX || 0) % quantize,
+            s => (s.mouseY || 0) - (s.mouseY || 0) % quantize,
             width,
             height,
             s => s.settings.width,
@@ -266,8 +266,8 @@ Provide a mask color (0xRRGGBB) to mask exact matches, or \`null\` to disable th
         ],
         visualize: [
             visualizePageScreenshot,
-            s => (s.page.mouseX || 0) - (s.page.mouseX || 0) % quantize,
-            s => (s.page.mouseY || 0) - (s.page.mouseY || 0) % quantize,
+            s => (s.mouseX || 0) - (s.mouseX || 0) % quantize,
+            s => (s.mouseY || 0) - (s.mouseY || 0) % quantize,
             width,
             height,
             s => s.settings.width,
@@ -330,8 +330,8 @@ Provide a mask color (0xRRGGBB) to mask exact matches, or \`null\` to disable th
                 }
             },
             closestPointArray,
-            s => (s.page.mouseX || 0) - (s.page.mouseX || 0) % quantize,
-            s => (s.page.mouseY || 0) - (s.page.mouseY || 0) % quantize,
+            s => (s.mouseX || 0) - (s.mouseX || 0) % quantize,
+            s => (s.mouseY || 0) - (s.mouseY || 0) % quantize,
             diam,
             diam,
             s => s.settings.width,
@@ -389,8 +389,8 @@ Provide a mask color (0xRRGGBB) to mask exact matches, or \`null\` to disable th
             },
             closestPointArray,
             diam,
-            s => (s.page.mouseX || 0) - (s.page.mouseX || 0) % quantize,
-            s => (s.page.mouseY || 0) - (s.page.mouseY || 0) % quantize,
+            s => (s.mouseX || 0) - (s.mouseX || 0) % quantize,
+            s => (s.mouseY || 0) - (s.mouseY || 0) % quantize,
             s => s.settings.width,
             s => s.settings.height,
         ],
@@ -1124,8 +1124,8 @@ exports.triggers.homepage = docs(`\`webenv.triggers([webenv.triggers.homepage])\
 Back to homepage, please.
 `, function(stream) {
     if (!stream.page) return
-    stream.page.mouseX = stream.settings.width/2 | 0
-    stream.page.mouseY = stream.settings.height/2 | 0 // Center the mouse too.
+    stream.mouseX = stream.settings.width/2 | 0
+    stream.mouseY = stream.settings.height/2 | 0 // Center the mouse too.
     return stream.page.goto(stream.settings.homepage || 'about:blank', {waitUntil:'domcontentloaded'}).catch(doNothing)
 })
 
@@ -1237,8 +1237,8 @@ Exposes all mouse-related actions.
     if (opt.absolute !== false)
         inters.push({
             init(stream) {
-                stream.page.mouseX = stream.settings.width/2 | 0
-                stream.page.mouseY = stream.settings.height/2 | 0
+                stream.mouseX = stream.settings.width/2 | 0
+                stream.mouseY = stream.settings.height/2 | 0
             },
             writes:2,
             write(stream, pred, act) {
@@ -1247,8 +1247,8 @@ Exposes all mouse-related actions.
                 const ax = Math.max(-1, Math.min(act[0], 1))
                 const ay = Math.max(-1, Math.min(act[1], 1))
                 p.mouse.move(
-                    p.mouseX = (ax + 1) * .5 * (stream.settings.width-1) | 0,
-                    p.mouseY = (ay + 1) * .5 * (stream.settings.height-1) | 0,
+                    stream.mouseX = (ax + 1) * .5 * (stream.settings.width-1) | 0,
+                    stream.mouseY = (ay + 1) * .5 * (stream.settings.height-1) | 0,
                 ).catch(doNothing)
             },
         })
@@ -1256,8 +1256,8 @@ Exposes all mouse-related actions.
         const sensitivity = opt.relative
         inters.push({
             init(stream) {
-                stream.page.mouseX = stream.settings.width/2 | 0
-                stream.page.mouseY = stream.settings.height/2 | 0
+                stream.mouseX = stream.settings.width/2 | 0
+                stream.mouseY = stream.settings.height/2 | 0
             },
             writes:2,
             write(stream, pred, act) {
@@ -1266,8 +1266,8 @@ Exposes all mouse-related actions.
                 const ax = Math.max(-1, Math.min(act[0], 1))
                 const ay = Math.max(-1, Math.min(act[1], 1))
                 p.mouse.move(
-                    p.mouseX = Math.max(0, Math.min(p.mouseX + sensitivity * ax, stream.settings.width-1)) | 0,
-                    p.mouseY = Math.max(0, Math.min(p.mouseY + sensitivity * ay, stream.settings.height-1)) | 0,
+                    stream.mouseX = Math.max(0, Math.min(stream.mouseX + sensitivity * ax, stream.settings.width-1)) | 0,
+                    stream.mouseY = Math.max(0, Math.min(stream.mouseY + sensitivity * ay, stream.settings.height-1)) | 0,
                 ).catch(doNothing)
             },
         })
@@ -1289,8 +1289,8 @@ Exposes all mouse-related actions.
         if (pressed) curButtons |= button
         stream.cdp && stream.cdp.send('Input.dispatchMouseEvent', {
             type: 'mouseReleased',
-            x: stream.page.mouseX,
-            y: stream.page.mouseY,
+            x: stream.mouseX,
+            y: stream.mouseY,
             button: button===1 ? 'left' : button===2 ? 'right' : button===4 ? 'middle' : 'none',
             buttons: curButtons,
             clickCount: 1,

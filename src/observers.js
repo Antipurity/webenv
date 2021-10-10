@@ -138,8 +138,9 @@ async function compileJS(stream) {
     const injected = [(end, ...args) => { // Handle `inject` definers.
         if (tabId != null) {
             return new Promise(then => {
-                // Send a message to the active tab.
-                chrome.tabs.sendMessage(tabId, args, then)
+                // Send a message to the active tab. (If not in an extension, just call.)
+                if (typeof chrome!=''+void 0) chrome.tabs.sendMessage(tabId, args, then)
+                else window.onMSG(args, null, then)
                 setTimeout(then, 200) // Don't wait for stalls infinitely.
             }).then(a => end(a))
         }
@@ -186,7 +187,7 @@ async function compileJS(stream) {
             // (Should probably also measure frame-rate, and re-request the stream on too much deviation.)
             if (this.stream instanceof Promise || this.w >= width && this.h >= height && this.sr >= sampleRate)
                 return this.stream
-            const haveTabCapture = typeof chrome != ''+void 0 && chrome.tabCapture && chrome.tabCapture.capture
+            const haveTabCapture = typeof chrome!=''+void 0 && chrome.tabCapture && chrome.tabCapture.capture
             this.w = Math.max(this.w, width)
             this.h = Math.max(this.h, height)
             this.sr = Math.max(this.sr, sampleRate)
@@ -218,21 +219,23 @@ async function compileJS(stream) {
                 for (let track of this.stream.getTracks())
                     track.stop()
             return this.stream = new Promise((resolve, reject) => {
-                const gotStream = s => {
+                const gotStream = (s, err) => {
                     if (s) {
                         this.stream = s
                         this.elem = document.createElement('video')
                         this.elem.srcObject = s
                         this.elem.volume = 0 // To not play audio to the human.
                         resolve(s)
-                    } else
-                        this.stream = null, this.w = this.h = 0,
-                        reject(new Error('Stream capture failed; reason: ' + chrome.runtime.lastError.message))
+                    } else {
+                        this.stream = null, this.w = this.h = 0
+                        const msg = haveTabCapture ? chrome.runtime.lastError.message : ''+err
+                        reject(new Error('Stream capture failed; reason: ' + msg))
+                    }
                 }
                 if (haveTabCapture)
                     chrome.tabCapture.capture(opt, gotStream)
                 else
-                    navigator.mediaDevices.getDisplayMedia(opt).then(gotStream).catch(err => gotStream(null))
+                    navigator.mediaDevices.getDisplayMedia(opt).then(gotStream).catch(err => gotStream(null, err))
             })
         },
         ctx2d:document.createElement('canvas').getContext('2d'),
@@ -317,26 +320,34 @@ async function compileJS(stream) {
     if (injectedParts.length) {
         // JS-`inject`ion stuff:
         //   Update the injected code on startup and page navigation (and relink).
-        prelude.push(`chrome.tabs.executeScript({ code:'window.code=null', runAt:'document_start' })`)
         prelude.push(`function updateInjection() {
             if (tabId == null) return
             const injection = ${JSON.stringify(`
-                if (window.onMSG) chrome.runtime.onMessage.removeListener(window.onMSG)
+                if (window.onMSG && typeof chrome!=''+void 0) chrome.runtime.onMessage.removeListener(window.onMSG)
                 ${injectedParts.map((a,i) => 'window.F'+i + '=' + a[0]).join('\n')}
-                chrome.runtime.onMessage.addListener(window.onMSG = (a, sender, sendResponse) => {
+                window.onMSG = (a, sender, sendResponse) => {
                     Promise.all([${injectedParts.map((a,i) => 'F'+i+'('+a.slice(1)+')')}]).then(sendResponse, sendResponse)
                     return true
-                })
+                }
+                if (typeof chrome!=''+void 0) chrome.runtime.onMessage.addListener(window.onMSG)
             `)}
-            chrome.tabs.executeScript(tabId, { code:injection, runAt:'document_start' })
+            if (typeof chrome!=''+void 0) chrome.tabs.executeScript(tabId, { code:injection, runAt:'document_start' })
+            else new Function(injection)()
         }`)
         prelude.push(`
-        if (window.onNavigation) chrome.tabs.onUpdated.removeListener(window.onNavigation)
-        chrome.tabs.onUpdated.addListener(window.onNavigation = updateInjection)
+        if (typeof chrome!=''+void 0) {
+            if (window.onNavigation) chrome.tabs.onUpdated.removeListener(window.onNavigation)
+            chrome.tabs.onUpdated.addListener(window.onNavigation = updateInjection)
+        }
         `)
         //   Remember the tab ID that started this.
         prelude.push(`let tabId`)
-        prelude.push(`chrome.tabs.query({active:true, currentWindow:true}, tabs => tabs[0] && (tabId = tabs[0].id, updateInjection()))`)
+        prelude.push(`
+        if (typeof chrome!=''+void 0) {
+            const setId = tabs => tabs[0] && (tabId = tabs[0].id, updateInjection())
+            chrome.tabs.query({active:true, currentWindow:true}, setId)
+        }
+        `)
     } else items.splice(items.indexOf(injected), 1)
     // And compile to [sendFunc, receiveStr].
     spot.snd = null

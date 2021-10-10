@@ -2,17 +2,25 @@ This document outlines what still needs to be done to reach MVP state (or the "r
 
 - Joint training and deployment:
 	- Extension-only user streams: have `webenv.remote(path='/', max=16)`, which for each incoming Web Socket connection, refuses it if over the limit, else establishes the control connection, re-using all code from the Capture's rework.
-        - Make sure that the Capture extension can be installed by actual humans.
-        - If `!navigator.webdriver`, do not start control automatically, but only manually. Provide a nice UI, with the server URL and the button to control the current tab, canceling if it gets closed.
+        - UI:
+            - Make sure that the Capture extension can be installed by actual humans.
+            - Have `popup.html`, and have server URL and the "Connect"/"Stop" button there.
+        - Code:
+            - Connect via a Web Socket, sending all the code currently in `extension/capture.js` to the client.
+            - Design a web page that connects to a remote port to be controlled.
     - Make the Capture extension usable by humans.
         - In-ext mouse events if not Puppeteered. (No way to send `.isTrusted` events in JS, so must use the CDP channel if available.)
         - In-ext keyboard events if not Puppeteered.
         - In-ext `interval` and `triggers`, in particular, `goBack` and `homepage` and `randomLink`.
+            - How would we make `interval` support that? Should it be for injected funcs?
+                - But what about the browser getting stuck on Mozilla's sites?
+            - Should all `triggers` be injected too? (Its own injection getting a bitmask of what's active --- or maybe even the observer calculating what's active, and injection receiving 0/1 for each trigger.)
         - In-ext `directLink`. (Should allow linking without `.relink`, for max efficiency, including not re-sending all the JS code on each link.)
         - No-Puppeteer `directScore`, which needs current-URL-getting and moments-for-current-URL-using, including on `visualize`.
             - Make `observers` react to `reactToObserver(stream, result)`, which would cause the result to be included in the JSON sent back with observations. (This would also allow around-mouse images to be positioned correctly. In addition to knowing the visited URL.)
 
 - Make the Python example production-ready:
+    - Fix NaN-observations incuring some loss. (Looking at the architecture, this shouldn't happen.)
     - Save + load, checking that all unchangeable hyperparams are the same; also have a list of hparams that can change, such as the learning rate. Ask the user if they want to warm-start from the previous checkpoint if changed. (No tracing: batch size could pick up the slack.) ([Should be very easy.](https://pytorch.org/tutorials/beginner/saving_loading_models.html))
     - Weight decay, maybe only on 95% least-magnitude weights, as a kind of soft sparsification (might have synergy with LDL's greater-than-DL capacity).
     - Efficient output slicing, by slicing weights and such. (This would allow 3× more efficiency below.)
@@ -27,7 +35,11 @@ This document outlines what still needs to be done to reach MVP state (or the "r
 
 With that, this really will be all I can do. Besides, who would ever be impressed by WebEnv in its current state, without even a GIF?
 
+---
+
 ## Post-MVP (when useful)
+
+- Logo, for the extension, and for remembering.
 
 - Communication:
     - Replace Web Socket communication with WebRTC.
@@ -44,6 +56,6 @@ With that, this really will be all I can do. Besides, who would ever be impresse
     - Cut out a DOM element (putting an absolutely-positioned rect on top of it, removable via click), to draw predictions on top of it;
     - Directly link [microphone/camera/etc](https://developer.mozilla.org/en-US/docs/Web/API/Media_Streams_API) data (play audio-only data in-page, to re-use a data channel that agents should already understand);
     - An option to (try to) disable navigation for less user annoyance, via https://stackoverflow.com/questions/821011/prevent-a-webpage-from-navigating-away-using-javascript when all else fails.
-    - (And other potential 'prompt-engineering' helpers.)
+    - (And other potential 'prompt-engineering' helpers, once they are known.)
 
-- Non-extension connections, where the video+audio stream is explicitly provided (so, a fullscreen canvas is essentially required, meaning, games) and navigation is disabled.
+- Bugfix: make `<iframe>`s work like they do for humans (scroll when scrolling with mouse over them, accept mouse/keyboard control when focused, accumulate `directLink`s).
