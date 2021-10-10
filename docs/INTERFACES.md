@@ -251,7 +251,7 @@ Exposes all actions related to mouse movement and buttons.
 
 `absolute` sets X/Y viewport mouse coordinates; `relative` adds to X/Y coordinates, multiplied by the specified parameter.
 
-(Neural networks have trouble distinguishing per-pixel differences in page offsets, so a non-learned loss makes predictions very blurry, even when the RNN has settled into a point-like attractor.)
+(If `absolute`: neural networks have trouble distinguishing per-pixel differences in page offsets, so a non-learned loss makes predictions very blurry, even when the RNN has settled into a point-like attractor.)
 
 ```js
 webenv.keyboard()

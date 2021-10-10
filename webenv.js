@@ -1243,6 +1243,8 @@ For more details on \`Options\`, see \`webenv.triggers\`.
     return exports.triggers(
         opt,
         ...keys.map(k => ({
+            // TODO: Rewrite with stream.cdp.send('Input.dispatchKeyEvent', {…})
+            //   https://chromedevtools.github.io/devtools-protocol/tot/Input/#method-dispatchKeyEvent
             start: stream => stream.page && stream.page.keyboard.down(k, k.length > 1 ? undefined : {text:k}).catch(doNothing),
             stop: stream => stream.page && stream.page.keyboard.up(k).catch(doNothing),
         }))
@@ -1258,90 +1260,123 @@ Exposes all mouse-related actions.
     \`relative\` specifies the max fraction of screen-space that one action can move the mouse by.
     \`wheel\` specifies the max CSS pixels for one action.
 
-(Neural networks have trouble distinguishing per-pixel differences in page offsets, so a non-learned loss makes predictions very blurry, even when the RNN has settled into a point-like attractor.)
+(If \`absolute\`: neural networks have trouble distinguishing per-pixel differences in page offsets, so a non-learned loss makes predictions very blurry, even when the RNN has settled into a point-like attractor.)
 `, function(opt = {}) {
     const triggers = [], inters = []
-    // TODO: Rewrite mouse move/wheel/clicks as injected JS. (...But how to also use Puppeteer if available?)
-    if (opt.wheel && typeof opt.wheel == 'number') {
-        const sensitivity = opt.wheel
-        inters.push({
-            writes:2,
-            write(stream, pred, act) {
-                if (!stream.page || stream.page.isClosed()) return
-                const dx = Math.max(-1, Math.min(act[0], 1)) * sensitivity
-                const dy = Math.max(-1, Math.min(act[1], 1)) * sensitivity
-                stream.page.mouse.wheel({ deltaX:dx, deltaY:dy }).catch(doNothing)
-            },
-        })
-    }
-    if (opt.absolute !== false)
+    const wheel = opt.wheel && typeof opt.wheel == 'number'
+    const absolute = opt.absolute !== false
+    const relative = opt.relative && typeof opt.relative == 'number'
+    const L = opt.left !== false, R = opt.right === true, M = opt.middle === true
+    let injected
+    if (wheel || absolute || relative)
         inters.push({
             init(stream) {
                 stream.mouseX = stream.settings.width/2 | 0
                 stream.mouseY = stream.settings.height/2 | 0
+                if (!stream.cdp) {
+                    injected([
+                        `
+                        function mouse(x,y,dx,dy) {
+                            if (!mouse.page) {
+                                ${mouseEventInit}
+                                mouse.page = ${page}
+                            }
+                            const p = mouse.page
+                            const t = document.elementFromPoint(x,y) || document.documentElement
+                            if (x!==mouse.x || y!==mouse.y) p(t, 'move', 0, mouse.x=x, mouse.y=y)
+                            if (dx || dy) p(t, 'wheel', 0, x, y, dx, dy)
+                            ${L||R||M ? "const start = ~mouse.b & window.$_mouse, stop = mouse.b & ~window.$_mouse" : ''}
+                            ${L ? "start&1 && p(t, 'down', 1, x, y)" : ''}
+                            ${R ? "start&2 && p(t, 'down', 2, x, y)" : ''}
+                            ${M ? "start&4 && p(t, 'down', 4, x, y)" : ''}
+                            ${L ? "stop&1 && p(t, 'up', 1, x, y)" : ''}
+                            ${R ? "stop&2 && p(t, 'up', 2, x, y)" : ''}
+                            ${M ? "stop&4 && p(t, 'up', 4, x, y)" : ''}
+                            ${L||R||M ? "mouse.b = window.$_mouse|0" : ''}
+                        }
+                        `,
+                        s => s.mouseX,
+                        s => s.mouseY,
+                        wheel ? (s => s.deltaX || 0) : 0,
+                        wheel ? (s => s.deltaY || 0) : 0,
+                    ])
+                } else injected()
             },
-            writes:2,
+            writes:6,
             write(stream, pred, act) {
-                const p = stream.page
-                if (!p || p.isClosed()) return
-                const ax = Math.max(-1, Math.min(act[0], 1))
-                const ay = Math.max(-1, Math.min(act[1], 1))
-                p.mouse.move(
-                    stream.mouseX = (ax + 1) * .5 * (stream.settings.width-1) | 0,
-                    stream.mouseY = (ay + 1) * .5 * (stream.settings.height-1) | 0,
-                ).catch(doNothing)
+                for (let i=0; i < act.length; ++i) act[i] = Math.max(-1, Math.min(act[i], 1))
+                let x = stream.mouseX || 0, y = stream.mouseY || 0
+                if (wheel) {
+                    const dx = act[0] * opt.wheel, dy = act[1] * opt.wheel
+                    stream.deltaX = dx, stream.deltaY = dy
+                }
+                if (absolute) {
+                    const ax = act[2], ay = act[3]
+                    x = (ax + 1) * .5 * (stream.settings.width-1) | 0
+                    y = (ay + 1) * .5 * (stream.settings.height-1) | 0
+                }
+                if (relative) {
+                    const ax = act[4] * opt.relative, ay = act[5] * opt.relative
+                    x += ax, y += ay
+                }
+                x = Math.max(0, Math.min(x, stream.settings.width-1)) | 0
+                y = Math.max(0, Math.min(y, stream.settings.height-1)) | 0
+                stream.mouseX = x, stream.mouseY = y
+                if (stream.deltaX || stream.deltaY)
+                    CDP(stream, 'wheel', 0, dx, dy)
+                if (x !== stream.mouseX || y !== stream.mouseY)
+                    CDP(stream, 'move', 0)
             },
+            inject: new Promise(then => injected=then)
         })
-    if (opt.relative && typeof opt.relative == 'number') {
-        const sensitivity = opt.relative
-        inters.push({
-            init(stream) {
-                stream.mouseX = stream.settings.width/2 | 0
-                stream.mouseY = stream.settings.height/2 | 0
-            },
-            writes:2,
-            write(stream, pred, act) {
-                const p = stream.page
-                if (!p || p.isClosed()) return
-                const ax = Math.max(-1, Math.min(act[0], 1))
-                const ay = Math.max(-1, Math.min(act[1], 1))
-                p.mouse.move(
-                    stream.mouseX = Math.max(0, Math.min(stream.mouseX + sensitivity * ax, stream.settings.width-1)) | 0,
-                    stream.mouseY = Math.max(0, Math.min(stream.mouseY + sensitivity * ay, stream.settings.height-1)) | 0,
-                ).catch(doNothing)
-            },
-        })
-    }
-    let curButtons = 0
-    if (opt.left !== false)
-        triggers.push({
-            start: stream => mouseButton(stream, 1, true),
-            stop: stream => mouseButton(stream, 1, false),
-        })
-    if (opt.right === true)
-        triggers.push({
-            start: stream => mouseButton(stream, 2, true),
-            stop: stream => mouseButton(stream, 2, false),
-        })
-    if (opt.middle === true)
-        triggers.push({
-            start: stream => mouseButton(stream, 4, true),
-            stop: stream => mouseButton(stream, 4, false),
-        })
-    if (triggers.length) inters.push(exports.triggers({...opt, priority:-2}, ...triggers))
+    if (L) triggers.push(triggerFor(1))
+    if (R) triggers.push(triggerFor(2))
+    if (M) triggers.push(triggerFor(4))
+    if (triggers.length) inters.push(exports.triggers({...opt, priority:-2, threshold:0}, ...triggers))
     return inters
-    function mouseButton(stream, button, pressed) {
-        // `page.mouse.down(...)`/`.up(...)` have proven unreliable, so, CDP.
-        if (pressed) curButtons |= button
-        stream.cdp && stream.cdp.send('Input.dispatchMouseEvent', {
-            type: 'mouseReleased',
-            x: stream.mouseX,
-            y: stream.mouseY,
+    function triggerFor(btn) {
+        return {
+            start: stream => CDP(stream, 'down', btn),
+            stop: stream => CDP(stream, 'up', btn),
+            injectStart: [`() => window.$_mouse = window.$_mouse|${btn}`],
+            injectStop: [`() => window.$_mouse = window.$_mouse&~${btn}`],
+        }
+    }
+    function CDP(stream, type, button, deltaX, deltaY) { // type: down|up|move|wheel
+        if (!stream.cdp) return
+        if (!CDP.table) CDP.table = { down:'mousePressed', up:'mouseReleased', move:'mouseMoved', wheel:'mouseWheel' }
+        const pressed = type==='down' ? true : type==='up' ? false : null
+        const opts = mouseEventInit(CDP, CDP.table[type], stream.mouseX, stream.mouseY, button, pressed, deltaX, deltaY)
+        stream.cdp.send('Input.dispatchMouseEvent', opts).catch(doNothing)
+    }
+    function page(target, type, button, x, y, deltaX, deltaY) { // type: down|up|move|wheel
+        // Not at all an exact re-implementation of how browsers work.
+        //   Wanna contribute?
+        if (!page.table) page.table = {
+            down:['mousedown', 'pointerdown'],
+            up:['mouseup', 'click', 'pointerup'],
+            move:['mousemove', 'pointermove'],
+            wheel:['wheel'],
+        }
+        const pressed = type==='down' ? true : type==='up' ? false : null
+        for (let T of page.table[type]) {
+            const opts = mouseEventInit(page, 'mouse', x, y, button, pressed, deltaX, deltaY)
+            target.dispatchEvent(new MouseEvent(T, opts))
+        }
+    }
+    function mouseEventInit(s, type, x, y, button, pressed, deltaX=0, deltaY=0) {
+        if (!s.cur) s.cur = 0
+        if (pressed === true) s.cur |= button
+        const result = {
+            type,
+            deltaX, deltaY,
+            x, y, clientX: x, clientY: y,
             button: button===1 ? 'left' : button===2 ? 'right' : button===4 ? 'middle' : 'none',
-            buttons: curButtons,
-            clickCount: 1,
-        }).catch(doNothing)
-        if (!pressed) curButtons &= ~button
+            buttons: s.cur,
+            clickCount: 1, detail: 1,
+        }
+        if (pressed === false) s.cur &= ~button
+        return result
     }
 })
 
@@ -2119,8 +2154,8 @@ exports.defaults = [
     exports.keyboard(),
     exports.augmentations(),
     exports.interval(exports.triggers.homepage, 60),
-    exports.triggers(
-        { maxAtOnce:1, cooldown:3600 },
-        exports.triggers.goBack,
-        exports.triggers.randomLink),
+    // exports.triggers( // TODO
+    //     { maxAtOnce:1, cooldown:3600 },
+    //     exports.triggers.goBack,
+    //     exports.triggers.randomLink),
 ]

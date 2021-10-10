@@ -173,9 +173,9 @@ async function compileJS(stream) {
     }], injectedParts = [];  items.push(injected)
     for (let i = 0; i < stream._all.length; ++i) {
         const o = stream._all[i]
-        if (Array.isArray(o.observer)) {
+        const item = await o.observer, inj = await o.inject
+        if (Array.isArray(item)) {
             // Prepare the observer's extra args.
-            const item = o.observer
             const offR = stream._allReadOffsets[i], lenR = o.reads || 0
             const offW = stream._allWriteOffsets[i], lenW = o.writes || 0
             items.push(item)
@@ -183,16 +183,16 @@ async function compileJS(stream) {
             const a = `RCV.A.subarray(${offW}, ${offW + lenW})`
             const obs = `RCV.obs.subarray(${offR}, ${offR + lenR})`
             // Injectors read injection results; all others do not have closures allocated on each step.
-            const e = !Array.isArray(o.inject) ? `RCV.end` : `bindInjEnd(RCV.end, ${injectedParts.length})`
+            const e = !Array.isArray(inj) ? `RCV.end` : `bindInjEnd(RCV.end, ${injectedParts.length})`
             staticArgs.set(item, `RCV.media,{pred:${p},act:${a},obs:${obs}},${e}`)
         }
-        if (Array.isArray(o.inject)) {
+        if (Array.isArray(inj)) {
             // Its args will be `injected`'s args (so that they go through `compileSentJS`).
             // The injected code will (receive them and) access those args (and send result back).
-            const from = injected.length-1, to = from + o.inject.length-1
-            injected.push(...o.inject.slice(1))
+            const from = injected.length-1, to = from + inj.length-1
+            injected.push(...inj.slice(1))
             const args = new Array(to-from).fill().map((_,i) => `a[${from + i}]`)
-            injectedParts.push([''+o.inject[0], ...args])
+            injectedParts.push([''+inj[0], ...args])
         }
     }
     items.push([async function encode() {
