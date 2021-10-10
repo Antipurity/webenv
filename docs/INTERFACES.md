@@ -303,17 +303,6 @@ webenv.triggers([webenv.triggers.randomLink])
 
 Picks a random file: or http: or https: link on the current page, and follows it.
 
-```js
-webenv.triggers.randomInCache
-webenv.triggers([webenv.triggers.randomInCache])
-```
-
-Navigates to a random previously-visited URL (most of the time).
-
-Must only be used with `webenv.filter(...)`, with a string `cache` path.
-
-(This is a very open-ended action. If the agent's loss averages outcomes, then predictions with this trigger would be quite gray and nonsensical; make sure to maximize plausibility instead, so that particular outcomes do not get penalized as long as they are plausible.)
-
 # Utilities
 
 These vacuous interfaces can be very useful for certain needs.

@@ -1124,7 +1124,7 @@ exports.triggers.homepage = docs(`\`webenv.triggers([webenv.triggers.homepage])\
 Back to homepage, please.
 `, function(stream) {
     if (!stream.page) return
-    stream.mouseX = stream.settings.width/2 | 0
+    stream.mouseX = stream.settings.width/2 | 0 // TODO: ...But if injecting, how would this be done?
     stream.mouseY = stream.settings.height/2 | 0 // Center the mouse too.
     return stream.page.goto(stream.settings.homepage || 'about:blank', {waitUntil:'domcontentloaded'}).catch(doNothing)
 })
@@ -1133,13 +1133,17 @@ Back to homepage, please.
 
 exports.triggers.goBack = docs(`\`webenv.triggers([webenv.triggers.goBack])\`
 Back to the previous page, please.
-`, function(stream) { return stream.page && stream.page.goBack().catch(doNothing) })
+`, function(stream) {
+    // TODO: Rewrite as an injection.
+    return stream.page && stream.page.goBack().catch(doNothing)
+})
 
 
 
 exports.triggers.randomLink = docs(`\`webenv.triggers([webenv.triggers.randomLink])\`
 Picks a random file: or http: or https: link on the current page, and follows it.
 `, async function(stream) {
+    // TODO: Rewrite as an injection.
     if (!stream.page) return
     let place = stream.page.url(), i = place.lastIndexOf('#')
     if (i >= 0) place = place.slice(0, i) // `URL#ID` → `URL`
@@ -1157,43 +1161,6 @@ Picks a random file: or http: or https: link on the current page, and follows it
     if (!urls.length) return
     const url = urls[Math.random() * urls.length | 0]
     return stream.page.goto(url, {waitUntil:'domcontentloaded'}).catch(doNothing)
-})
-
-
-
-exports.triggers.randomInCache = docs(`\`webenv.triggers([webenv.triggers.randomInCache])\`
-Navigates to a random previously-visited URL (most of the time), which is preserved in cache.
-Must only be used with \`webenv.filter\`, with a string \`cache\` path.
-
-(A bit useless with the RandomURL dataset.)
-
-(This is a very open-ended action. If the agent's loss averages outcomes, then predictions with this trigger would be quite gray and nonsensical; make sure to maximize plausibility instead, so particular outcomes don't get penalized.)
-`, async function(stream) {
-    if (!stream.page || stream.page.cache === undefined) return
-    if (typeof stream.page.cache !== 'string') throw new Error('But the stream page has no .cache')
-    const maxAttempts = 32 // Why maintain a separate main-URL index when you can just retry.
-    const fs = require('fs/promises'), path = require('path')
-    const navs = new Array(maxAttempts).fill(stream.page.cache).map(getRandomNav)
-    for (let nav of navs)
-        if (nav = await nav)
-            return stream.page.goto(nav, {waitUntil:'domcontentloaded'}).catch(doNothing)
-    async function getRandomNav(name) {
-        // Return a random URL deeply in `name` (assumed to be a `webenv.filter` cache),
-        //   or `null` if not found.
-        // Luckily, `webenv.filter`'s cache leaves navigation URLs around, just for us.
-        const names = await fs.readdir(name)
-        if (names.indexOf('HEAD') >= 0 && names.indexOf('BODY') >= 0) {
-            if (names.indexOf('NAV') >= 0)
-                try { return await fs.readFile(path.join(name, 'NAV'), { encoding:'utf8', flag:'r' }) }
-                catch (err) { return null }
-            return null
-        }
-        if (!names.length) return
-        const picked = names[Math.floor(Math.random() * names.length)]
-        return getRandomNav(path.join(name, picked))
-        // The FS API forces a quadratic-time path-constructing algorithm on us.
-        //   Sure hope no one creates outrageously deep URLs.
-    }
 })
 
 
