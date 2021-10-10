@@ -58,15 +58,16 @@ exports.streams = function streams(read = process.stdin, write = process.stdout)
 
 
 
-exports.webSocketUpgrade = function upgrade(request, socket, head) {
+exports.webSocketUpgrade = function webSocketUpgrade(request, socket, head) {
   // Given an HTTP/S `server`, do
   //   `server.on('upgrade', (...args) => webSocketUpgrade(...args).then(channel => …))`
   return new Promise(then => {
-    const wss = upgrade.wss || (upgrade.wss = new (require('ws').WebSocketServer)({ noServer:true }))
+    const fn = webSocketUpgrade
+    const wss = fn.wss || (fn.wss = new (require('ws').WebSocketServer)({ noServer:true }))
     wss.handleUpgrade(request, socket, head, ws => then(exports.webSocket(ws)))
   })
 }
-exports.webSocket = function(ws) {
+exports.webSocket = function webSocket(ws) {
   // Wraps a WebSocket (or a URL to it) for reliable channel communication.
   if (!WebSocket) WebSocket = require('isomorphic-ws')
   if (typeof ws == 'string') ws = new WebSocket(ws)

@@ -60,10 +60,12 @@ exports.compileSentJS = async function compileSentJS(staticArgs, items, prelude 
             return JSON.stringify(await Promise.all(sendFuncs.map(f => f(...args))))
         }
     }
-    function collapseWhitespace(str) {
-        // Not all valid JS whitespace, but this is good enough.
-        str = str.replace(/[ \t]*[\r\n][ \t\r\n]*/g, '\n')
-        str = str.replace(/[ \t]+/g, ' ')
-        return str
-    }
+    
+}
+
+const collapseWhitespace = exports.collapseWhitespace = function collapseWhitespace(str) {
+    // Not all valid JS whitespace, but this is good enough.
+    str = str.replace(/[ \t]*[\r\n][ \t\r\n]*/g, '\n')
+    str = str.replace(/[ \t]+/g, ' ')
+    return str
 }

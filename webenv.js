@@ -1124,8 +1124,10 @@ exports.triggers.homepage = docs(`\`webenv.triggers([webenv.triggers.homepage])\
 Back to homepage, please.
 `, function(stream) {
     if (!stream.page) return
-    stream.mouseX = stream.settings.width/2 | 0 // TODO: ...But if injecting, how would this be done?
+    stream.mouseX = stream.settings.width/2 | 0 // TODO: ...But if injecting, how would this be done? Don't we need a separate in-Puppeteer thing?
     stream.mouseY = stream.settings.height/2 | 0 // Center the mouse too.
+    // TODO: How would we receive the homepage? Should it be an arg? Then, should all triggers be arrays?
+    //   Or should they actually be not just arrays, but also `{ injectStart:[…], … }`, so that there's only one array of triggers?
     return stream.page.goto(stream.settings.homepage || 'about:blank', {waitUntil:'domcontentloaded'}).catch(doNothing)
 })
 
@@ -1172,6 +1174,8 @@ For more details on \`Options\`, see \`webenv.triggers\`.
 `, function(opt = {maxAtOnce:3}, kb = 'Alt Control Shift Enter Tab Spacebar ArrowDown ArrowLeft ArrowRight ArrowUp End Home PageDown PageUp Backspace Delete Escape ` ~ 1 2 3 4 5 6 7 8 9 0 ! @ # $ % ^ & * ( ) q w e r t y u i o p [ ] \\ a s d f g h j k l ; \' z x c v b n m , . / Q W E R T Y U I O P { } | A S D F G H J K L : " Z X C V B N M < > ?') {
     const keys = kb.split(' ').map(k => k === 'Spacebar' ? ' ' : k)
     return exports.triggers(
+        // TODO: Rewrite as arrays, & injected code... But what about in-Puppeteer control?
+        //   Should `.triggers` support both?
         keys.map(k => stream => stream.page && stream.page.keyboard.down(k, k.length > 1 ? undefined : {text:k}).catch(doNothing)),
         keys.map(k => stream => stream.page && stream.page.keyboard.up(k).catch(doNothing)),
         opt

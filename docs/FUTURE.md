@@ -3,10 +3,10 @@ This document outlines what still needs to be done to reach MVP state (or the "r
 - Joint training and deployment:
 	- Extension-only user streams: have `webenv.remote(path='/', max=16)`, which for each incoming Web Socket connection, refuses it if over the limit, else establishes the control connection, re-using all code from the Capture's rework.
         - UI:
-            - Make sure that the Capture extension can be installed by actual humans.
+            - Make sure that the Capture extension can be used by actual humans.
             - Have `popup.html`, and have server URL and the "Connect"/"Stop" button there.
         - Code:
-            - Connect via a Web Socket, sending all the code currently in `extension/capture.js` to the client.
+            - Request access to `*://*/*` in `manifest.json`'s `permissions`.
             - Design a web page that connects to a remote port to be controlled.
     - Make the Capture extension usable by humans.
         - In-ext mouse events if not Puppeteered. (No way to send `.isTrusted` events in JS, so must use the CDP channel if available.)
