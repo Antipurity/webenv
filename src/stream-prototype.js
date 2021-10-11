@@ -3,6 +3,7 @@
 
 
 const { signalUpdate, signalNormalize } = require('./signal-stats.js')
+const { overwriteArray } = require('./int-encoding.js')
 
 
 
@@ -39,6 +40,8 @@ The result is a promise for the environment, which is an object with:
     lang: 'en-US,en',
     lowball: .5, // Timer is run this much faster than it seems to need.
     maxRelaunchAttempts: 32,
+    maxIOArraySize: 0, // Would be terrible if hackers can just make us allocate 16GB on demand.
+    IOArraySizeReserve: 0,
 
     create(relaunch = null) {
         // Factory function: creates an object, and returns it.
@@ -67,7 +70,6 @@ The result is a promise for the environment, which is an object with:
         })
         // Private state.
         this._stall = null // A promise when a `relaunch` is in progress.
-        this._unlink = new Set, this._pendingUnlink = new WeakSet
         this._watchdogCheckId = setInterval(() => { // This watchdog timer is easier than fixing rare-hang-on-navigation bugs.
             if (performance.now()-this._lastStepEnd < 15000) return
             this._relaunchRetrying()
@@ -101,12 +103,13 @@ The result is a promise for the environment, which is an object with:
         try {
             // Defer observations to interfaces.
             let waitingOn = 0, endPromise = new Promise(f => then=f)
-            const inds = this._obsInds, a = this._all, obs = this._obsSlice
+            const inds = this._obsInds, a = this._all, v = this._views
             const tmp = this._allocArray(0)
             waitingOn = inds.length
             for (let i = 0; i < inds.length; ++i) {
-                if (!a[inds[i]] || this._pendingUnlink.has(a[inds[i]])) continue
-                const r = a[inds[i]].read(this, obs[i], end)
+                const j = inds[i]
+                if (!a[j]) continue
+                const r = a[j].read(this, v[j].obs, end)
                 if (r instanceof Promise) tmp.push(r.then(end))
                 else end()
             }
@@ -134,12 +137,12 @@ The result is a promise for the environment, which is an object with:
         try {
             if (acts !== this._actFloats) this._actFloats.set(acts)
             // Defer actions to interfaces.
-            const inds = this._actInds, a = this._all
-            const pred = this._predSlice, act = this._actSlice
+            const inds = this._actInds, a = this._all, v = this._views
             const tmp = this._allocArray(0)
             for (let i = 0; i < inds.length; ++i) {
-                if (!a[inds[i]] || this._pendingUnlink.has(a[inds[i]])) continue
-                const r = a[inds[i]].write(this, pred[i], act[i])
+                const j = inds[i]
+                if (!a[j]) continue
+                const r = a[j].write(this, v[j].pred, v[j].act)
                 if (r instanceof Promise) tmp.push(r)
             }
             // Await all promises at once.
@@ -208,6 +211,7 @@ The result is a promise for the environment, which is an object with:
             if (o.settings && typeof o.settings == 'object')
                 Object.assign(this.settings, o.settings)
         }
+        this.maxIOArraySize = Math.max(1024, reads, writes) + this.IOArraySizeReserve
         for (let i = 0; i < tmp.length; ++i)
             try { await tmp[i] }
             catch (err) { console.error(err) }
@@ -224,44 +228,6 @@ The result is a promise for the environment, which is an object with:
             this._allocArray(tmp)
         }
 
-        // Resize observations/actions.
-        //   (Technically, could move obs/pred/act to new correct positions, but why?)
-        const obsFloats = new Observations(reads)
-        const predFloats = new Observations(reads)
-        const actFloats = new Observations(writes)
-        obsFloats.fill(NaN), predFloats.fill(NaN), actFloats.fill(NaN)
-
-        // Pre-compute observation/action slices.
-        const obsSlice = new Array(rInds.length).fill()
-        const predSlice = new Array(rInds.length).fill()
-        const bpe = Observations.BYTES_PER_ELEMENT
-        const _ = undefined
-        for (let i = 0; i < rInds.length; ++i) {
-            const nr = allReadOffsets[rInds[i]]
-            const r = all[rInds[i]].reads
-            obsSlice[i] = r !== _ ? new Observations(obsFloats.buffer, nr * bpe, r) : obsFloats
-        }
-        const actSlice = new Array(wInds.length).fill()
-        for (let i = 0; i < wInds.length; ++i) {
-            const nr = allReadOffsets[wInds[i]], nw = allWriteOffsets[wInds[i]]
-            const r = all[wInds[i]].reads, w = all[wInds[i]].writes
-            predSlice[i] = r !== _ ? new Observations(predFloats.buffer, nr * bpe, r) : predFloats
-            actSlice[i] = w !== _ ? new Observations(actFloats.buffer, nw * bpe, w) : actFloats
-        }
-
-        // Pre-compute agent args.
-        const agentArgs = new Array(agentInds.length).fill()
-        for (let i = 0; i < agentInds.length; ++i) {
-            const j = agentInds[i], bpe = Observations.BYTES_PER_ELEMENT
-            const o = all[j], r = allReadOffsets[j], w = allWriteOffsets[j]
-            const args = [] // stream, obs, pred, act
-            args.push(this)
-            args.push(typeof o.reads == 'number' ? new Observations(obsFloats.buffer, r * bpe, o.reads) : obsFloats)
-            args.push(typeof o.reads == 'number' ? new Observations(predFloats.buffer, r * bpe, o.reads) : predFloats)
-            args.push(typeof o.writes == 'number' ? new Observations(actFloats.buffer, w * bpe, o.writes) : actFloats)
-            agentArgs[i] = args
-        }
-
         // Schedule the interpreter loop if there are now agents.
         const looped = !!(this._agentInds && this._agentInds.length)
         const looping = !!agentInds.length
@@ -269,15 +235,46 @@ The result is a promise for the environment, which is an object with:
             ++this._stepsNow, setTimeout(this._step, 0, this)
 
         // Finalize what we computed here.
-        this.reads = reads, this.writes = writes
         this.interfaces = ownInterfaces
-        this._allReadOffsets = allReadOffsets, this._allWriteOffsets = allWriteOffsets
-        this._all = all, this._obsInds = rInds, this._actInds = wInds, this._agentInds = agentInds, 
-        this._obsFloats = obsFloats
-        this._predFloats = predFloats, this._actFloats = actFloats
-        this._obsSlice = obsSlice, this._predSlice = predSlice
-        this._actSlice = actSlice
-        this._agentArgs = agentArgs
+        this._all = all, this._allReadOffsets = allReadOffsets, this._allWriteOffsets = allWriteOffsets
+        this._obsInds = rInds, this._actInds = wInds, this._agentInds = agentInds
+
+        this.resize(reads, writes)
+    },
+    resize(reads, writes) {
+        // This is for `directLink` only.
+        // Resizes reads/writes, making the last interface access more or less.
+        if (this._obsFloats && this.reads === reads && this.writes === writes) return
+        this.maxIOArraySize = Math.max(1024, reads, writes) + this.IOArraySizeReserve
+
+        const all = this._all, allReadOffsets = this._allReadOffsets, allWriteOffsets = this._allWriteOffsets
+
+        // Resize observations/actions. Preserve previous data if possible.
+        const obsFloats = new Observations(reads).fill(NaN)
+        const predFloats = new Observations(reads).fill(NaN)
+        const actFloats = new Observations(writes).fill(NaN)
+        overwriteArray(obsFloats, this._obsFloats)
+        overwriteArray(predFloats, this._predFloats)
+        overwriteArray(actFloats, this._actFloats)
+
+        // Pre-compute observation/action slices.
+        const bpe = Observations.BYTES_PER_ELEMENT
+        const _ = undefined
+        const views = new Array(all.length).fill()
+        for (let i = 0; i < all.length; ++i) {
+            const o = all[i], last = i===all.length-1
+            const ro = allReadOffsets[i], wo = allWriteOffsets[i]
+            const r = !last ? o.reads : _, w = !last ? o.writes : _
+            views[i] = {
+                obs:  r !== _ ? new Observations(obsFloats.buffer,  ro * bpe, r) : obsFloats,
+                pred: r !== _ ? new Observations(predFloats.buffer, ro * bpe, r) : predFloats,
+                act:  w !== _ ? new Observations(actFloats.buffer,  wo * bpe, w) : actFloats,
+            }
+        }
+
+        this.reads = reads, this.writes = writes
+        this._obsFloats = obsFloats, this._predFloats = predFloats, this._actFloats = actFloats
+        this._views = views
     },
     async close() {
         if (this._killed) return
@@ -335,34 +332,19 @@ The result is a promise for the environment, which is an object with:
                 const results = res._allocArray(res._agentInds.length).fill()
                 for (let i = 0; i < results.length; ++i)
                     try {
-                        const o = res._all[res._agentInds[i]]
-                        results[i] = !res._pendingUnlink.has(o) && o.agent(...res._agentArgs[i])
+                        const j = res._agentInds[i], o = res._all[j]
+                        results[i] = o.agent(res, res._views[j])
                     } catch (err) { console.error(err) } // Unlink on exception.
                 for (let i = 0; i < results.length; ++i)
                     if (results[i] instanceof Promise)
                         try { results[i] = await results[i] }
                         catch (err) { console.error(err),  results[i] = undefined } // Unlink on exception.
-                for (let i = 0; i < results.length; ++i)
-                    if (!results[i]) {
-                        const o = res._all[res._agentInds[i]]
-                        res._unlink.add(o), res._pendingUnlink.add(o)
-                    }
                 res._allocArray(results)
 
                 await res.write(res._actFloats)
             } catch (err) {
                 if (!res._stall) console.error(err)
                 // Do not let exceptions kill us.
-            } finally {
-                // Unlink the agents that do not want to live on.
-                //   (Unless they're copied from the top-level, because, too much work to support that.)
-                if (res._unlink.size) {
-                    const bad = new Set(res._unlink)
-                    res._unlink.clear()
-                    let prevStall = res._stall;  res._stall = res.relink(res.interfaces.filter(o => !bad.has(o)));  await prevStall
-                    prevStall = res._stall;  res._stall = null;  await prevStall
-                    bad.forEach(o => res._pendingUnlink.delete(o))
-                }
             }
 
             res._period.set(performance.now() - res._lastStepEnd)

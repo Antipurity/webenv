@@ -24,9 +24,9 @@ class LinDense(torch.nn.Module):
   - `n=16`: the max size of each dimension. The layer works best if `ins = a * n**c` and `outs = b * n**c`, especially if `ins = outs` (with `skip_connections`).
   - `batch_dims=1`: this many leading dimensions (1 or more) will share weights, the rest will have unique weights. (Vector inputs have a batch dimension inserted automatically.)
   - `unique_dims=()`: the sizes of non-batched non-mixed dimensions, for initialization. Total input dimension count must be `batch_dims + len(unique_dims) + 1`.
-  - `weight_stdev=1`: the standard deviation of all weights, or a function from sub-layer index to that.
+  - `weight_stdev=1`: the initial standard deviation of all weights.
   - `Nonlinearity=None`: the constructor of non-linearities between sub-layers, given the input size.
-  - `bias=True`: whether a static vector should be added after each mix.
+  - `bias=True`: whether a static vector should be added after each mix/sub-layer.
   - `skip_connections=True`: whether the previous sub-layer result should be added, for improved gradient flow. Works best if `ins == outs`.
   - `local_first=False`: whether to mix among the closest or the furthest numbers first.
   - `device`
@@ -96,9 +96,8 @@ class LinDense(torch.nn.Module):
       y = torch.transpose(y, dim_at, -1)
       if self.weights[i] is None:
         self.weights[i] = torch.randn(*y.shape[batch_end:-2], self.ins_dims[i], self.outs_dims[i], requires_grad=True, device=y.device)
-      stdev = self.weight_stdev
-      stdev = stdev(i) if callable(stdev) else stdev
-      y = torch.matmul(y, self.weights[i] * stdev)
+        self.weights[i][:] *= self.weight_stdev
+      y = torch.matmul(y, self.weights[i])
       if self.biases is not None:
         if self.biases[i] is None:
           self.biases[i] = torch.randn(*y.shape[batch_end:-2], 1, self.outs_dims[i], requires_grad=True, device=y.device)

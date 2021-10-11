@@ -9,21 +9,21 @@ This document outlines what still needs to be done to reach MVP state (or the "r
             - Request access to `*://*/*` in `manifest.json`'s `permissions`.
             - Design a web page that connects to a remote port to be controlled.
     - Make the Capture extension usable by humans.
-        - In-ext `directLink`. (Should allow linking without `.relink`, for max efficiency, including not re-sending all the JS code on each link.)
-        - No-Puppeteer `directScore`, which needs current-URL-getting and moments-for-current-URL-using, including on `visualize`.
+        - In-ext `directLink`, with injected code instead of Puppeteer functions.
+        - No-Puppeteer `directScore`, which needs current-URL-getting and moments-for-current-URL-using, including on `visualize`. (Or maybe, clients don't set `obs[0]`, they only report their average-score-this-frame through JSON. This way, data about avg scores cannot be leaked.)
             - Make `observers` react to `reactToObserver(stream, result)`, which would cause the result to be included in the JSON sent back with observations. (This would also allow around-mouse images to be positioned correctly. In addition to knowing the visited URL.)
 
 - Make the Python example production-ready:
-    - Fix NaN-observations incuring some loss. (Looking at the architecture, this shouldn't happen.)
     - Save + load, checking that all unchangeable hyperparams are the same; also have a list of hparams that can change, such as the learning rate. Ask the user if they want to warm-start from the previous checkpoint if changed. (No tracing: batch size could pick up the slack.) ([Should be very easy.](https://pytorch.org/tutorials/beginner/saving_loading_models.html))
     - Weight decay, maybe only on 95% least-magnitude weights, as a kind of soft sparsification (might have synergy with LDL's greater-than-DL capacity).
-    - Efficient output slicing, by slicing weights and such. (This would allow 3× more efficiency below.)
-    - `state[0]` maximization. (Sure, just giving a model a binary feedback signal may sound inconvenient, but have you ever tried using its world understanding: say, bringing up what it did long ago, possibly on the microphone, and hitting that reward button? Maybe treat your model with some respect?)
-        - To make leaving holes in `state[0]` (as should be done most of the time) not screw up everything, AND to not have an extra model just for reward prediction, have to split the RNN and its gradient in twain:
+    - For almost 3× the efficiency below: efficient output slicing, by slicing weights and biases.
+        - For simplicity, only handle first-mixed-dimension slicing, which is almost as good. First slice the outermost/first layer's output, then pick which halves of that first-sliced dimension in weights/biases the rest will use.
+    - `state[0]` maximization. (Sure, just giving a model a binary feedback signal may sound non-scalable because of the need to supervise all possible edge cases, but have you ever tried using the model's world understanding: say, bringing up what it did long ago, possibly on the microphone, and hitting that reward button, making it clear that these are very related? WebEnv is a general environment with user interaction. Expand your mind!)
+        - To make leaving holes in `state[0]` (as should be done most of the time) not screw up `state[0]` over time, AND to not have an extra model just for reward prediction, have to split the RNN and its gradient in twain:
             - (`s[i]` really means `s[..., i]` here. `O` is observations `x[:mid]`, `A` is actions `x[mid:]`.)
-            - Transition goes from `x→f(x)` to `x→(concat f(concat O A.detach())[:mid] f(concat O.detach() A)[mid:])`.
-            - Prediction error is unchanged, since it's only on the first half.
-            - Goal-maximization becomes `f(concat O.detach() A)[0].sum()`.
+            - Transition goes from `x→f(x)` to `x→(concat f(concat O A.detach())[:mid] f(concat O.detach() A)[mid:])`. Prediction error is unchanged, since it's only on the first half.
+            - Goal-maximization becomes `f(concat O.detach() A)[0].sum()` with a frozen `f`.
+            - `MGU` must handle `out_slice` too (mostly passing it on to its parts).
 
 - An entertaining GIF in `README.md` (of an agent trained on `RandomURL` now that we have that), so that people's eyes don't glaze over from all that *text*.
 

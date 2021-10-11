@@ -826,9 +826,9 @@ Communication protocol details, simple for easy adoption:
             await writeToChannel(io.ch, 0xFFFFFFFF, bs)
             thenW()
         },
-        async agent(stream, obs, pred, act) {
+        async agent(stream, {obs, pred, act}) {
             // Write observation, atomically (no torn writes).
-            if (!io.env) return true
+            if (!io.env) return
             let oldW = writeLock, thenW
             writeLock = new Promise(f => thenW=f);  await oldW
             const bs = this.byteswap
@@ -839,7 +839,6 @@ Communication protocol details, simple for easy adoption:
             // Read from our data queue.
             const [predData, actData] = await getDataQueueItem(stream)
             decodeInts(predData, pred), decodeInts(actData, act)
-            return true
         },
     }
     async function writeArray(data, byteswap = false) {
@@ -856,22 +855,55 @@ Communication protocol details, simple for easy adoption:
 
 
 
-exports.directLink = docs(`\`webwenv.directLink(name = 'directLink', maxReads = 1*2**20, maxWrites = 1*2**20, maxLinks = 1024)\`
+// TODO: Update docs.
+exports.directLink = docs(`\`webwenv.directLink(name = 'directLink', maxReads = 2**16, maxWrites = 2**16)\`
 Allows web pages to dynamically establish a high-bandwidth connection, via calling \`directLink\`.
-    (Abusing this feature will cause agents to get very confused, as they have no way to know about format changes apart from prediction.)
+(Abusing this feature will cause agents to get very confused, as they have no way to know about format changes apart from prediction.)
 
-In a page, \`directLink(PageAgent, Inputs = 0, Outputs = 0)\` will return (a promise of) \`true\` if successfully established, else \`false\`.
-\`PageAgent\` will be called automatically, until it returns a non-\`true\` value.
+(The closest analogue of a real-time data channel that has equal read and write capabilities for humans is music (high-effort art is too slow), which can be used to capture and convey the neural feel of arbitrary neural computations. Research music 2.0, preferably if you have a direct neural link device.)
+
+In a page, \`directLink(PageAgent, Inputs = 0, Outputs = 0)\` will return \`true\` if successfully established, else \`false\`.
+\`PageAgent\` will be called automatically, until it does not return \`true\` and gets canceled.
 \`PageAgent(Act, Obs)\` synchronously reads \`Act\` (of length \`Inputs\`) and writes to \`Obs\` (of length \`Outputs\`). All values are 32-bit floats, \`-1\`…\`1\` or \`NaN\`.
-    (Access to observation predictions is forbidden.)
+(No predictions, and thus no iffiness about copyright.)
+`, function directLink(name = 'directLink', maxReads = 2**16, maxWrites = 2**16) {
+    // TODO: In `observers.js`, react to `reactToObserver(stream, result)`: if this is present, injected code must the result as an array slot, and send that JSON. And read that array on this side, and call all these funcs.
+    // TODO: In `observer`:
+    //   TODO: Send a message to `inject` ('directLinkAct'-port), containing base64 actions.
+    //     TODO: If `chrome`, use its messaging; else simply call `window.directLinkAct` if defined.
+    //   TODO: `await end()` to decode base64 and remember the last observations (if a string), and continually set them. (After trimming to the size limit.)
+    //   TODO: Return the directLink-actions size.
+    // TODO: In `inject`:
+    //   TODO: If we're first initializing:
+    //     TODO: Inject a <script> into the page (and immediately remove it, cause <script> is not required):
+    //       TODO: If `window.directLink` is already defined, do nothing.
+    //       TODO: Expose `directLink(agent(act,obs)=>bool, inputs=0, outputs=0)`.
+    //         TODO: directLink.agents:[…, { agent, act, obs }, …].
+    //         TODO: When called, simply add the agent at the end.
+    //       TODO: On 'directLinkAct':
+    //         TODO: Decode & remember float32 acts.
+    //         TODO: Call all agents, with slices of act/obs arrays (accumulate offsets each time).
+    //           TODO: `await` them all.
+    //           TODO: Filter out those that returned non-`true`.
+    //         TODO: Post 'directLinkObs' with base64 obs.
+    //     TODO: Listen to 'directLinkAct'-port messages, by connecting to a port and defining `window.directLinkAct`. On message, set local base64 acts.
+    //     TODO: Listen to 'directLinkObs' in-page messages, by setting local base64 obs.
+    //   TODO: In-page, post a 'directLinkAct' message, with the local base64 acts.
+    //   TODO: Return local base64 obs.
+    // TODO: In `reactToObserver(stream, result)`, which we definitely have:
+    //   TODO: `stream.resize`, adding directLink-actions size delta to stream.writes.
+    // TODO: `priority:-999999999`
+    // TODO: In `init`: set `stream.IOArraySizeReserve` to `Math.max(maxReads, maxWrites)`.
+    // TODO: Test that direct links work.
 
-(The closest analogue of a real-time data channel that has equal read and write capabilities for humans is music, which can be used to capture and convey the neural feel of arbitrary neural computations. Research music 2.0, preferably if you have a direct neural link device.)
-`, function directLink(name = 'directLink', maxReads = 1*1024*1024, maxWrites = 1*1024*1024, maxLinks = 1024) {
+    // This goes for latency over reliability.
+    //   Expect some frames to have extra act/obs updates, or skip updates.
+
     // Data communication is not quite as optimized as it could be,
     //   since this sends/receives float32 instead of int16.
     return {
         init(stream) {
-            stream.page.evaluateOnNewDocument((name, maxReads, maxWrites, maxLinks) => {
+            stream.page.evaluateOnNewDocument((name, maxReads, maxWrites) => {
                 const agents = {}
                 let reads = 0, writes = 0
                 self[name] = directLink
@@ -889,21 +921,19 @@ In a page, \`directLink(PageAgent, Inputs = 0, Outputs = 0)\` will return (a pro
                         throw new Error('Not a number')
                     if (reads + outs > maxReads) throw new Error('Too many reads')
                     if (writes + ins > maxWrites) throw new Error('Too many writes')
-                    if (agents.length + 1 > maxLinks) throw new Error('Too many direct links')
                     let id = 0
                     while (agents[id]) ++id
                     agents[id] = agent, reads += outs, writes += ins
                     _directLinkRegister(id, ins, outs)
                     return true
                 }
-            }, name, maxReads, maxWrites, maxLinks)
+            }, name, maxReads, maxWrites)
             let agentCount = 0, reads = 0, writes = 0
             return stream.page.exposeFunction('_directLinkRegister', async (agentId, ins = 0, outs = 0) => {
                 if (typeof agentId != 'number') return false
                 if (typeof ins != 'number' || typeof outs != 'number') return false
                 if (reads + outs > maxReads) return false
                 if (writes + ins > maxWrites) return false
-                if (agentCount + 1 > maxLinks) return false
                 ++agentCount, reads += outs, writes += ins
                 let continues = true, initialized = false
                 const p = stream.page
@@ -925,7 +955,7 @@ In a page, \`directLink(PageAgent, Inputs = 0, Outputs = 0)\` will return (a pro
                         await end()
                         overwriteArray(obs, obsSource)
                     },
-                    agent(stream, obs, pred, act) { return continues }, // Ensure that steps always happen.
+                    agent(stream, {obs, pred, act}) { return continues }, // Ensure that steps always happen.
                     async write(stream, pred, act) {
                         if (stream.page !== stream.page) continues = false
                         if (!continues) return
@@ -993,7 +1023,7 @@ If \`relative\` is not \`0\`, the agent meanders its action instead of jumping c
     const derivatives = []
     return {
         priority:1,
-        agent(stream, obs, pred, act) {
+        agent(stream, {obs, pred, act}) {
             if (!relative)
                 for (let i = 0; i < act.length; ++i)
                     act[i] = Math.random()*2-1
@@ -2059,7 +2089,7 @@ To write new interfaces, look at the pre-existing interfaces.
     - \`.init(stream)\`, \`.deinit(stream)\` (neither is called on browser relaunching, except on new/removed interfaces);
     - \`.reads:Number\`, \`.read(stream, obs, end)\` (modify \`obs\` in-place, do not read) (to prevent torn writes, \`await end()\` right before writing);
     - \`.writes:Number\`, \`.write(stream, pred, act)\` (\`pred\` can predict the next read \`obs\`; do read from \`act\` and act on that, do not write);
-    - \`.agent(stream, obs, pred, act)=>continues\` (return false to unlink the agent, unless it is at top-level) (to prevent torn writes, there should only be one agent);
+    - \`.agent(stream, {obs, pred, act})=>continues\` (to prevent torn writes, there should only be one agent);
     - \`priority:Number\` (for example, interfaces that read actions at write-time have priority of -1, to always go after action-fillers);
     All functions are potentially asynchronous, and will be \`await\`ed if needed.
 `, async function(...interfaces) {
@@ -2150,22 +2180,26 @@ To write new interfaces, look at the pre-existing interfaces.
         interfaces = null
         this._all = [] // Call all initializers again, to re-attach event listeners.
         this._agentInds = [] // Re-launch the step loop if we have agents.
-        await this.relink(...oldInters)
+        const p = this.relink(...oldInters)
 
         // Set the viewport.
         const targetId = (await this.cdp.send('Target.getTargets')).targetInfos[0].targetId
         windowId = (await this.cdp.send('Browser.getWindowForTarget', {targetId})).windowId
         await resizeWindow(this)
 
+        // Not entirely reliable, but better than nothing.
         if (this.settings.homepage && this.settings.homepage !== 'about:blank')
             // Browser crashes are far more frequent if we don't wait at least a bit.
             await Promise.race([
                 Promise.all([
+                    // Resetting history is not that great.
                     page.goto(this.settings.homepage, {waitUntil:'domcontentloaded'}).then(() => this.cdp.send('Page.resetNavigationHistory')).catch(doNothing),
                     this.cdp.send('Page.resetNavigationHistory').catch(doNothing),
                 ]),
                 new Promise(then => setTimeout(then, 10000)),
             ])
+
+        await p
         this._lastStepEnd = performance.now()
     }
 })

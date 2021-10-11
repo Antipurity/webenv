@@ -40,7 +40,7 @@ Other interfaces that want this ought to define:
     - \`await media.audio(sampleN=2048, sampleRate=44100)=>samples\`
 - \`.inject: [(...args)=>report, ...args]\`
   - Cannot access video/audio; can access the DOM.
-  - Result must be JSON-serializable. It will become the result of \`await end()\` in \`.observer\`.
+  - Result must be JSON-serializable. It will become the result of \`await end()\` in \`.observer\` (or \`null\` on exception or timeout).
 `,
     key: Symbol('observers'),
     async init(stream) {
@@ -126,7 +126,7 @@ async function readAllData(stream, ch) {
     //   0xFFFFFFFF JsLen Js → update (`RCV = new Function(Js)()`)
     //   PredLen Pred ActLen Act JsonLen Json → ObsLen Obs
     const spot = Spot(stream)
-    while (!spot.ended) {
+    while (!spot.ended)
         try {
             const obsLen = await readFromChannel(ch, 1, Number, spot.byteswap)
             if (obsLen === 0xffffffff) {
@@ -135,6 +135,7 @@ async function readAllData(stream, ch) {
                 else if (magic === 0x04030201) spot.byteswap = true
                 else return ch.close()
                 const jsonLen = await readFromChannel(ch, 1, Number, spot.byteswap)
+                if (jsonLen > stream.maxIOArraySize) return ch.close()
                 const json = await readFromChannel(ch, jsonLen, Uint8Array, false)
                 const jsonStr = Buffer.from(json).toString('utf8')
                 const obj = JSON.parse(jsonStr)
@@ -142,11 +143,17 @@ async function readAllData(stream, ch) {
                 if (![0,1,2].includes(intSize)) throw new Error('Bad intSize: '+intSize)
                 spot.cons = intSize === 0 ? Float32Array : intSize === 1 ? Int8Array : Int16Array
             } else {
+                if (obsLen > stream.maxIOArraySize) return ch.close()
+                const old = stream._obsFloats
                 const obs = await readFromChannel(ch, obsLen, spot.cons, spot.byteswap)
-                decodeInts(obs, stream._obsFloats)
+                if (old) {
+                    const d = obs.length - old.length
+                    if (d) stream.resize(stream.reads + d, stream.writes)
+                    decodeInts(obs, old)
+                }
+                // TODO: Also accept JSON. (Which should be filled with requested results of `observer`s.)
             }
         } catch (err) { if (err !== 'skip') throw ch.close(), err }
-    }
     ch.close()
 }
 
@@ -179,9 +186,10 @@ async function compileJS(stream) {
             const offR = stream._allReadOffsets[i], lenR = o.reads || 0
             const offW = stream._allWriteOffsets[i], lenW = o.writes || 0
             items.push(item)
-            const p = `RCV.P.subarray(${offR}, ${offR + lenR})`
-            const a = `RCV.A.subarray(${offW}, ${offW + lenW})`
-            const obs = `RCV.obs.subarray(${offR}, ${offR + lenR})`
+            const last = i < stream._all.length-1
+            const p = `RCV.P.subarray(${offR}, ${last ? '' : offR + lenR})`
+            const a = `RCV.A.subarray(${offW}, ${last ? '' : offW + lenW})`
+            const obs = `RCV.obs.subarray(${offR}, ${last ? '' : offR + lenR})`
             // Injectors read injection results; all others do not have closures allocated on each step.
             const e = !Array.isArray(inj) ? `RCV.end` : `bindInjEnd(RCV.end, ${injectedParts.length})`
             staticArgs.set(item, `RCV.media,{pred:${p},act:${a},obs:${obs}},${e}`)

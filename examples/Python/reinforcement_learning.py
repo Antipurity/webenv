@@ -28,12 +28,12 @@ class GradMaximize(torch.nn.Module):
 
   Call args:
   - `x`: state.
-  - `reward`: real reward; `.detach()` if differentiable. (If integrating with `Return`, pass its result here.)
+  - `reward`: real reward/return; `.detach()` if differentiable.
 
   Call result: the loss to minimize (`.backward()`).
 
   Traditionally, Reinforcement Learning (reward maximization) is done via considering actions (or plans) and picking those with max predicted reward/return (let's call this "discrete RL" for convenience). Comparatively, GradMax has a few advantages, namely:
-  - Discrete RL has to explicitly incorporate future rewards into the past, to compute the predicted & maximized `Return` (via the Bellman equation). GradMax incorporates the future via RNN's gradient, with no extra machinery and no extra hyperparameter.
+  - Discrete RL has to explicitly incorporate future rewards into the past, to compute the predicted & maximized return (via the Bellman equation). GradMax incorporates the future via RNN's gradient, with no extra machinery and no extra hyperparameter (unless you really want that sweet Bellman action in here).
   - Discrete RL can only directly give gradient to actions. GradMax, unless explicitly limited, gives gradient to the whole state.
   - For continuous actions, discrete RL has to create binary search trees. GradMax assumes continuous and differentiable actions, though a step function can be used in the interface to make them discrete.
   - Discrete RL has to evaluate each of N actions, multiplying runtime+memory cost by N. GradMax only doubles that, approximately.
@@ -64,45 +64,6 @@ class GradMaximize(torch.nn.Module):
     lR = self.loss(self.reward_model(x if self.pred_gradient else x.detach()), reward)
     lX = self.copy(x).sum() * self.strength
     return lR - lX # Predict reward, & maximize reward prediction.
-
-
-
-class Return(torch.nn.Module):
-  """
-  Turns an instantaneous reward into its future return.
-  Essentially, `predict(Return, (1-horizon)*Reward + horizon*Return)` and returns `Return`.
-
-  Constructor args:
-    `return_model`: a neural network from state to a number.
-    `time_horizon=.99`: how much future impacts the past.
-  
-  Forward-pass args:
-    `x`: state.
-    `reward=None`: if specified, does prediction immediately, else specify it later, via `.reward(x, rew)`.
-  
-  Delayed-reward (`r.reward(x, rew)`) args:
-    `x`: state.
-    `reward`: reward.
-  Result: `(Return, loss)`; minimize loss manually.
-  """
-  def __init__(self, return_model, time_horizon=.99):
-    super(Return, self).__init__()
-    self.return_model = return_model
-    self.time_horizon = time_horizon
-  def forward(self, x, rew=None):
-    if rew is None:
-      return self.return_model(x)
-    else:
-      ret, loss = self.reward(x, rew)
-      loss.backward()
-      # A shame that PyTorch requires explicit tracking of the loss.
-      #   (Futures-of-reward like in Conceptual would have solved this neatly.)
-      return ret
-  def reward(self, x, rew):
-    # Average: return = (1-horizon) * reward + horizon * return.
-    ret = self.return_model(x)
-    momentum = 1 - self.time_horizon
-    return ret, (momentum * (ret - rew.detach())).square().sum()
 
 
 

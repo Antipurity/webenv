@@ -36,7 +36,7 @@ You may want to write your own agent. Base it on `webenv.randomAgent()`:
 
 ```js
 webenv.init(
-    { async agent(stream, obs, pred, act) {
+    { async agent(stream, {obs, pred, act}) {
         await 'asteroid impact'
         for (let i = 0; i < act.length; ++i)
             act[i] = Math.random()*2-1
@@ -93,16 +93,18 @@ In particular, this:
 
 ```js
 webenv.directLink()
-webenv.directLink(name = 'directLink', maxReads = 16*2**20, maxWrites = 16*2**20, maxInterfaces = 1024)
+webenv.directLink(name = 'directLink', maxReads = 2**16, maxWrites = 2**16)
 ```
 
-Allows web pages to dynamically establish high-bandwidth connections to the agent, via calling `directLink`.
+Allows web pages to dynamically establish high-bandwidth connections to the agent, via calling `directLink`.    
+(Abusing this feature will cause agents to get very confused, as they have no way to know about format changes apart from prediction.)
 
-(The closest analogue of a real-time data channel that has equal read and write capabilities for humans is music, which can be used to capture and convey the neural feel of arbitrary neural computations. Research music 2.0, preferably if you have a direct neural link device.)
+(The closest analogue of a real-time data channel that has equal read and write capabilities for humans is music (high-effort art is too slow), which can be used to capture and convey the neural feel of arbitrary neural computations. Research music 2.0, preferably if you have a direct neural link device.)
 
-In a page, `directLink(PageAgent, Inputs = 0, Outputs = 0)` will return (a promise of) `true` if successfully established, else `false`.
-
-`PageAgent` will be called automatically, until it returns a non-`true` value. `PageAgent(Act, Obs)` synchronously reads from `Act` (of length `Inputs`) and writes to `Obs` (of length `Outputs`) after all asynchrony is done. All values are 32-bit floats, `-1`…`1` or `NaN`.
+In a page, `directLink(PageAgent, Inputs = 0, Outputs = 0)` will return `true` if successfully established, else `false`.    
+`PageAgent` will be called automatically, until it does not return `true` and gets canceled.    
+`PageAgent(Act, Obs)` synchronously reads from `Act` (of length `Inputs`) and writes to `Obs` (of length `Outputs`) after all asynchrony is done. All values are 32-bit floats, `-1`…`1` or `NaN`.    
+(No predictions, and thus no iffiness about copyright.)
 
 ```js
 webenv.directScore()

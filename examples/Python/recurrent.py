@@ -6,19 +6,25 @@ import numpy as np
 
 
 # Input: gather state along streams, and put observations into it.
-def webenv_add(state, obs_t, pad_with=np.nan):
+def webenv_ignore(state, obs_t):
   """
+  Ignores observations. Loss will take them into account anyway.
+  """
+  return state
+def webenv_add(state, obs_t):
+  """
+  Teacher Forcing.
   Adds WebEnv observations to internal state, properly ignoring holes (NaNs).
   """
-  padded = torch.nn.functional.pad(obs_t, (0, state.shape[-1] - obs_t.shape[-1]), value=pad_with)
+  padded = torch.nn.functional.pad(obs_t, (0, state.shape[-1] - obs_t.shape[-1]), value=np.nan)
   return torch.where(torch.isnan(padded), state, state + padded)
-def webenv_merge(state, obs_t, pad_with=np.nan):
+def webenv_merge(state, obs_t):
   """
   Merges (writes) WebEnv observations into internal state, properly ignoring holes (NaNs).
 
   Note that this overwrites predictions, so the model cannot access them. If you want your model to know both real and predicted numbers, use `input=webenv_concat` in `recurrent`.
   """
-  padded = torch.nn.functional.pad(obs_t, (0, state.shape[-1] - obs_t.shape[-1], 0,0), value=pad_with)
+  padded = torch.nn.functional.pad(obs_t, (0, state.shape[-1] - obs_t.shape[-1], 0,0), value=np.nan)
   return torch.where(torch.isnan(padded), state, padded)
 def webenv_concat(state, obs_t):
   """
@@ -26,7 +32,7 @@ def webenv_concat(state, obs_t):
 
   Holes (NaNs) in observations will be replaced with the prediction, allowing observation resizing at the cost of repetition.
   """
-  obs2 = webenv_merge(state, obs_t, 0.)
+  obs2 = webenv_merge(state, obs_t)
   return torch.cat((state, obs2), dim=-1)
 
 
@@ -149,7 +155,9 @@ def recurrent(
       state2 = gather(state, indices)
       prev_state2 = state2
       state2 = input(prev_state2, obs_t)
-      unroll_loss = unroll_loss + loss(prev_state2, state2.detach(), obs_t, *args) # Prev frame predicts this one.
+      # Prev frame predicts this one:
+      unroll_loss = unroll_loss + loss(prev_state2, (webenv_merge(prev_state2, obs_t) if input is not webenv_merge else state2).detach(), obs_t, *args)
+
       state2 = transition(state2)
       state = scatter(state, indices, state2)
       unroll_index += 1

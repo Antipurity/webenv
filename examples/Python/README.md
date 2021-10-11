@@ -51,7 +51,7 @@ Here, predictions are on the right, delayed by a few frames. We used [Google's h
   <img src=images/noexplore-anim.gif>
 </p>
 
-(Looking at it makes you somewhat more aware of your own colorful patternful noise and fleeting afterimages near changed conditions, right? Why would those exist if not because of next-frame prediction? Do not draw conclusions from overly-small models, though.)
+(Looking at it makes you somewhat more aware of your own colorful patternful noise and fleeting afterimages near changed conditions, and hallucinations, right? Why would those exist if not because of next-frame prediction? Do not draw conclusions from overly-small models, though.)
 
 The loss goes down somewhat, though exploration hardly does anything here.
 
@@ -81,11 +81,13 @@ Since math-y visualizations are always pretty, here is a comparison between vani
 
 <p style="text-align:center">
   <p style="margin:0 auto; display:table">
-    <img width=300 src="images/dl_8.png">
-    <img width=300 src="images/ldl_8.png">
+    <img width=49% src="images/dl_8.png">
+    <img width=49% src="images/ldl_8.png">
   </p>
   <p style="margin:0 auto; display:table">
-    <img width=300 src="images/dl_64.png">
-    <img width=300 src="images/ldl_64.png">
+    <img width=49% src="images/dl_64.png">
+    <img width=49% src="images/ldl_64.png">
   </p>
 </p>
+
+Every input→output connection is included (as a combination of a few others). So despite sparsity, the minimal reaction time is still `1` frame, no matter what needs to be reacted to.
