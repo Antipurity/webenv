@@ -12,7 +12,7 @@ A PyTorch implementation of an agent.
 
 Unimplemented: save/load.
 
-Did not implement opinions: non-static sparsity (to make [low-dimensional representations](https://arxiv.org/abs/1906.10720) high-dimensional by combining many); [Transformers](https://arxiv.org/abs/2103.03206); non-loss [exploration reward](https://arxiv.org/abs/2101.09458) to [optimize](http://proceedings.mlr.press/v32/silver14.pdf); experience replay; [GAN losses](https://phillipi.github.io/pix2pix/); [Siamese networks](https://arxiv.org/abs/2011.10566); literally anything else (use your imagination and/or ML expertise).
+Did not implement opinions: non-static sparsity (to make [low-dimensional representations](https://arxiv.org/abs/1906.10720) high-dimensional by combining many); [Transformers](https://arxiv.org/abs/2103.03206); non-loss [exploration reward](https://arxiv.org/abs/2101.09458) to [optimize](http://proceedings.mlr.press/v32/silver14.pdf); experience replay; [GAN](https://phillipi.github.io/pix2pix/) or [DDPM](https://arxiv.org/abs/2006.11239) losses; [Siamese networks](https://arxiv.org/abs/2011.10566); literally anything else (use your imagination and/or ML expertise).
 
 ## Tutorial
 
