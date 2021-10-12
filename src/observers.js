@@ -29,8 +29,11 @@ socket.binaryType = 'arraybuffer', socket.onmessage = evt => {
 
 (To make interface modules handle connections, use \`handleUpgrade\` from this file: \`stream.env.upgrade('/path', (...a) => handleUpgrade(stream, ...a))\`.)
 
-Other interfaces that want this ought to define:
-- \`.observer: [(media, {pred, act, obs}, end, ...args)=>…, ...args]\`
+Other interfaces that want this ought to define, for the 3 execution contexts (WebEnv, extension, and its per-page content script):
+- WebEnv: \`reactToObserver(stream, result)\`.
+  - If this is defined, \`observer\` below should return a JSON-serializable result, as small as possible (else the data stream may close). Having \`1024\` total bytes is definitely safe. Per-frame JSON is expensive.
+  - (Might want to double-check that \`result\` did come from your \`observer\` and not another one.)
+- Extension: \`.observer: [(media, {pred, act, obs}, end, ...args)=>…, ...args]\`
   - Can access video/audio; cannot access the DOM.
   - Calling \`await end()\` at the end or just before writing to \`obs\` (f32 array) is MANDATORY.
   - Communication cost is reduced as much as possible without compression, don't worry.
@@ -38,7 +41,7 @@ Other interfaces that want this ought to define:
   - Media access:
     - \`await media.video(x,y,w,h)=>pixels\`
     - \`await media.audio(sampleN=2048, sampleRate=44100)=>samples\`
-- \`.inject: [(...args)=>report, ...args]\`
+- Content script: \`.inject: [(...args)=>report, ...args]\`
   - Cannot access video/audio; can access the DOM.
   - Result must be JSON-serializable. It will become the result of \`await end()\` in \`.observer\` (or \`null\` on exception or timeout).
 `,
@@ -151,7 +154,18 @@ async function readAllData(stream, ch) {
                     if (d) stream.resize(stream.reads + d, stream.writes)
                     decodeInts(obs, old)
                 }
-                // TODO: Also accept JSON. (Which should be filled with requested results of `observer`s.)
+                const jsonLen = await readFromChannel(ch, 1, Number, spot.byteswap)
+                if (jsonLen) {
+                    if (jsonLen > stream.maxIOArraySize) return ch.close()
+                    const jsonBytes = await readFromChannel(ch, jsonLen, Uint8Array, spot.byteswap)
+                    let json
+                    try { json = JSON.parse(Buffer.from(jsonBytes, 'utf8')) }
+                    catch (err) {} // Do nothing with bad JSON.
+                    let j = 0
+                    if (Array.isArray(json) && spot.reactToObserverInds) // And react.
+                        for (let i of spot.reactToObserverInds)
+                            stream._all[i].reactToObserver(stream, json[j++])
+                }
             }
         } catch (err) { if (err !== 'skip') throw ch.close(), err }
     ch.close()
@@ -161,7 +175,8 @@ async function readAllData(stream, ch) {
 
 async function compileJS(stream) {
     const spot = Spot(stream)
-    const items = [], staticArgs = new Map, prelude = []
+    const reactToObserverInds = []
+    const items = [], staticArgs = new Map, prelude = [], needReaction = []
     const cons = spot.cons, bpe = cons.BYTES_PER_ELEMENT
     items.push([`() => {
         const p = RCV.pred;  RCV.P = decodeInts(new ${cons.name}(p.buffer, p.byteOffset, p.byteLength/${bpe} | 0), RCV.P, true)
@@ -180,7 +195,7 @@ async function compileJS(stream) {
     }], injectedParts = [];  items.push(injected)
     for (let i = 0; i < stream._all.length; ++i) {
         const o = stream._all[i]
-        const item = await o.observer, inj = await o.inject
+        const item = await o.observer, inj = await o.inject, react = await o.reactToObserver
         if (Array.isArray(item)) {
             // Prepare the observer's extra args.
             const offR = stream._allReadOffsets[i], lenR = o.reads || 0
@@ -193,6 +208,8 @@ async function compileJS(stream) {
             // Injectors read injection results; all others do not have closures allocated on each step.
             const e = !Array.isArray(inj) ? `RCV.end` : `bindInjEnd(RCV.end, ${injectedParts.length})`
             staticArgs.set(item, `RCV.media,{pred:${p},act:${a},obs:${obs}},${e}`)
+            if (typeof react == 'function')
+                needReaction.push(items.length-1), reactToObserverInds.push(i)
         }
         if (Array.isArray(inj)) {
             // Its args will be `injected`'s args (so that they go through `compileSentJS`).
@@ -382,10 +399,15 @@ async function compileJS(stream) {
             chrome.tabs.query({active:true, currentWindow:true}, setId)
         }
         `)
-    } else items.splice(items.indexOf(injected), 1)
+    } else {
+        items.splice(items.indexOf(injected), 1)
+        for (let i=0; i < needReaction.length; ++i) --needReaction[i]
+    }
     // And compile to [sendFunc, receiveStr].
     spot.snd = null
-    return await compileSentJS(staticArgs, items, prelude.join('\n'))
+    const postlude = needReaction ? `r => RCV.result = [${needReaction.map(i => `r[${i}]`).join(',')}]` : ''
+    try { return await compileSentJS(staticArgs, items, prelude.join('\n'), postlude) }
+    finally { spot.reactToObserverInds = reactToObserverInds }
     function end(inj) { // Resolve if the last end(), and always return a promise.
         if (Array.isArray(inj)) end.inj = inj
         if (!--end.items) end.then(end.inj)
@@ -408,7 +430,7 @@ function connectChannel(bytesPerValue = 1, socket) {
     //   (Don't have hanging-observer bugs, or else the page will stall forever.)
     let stepsNow = 0, simultaneousSteps = 16
 
-    const decoder = new TextDecoder()
+    const encoder = new TextEncoder(), decoder = new TextDecoder()
 
     readAllData()
     return function stopCapture() { flowing = false, cancelTimeout(timerID), channel.close() }
@@ -437,7 +459,7 @@ function connectChannel(bytesPerValue = 1, socket) {
     }
     async function writeIntro() {
         // Could be bad with unreliable channels.
-        const jsonBytes = new TextEncoder().encode(JSON.stringify({
+        const jsonBytes = encoder.encode(JSON.stringify({
             bytesPerValue,
         }))
         await Promise.all([
@@ -484,9 +506,12 @@ function connectChannel(bytesPerValue = 1, socket) {
     async function sendObserverDataBack() {
         --stepsNow
         const o = RCV.obsEncoded
+        const jsonBytes = encoder.encode(JSON.stringify(RCV.result))
         await Promise.all([
-            writeU32(RCV.obs.length),
+            writeU32(o.length),
             channel.write(new Uint8Array(o.buffer, o.byteOffset, o.byteLength)),
+            writeU32(jsonBytes.length),
+            channel.write(jsonBytes),
             channel.skip(),
         ])
     }

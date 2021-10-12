@@ -10,8 +10,7 @@ This document outlines what still needs to be done to reach MVP state (or the "r
             - Design a web page that connects to a remote port to be controlled.
     - Make the Capture extension usable by humans.
         - In-ext `directLink`, with injected code instead of Puppeteer functions.
-        - No-Puppeteer `directScore`, which needs current-URL-getting and moments-for-current-URL-using, including on `visualize`. (Or maybe, clients don't set `obs[0]`, they only report their average-score-this-frame through JSON. This way, data about avg scores cannot be leaked.)
-            - Make `observers` react to `reactToObserver(stream, result)`, which would cause the result to be included in the JSON sent back with observations. (This would also allow around-mouse images to be positioned correctly. In addition to knowing the visited URL.)
+        - No-Puppeteer `directScore`, which reports null or the avg-score-this-frame (number) or URL-changed-events (string, 3 times to kinda ensure sending, then with .1% probability on NaN frames) in JSON, and the other side uses that info to normalize score and set `obs[0]`. (This way, data about avg scores cannot be leaked.)
 
 - Make the Python example production-ready:
     - Save + load, checking that all unchangeable hyperparams are the same; also have a list of hparams that can change, such as the learning rate. Ask the user if they want to warm-start from the previous checkpoint if changed. (No tracing: batch size could pick up the slack.) ([Should be very easy.](https://pytorch.org/tutorials/beginner/saving_loading_models.html))

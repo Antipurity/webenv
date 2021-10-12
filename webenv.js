@@ -242,8 +242,14 @@ Provide a mask color (0xRRGGBB) to mask exact matches, or \`null\` to disable th
 `, function imageRect(width = 100, height = width, quantize = 1, maskColor = 0xfafafa) {
     return [observers, {
         reads: width * height * 3,
+        reactToObserver(stream, result) {
+            if (typeof result != 'number' || result !== result>>>0) return
+            stream._obsMouseX = result / 10000 | 0
+            stream._obsMouseY = result % 10000
+        },
         observer: [
             async function(media, {obs}, end, x, y, w, h, maxW, maxH, maskColor) {
+                const result = x*10000 + y
                 x -= (w/2) | 0, y -= (h/2) | 0
                 const d = await media.video(x, y, w, h, maxW, maxH)
                 // Normalize and write.
@@ -255,6 +261,7 @@ Provide a mask color (0xRRGGBB) to mask exact matches, or \`null\` to disable th
                     obs[to++] = masked ? NaN : (2*G - 255) / 255
                     obs[to++] = masked ? NaN : (2*B - 255) / 255
                 }
+                return result
             },
             s => (s.mouseX || 0) - (s.mouseX || 0) % quantize,
             s => (s.mouseY || 0) - (s.mouseY || 0) % quantize,
@@ -266,8 +273,8 @@ Provide a mask color (0xRRGGBB) to mask exact matches, or \`null\` to disable th
         ],
         visualize: [
             visualizePageScreenshot,
-            s => (s.mouseX || 0) - (s.mouseX || 0) % quantize,
-            s => (s.mouseY || 0) - (s.mouseY || 0) % quantize,
+            s => s._obsMouseX | 0,
+            s => s._obsMouseY | 0,
             width,
             height,
             s => s.settings.width,
@@ -296,8 +303,14 @@ Provide a mask color (0xRRGGBB) to mask exact matches, or \`null\` to disable th
     const closestPointArray = Array.from(closestPoint)
     return [observers, {
         reads: numPoints * 3,
+        reactToObserver(stream, result) {
+            if (typeof result != 'number' || result !== result>>>0) return
+            stream._obsMouseX = result / 10000 | 0
+            stream._obsMouseY = result % 10000
+        },
         observer: [
             async function observeFovea(media, {obs}, end, closestPoint, x, y, w, h, maxW, maxH, maskColor) {
+                const result = x*10000 + y
                 x -= (w/2) | 0, y -= (h/2) | 0
                 if (!observeFovea.pointSum) { // Prepare data, if not prepared already.
                     let max = 0
@@ -328,6 +341,7 @@ Provide a mask color (0xRRGGBB) to mask exact matches, or \`null\` to disable th
                     obs[to+2] = Math.max(-1, Math.min(pointSum[to+2] / pointNum[i], 1))
                     to += 3
                 }
+                return result
             },
             closestPointArray,
             s => (s.mouseX || 0) - (s.mouseX || 0) % quantize,
@@ -389,8 +403,8 @@ Provide a mask color (0xRRGGBB) to mask exact matches, or \`null\` to disable th
             },
             closestPointArray,
             diam,
-            s => (s.mouseX || 0) - (s.mouseX || 0) % quantize,
-            s => (s.mouseY || 0) - (s.mouseY || 0) % quantize,
+            s => s._obsMouseX | 0,
+            s => s._obsMouseY | 0,
             s => s.settings.width,
             s => s.settings.height,
         ],
@@ -867,7 +881,6 @@ In a page, \`directLink(PageAgent, Inputs = 0, Outputs = 0)\` will return \`true
 \`PageAgent(Act, Obs)\` synchronously reads \`Act\` (of length \`Inputs\`) and writes to \`Obs\` (of length \`Outputs\`). All values are 32-bit floats, \`-1\`…\`1\` or \`NaN\`.
 (No predictions, and thus no iffiness about copyright.)
 `, function directLink(name = 'directLink', maxReads = 2**16, maxWrites = 2**16) {
-    // TODO: In `observers.js`, react to `reactToObserver(stream, result)`: if this is present, injected code must the result as an array slot, and send that JSON. And read that array on this side, and call all these funcs.
     // TODO: In `observer`:
     //   TODO: Send a message to `inject` ('directLinkAct'-port), containing base64 actions.
     //     TODO: If `chrome`, use its messaging; else simply call `window.directLinkAct` if defined.
@@ -890,8 +903,8 @@ In a page, \`directLink(PageAgent, Inputs = 0, Outputs = 0)\` will return \`true
     //     TODO: Listen to 'directLinkObs' in-page messages, by setting local base64 obs.
     //   TODO: In-page, post a 'directLinkAct' message, with the local base64 acts.
     //   TODO: Return local base64 obs.
-    // TODO: In `reactToObserver(stream, result)`, which we definitely have:
-    //   TODO: `stream.resize`, adding directLink-actions size delta to stream.writes.
+    // TODO: In `reactToObserver(stream, result)`:
+    //   TODO: `stream.resize`, adding directLink-actions size delta to stream.writes. (Unless the size is egregious.)
     // TODO: `priority:-999999999`
     // TODO: In `init`: set `stream.IOArraySizeReserve` to `Math.max(maxReads, maxWrites)`.
     // TODO: Test that direct links work.

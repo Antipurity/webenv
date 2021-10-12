@@ -2,11 +2,12 @@
 
 
 
-exports.compileSentJS = async function compileSentJS(staticArgs, items, prelude = '') {
+exports.compileSentJS = async function compileSentJS(staticArgs, items, prelude = '', postlude = '') {
     // Compiles items (`…, [thereFunc, ...sendArgs], …`) into `[sendFunc, receiveFunc]`.
     //   This handles both variables and constants, and merges receivers when they have the same body.
     //   All sent args must be JSON-serializable. And, no infinite loops.
     //   `staticArgs` is a Map from items to strings of args that go before sent args.
+    //     `prelude` is the code that runs on init; `postlude` is the function that accepts the array of results.
     //   `thereFunc` can be a string or a JS function (turned into a string).
     //     Called as `thereFunc(...staticArgs, ...sentArgs)`.
     //   `sendArgs` can be either `data` or `(...args)=>Promise<data>`.
@@ -38,7 +39,7 @@ exports.compileSentJS = async function compileSentJS(staticArgs, items, prelude 
         const st = staticArgs && staticArgs.get(item)
         receive.push(`received[${i}] = RCV.F${i}(${st ? st+',' : ''}${args.join(',')})`)
     }
-    receive.push(`return Promise.all(received)`)
+    receive.push(`return Promise.all(received)${postlude ? '.then('+postlude+')' : ''}`)
     if (constStringToIndex.size) {
         const constStrings = []
         constStringToIndex.forEach((i,str) => constStrings[i] = str)
