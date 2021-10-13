@@ -8,8 +8,6 @@ This document outlines what still needs to be done to reach MVP state (or the "r
         - Code:
             - Request access to `*://*/*` in `manifest.json`'s `permissions`.
             - Design a web page that connects to a remote port to be controlled.
-    - Make the Capture extension usable by humans.
-        - No-Puppeteer `directScore`, which reports null or the avg-score-this-frame (number) or URL-changed-events (string, 3 times to kinda ensure sending, then with .1% probability on NaN frames) in JSON, and the other side uses that info to normalize score and set `obs[0]`. (This way, data about avg scores cannot be leaked.)
 
 - Make the Python example production-ready:
     - Save + load, checking that all unchangeable hyperparams are the same; also have a list of hparams that can change, such as the learning rate. Ask the user if they want to warm-start from the previous checkpoint if changed. (No tracing: batch size could pick up the slack.) ([Should be very easy.](https://pytorch.org/tutorials/beginner/saving_loading_models.html))
@@ -34,6 +32,7 @@ With that, this really will be all I can do. Besides, who would ever be impresse
 - Logo, for the extension, and for remembering.
 
 - Communication:
+    - Make `webenv.directScore` hash URLs on client-side, to reduce privacy concerns.
     - Replace Web Socket communication with WebRTC.
     - Compression.
 

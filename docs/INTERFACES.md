@@ -108,36 +108,23 @@ In a page, `directLink(PageAgent, Inputs = 0, Outputs = 0)` will return `true` i
 
 ```js
 webenv.directScore()
-webenv.directScore(hidden=false, maxHorizon=100000, maxUrls=1000000, scoreFile='', saveInterval=300, name='directScore')
+webenv.directScore(hidden=false, store={}, maxHorizon=100000, name='directScore')
 ```
 
-Exposes a function that allows web pages to rate the agent's performance with a number, the higher the better.
+Exposes a function that allows web pages to rate the agent's performance with a number, the higher the better: `typeof directScore=='function' && directScore(x)`.
 
-The agents can access the normalized-to-`-1`…`1` `obs[0]` unless `hidden`, and model & maximize it. (Normalized so that there is no preference for pages, only in-page performance. And to be in a sane range.)
+The agents can access the normalized-to-`-1`…`1` `obs[0]` unless `hidden`, and model & maximize it. (Normalized so that there is no preference among pages, only for in-page performance. And to be in a sane range.)
 
-Please create web pages that use `typeof directScore!=''+void 0 && directScore(x)`, if applicable.
-
-To view the latest improvement (the running average of normalized scores), access `env=webenv.init(…),  env.score.ALL[1]` in a WebEnv instance.
+SHA-256 hashes of URLs are reported to the server (for normalization), for as much privacy as possible.
 
 Args:
 - `hidden`: if `false`, exposes 1 number to the agent at the beginning: the average score since the last frame, or `NaN`.
 - `maxHorizon`: approximately how many most-recent samples to average over.
-- `maxUrls`: how many statistics of reward streams to remember. No infinite memory allocation.
-- `scoreFile`, for example, `'scores.json'`: the file to save per-page scores to.
-- `saveInterval`: how often to save scores (and limit URL count), in seconds.
-- `name`: the name of the exposed-to-pages function.
-
-```js
-webenv.fetchSlice()
-```
-
-This replaces a dataset server for `file:` pages, for convenience.
-
-This exposes the `_fetchLocalFileSlice` function; see [`/tools/data/fetchSlice.js` for the function `fetchSlice(url, start = 0, end = null)`](../tools/data/fetchSlice.js) that dataset pages should use.
-
-Reading the whole dataset into memory is often unfeasible, so, slicing is needed.
-
-Some datasets have a fixed sample size, some separate their samples with newlines. Periodically fetch big slices and handle what you have.
+- `store`: the database of URL→momentums.
+    - It is either `{ scoreFile='', saveInterval=300, maxUrls=1000000 }` for simple JSON-saving every 300 seconds, or
+    - exposes the interface `{ get(k)→v, set(k, v→v), open(), close() }`.
+    - (If you run many WebEnv instances, then you need one explicit database here.)
+- name`: the name of the exposed-to-pages function.
 
 # Batch size
 
@@ -395,6 +382,18 @@ Some DOM-aware image augmentations: random [transforms](https://developer.mozill
 `transition` is the max duration of smooth transitions in seconds.
 
 (This makes every frame open-ended, since augmentations can happen at any time. Losses that average outcomes would blur all predictions a little; plausibility-maximizing losses would not.)
+
+```js
+webenv.fetchSlice()
+```
+
+This replaces a dataset server for `file:` pages, for convenience. Puppeteer-only.
+
+This exposes the `_fetchLocalFileSlice` function; see [`/tools/data/fetchSlice.js` for the function `fetchSlice(url, start = 0, end = null)`](../tools/data/fetchSlice.js) that dataset pages should use.
+
+Reading the whole dataset into memory is often unfeasible, so, slicing is needed.
+
+Some datasets have a fixed sample size, some separate their samples with newlines. Periodically fetch big slices and handle what you have.
 
 # Defaults
 

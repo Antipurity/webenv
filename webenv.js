@@ -916,8 +916,7 @@ if (!window.${name}) {
             const r = ag2.reduce((v,a) => v + a.obs, 0), w = ag2.reduce((v,a) => v + a.act, 0)
             obs = window.${name}.obs = new Float32Array(r), act = window.${name}.act = new Float32Array(w)
         }
-        const evt2 = new CustomEvent('_directLinkObs', { detail: act.length+' '+btoa(toBinStr(new Uint8Array(obs.buffer, obs.byteOffset, obs.byteLength))) })
-        document.dispatchEvent(evt2)
+        document.dispatchEvent(new CustomEvent('_directLinkObs', { detail: act.length+' '+btoa(toBinStr(new Uint8Array(obs.buffer, obs.byteOffset, obs.byteLength))) }))
     })
     function fromBinStr(s, into) {
         const b = new Uint8Array(into.buffer, into.byteOffset, into.byteLength)
@@ -1023,8 +1022,7 @@ if (!window.${name}) {
                 injLinks.inited = true
             }
             // Post actions.
-            const evt = new CustomEvent('_directLinkAct', { detail:window._directLinkAct.a64 })
-            document.dispatchEvent(evt)
+            document.dispatchEvent(new CustomEvent('_directLinkAct', { detail:window._directLinkAct.a64 }))
             try {
                 return window._directLinkAct.obsMsg || ''
             } catch (err) { console.error(err) }
@@ -1899,91 +1897,143 @@ Some DOM-aware image augmentations: random transforms and filters.
 
 
 
-exports.directScore = docs(`\`webenv.directScore(hidden=false, maxHorizon=100000, maxUrls=1000000, scoreFile='', saveInterval=300, name='directScore')\`
+exports.directScore = docs(`\`webenv.directScore(hidden=false, store={}, maxHorizon=100000, name='directScore')\`
 
-Exposes a function that allows web pages to rate the agent's performance with a number, the higher the better.
+Exposes a function that allows web pages to rate the agent's performance with a number, the higher the better: \`typeof directScore=='function' && directScore(x)\`.
 
-The agents can access the normalized-to-\`-1\`…\`1\` \`obs[0]\` unless \`hidden\`, and model & maximize it. (Normalized so that there is no preference for pages, only in-page performance. And to be in a sane range.)
+The agents can access the normalized-to-\`-1\`…\`1\` \`obs[0]\` unless \`hidden\`, and model & maximize it. (Normalized so that there is no preference among pages, only for in-page performance. And to be in a sane range.)
 
-Please create web pages that use \`typeof directScore!=''+void 0 && directScore(x)\`, if applicable.
-
-To view the latest improvement (the running average of normalized scores), access \`env=webenv.init(…),  env.score.ALL[1]\` in a WebEnv instance.
+SHA-256 hashes of URLs are reported to the server (for normalization), for as much privacy as possible.
 
 Args:
 - \`hidden\`: if \`false\`, exposes 1 number to the agent at the beginning: the average score since the last frame, or \`NaN\`.
 - \`maxHorizon\`: approximately how many most-recent samples to average over.
-- \`maxUrls\`: how many statistics of reward streams to remember. No infinite memory allocation.
-- \`scoreFile\`, for example, \`'scores.json'\`: the file to save per-page scores to.
-- \`saveInterval\`: how often to save scores (and limit URL count), in seconds.
+- \`store\`: the database of URL→momentums.
+    - It is either \`{ scoreFile='', saveInterval=300, maxUrls=1000000 }\` for simple JSON-saving every 300 seconds, or
+    - exposes the interface \`{ get(k)→v, set(k, v→v), open(), close() }\`.
+    - (If you run many WebEnv instances, then you need one explicit database here.)
 - \`name\`: the name of the exposed-to-pages function.
-`, async function(hidden=false, maxHorizon=100000, maxUrls=1000000, scoreFile='', saveInterval=300, name='directScore') {
+`, async function directScore(hidden=false, store={}, maxHorizon=100000, name='directScore') {
     const maxRawMagnitude = 1e9
-    const fs = require('fs/promises')
-    let data = Object.create(null) // Running-average scores, both normalized-total ("ALL") and per-URL.
-    if (scoreFile)
-        try { data = JSON.parse(await fs.readFile(scoreFile, { encoding:'utf8' })) }
-        catch (err) {}
-    let timeoutID = null, active = false
-    let scoreSum = 0, scoreNum = 0, updated = false
+    if (!store || !store.get || !store.set || !store.open || !store.close) store = jsonSaving(store || {})
+    store = await store
+    const key = directScore.key || (directScore.key = Symbol('directScore'))
+    const script = `
+if (!window.${name}) window.${name} = function(score) {
+    if (typeof score != 'number' || score!==score) return false
+    return document.dispatchEvent(new CustomEvent('_directScore', { detail:score })), true
+}`
     return {
         priority: 999999999,
         reads: hidden ? undefined : 1,
+        async reactToObserver(stream, result) {
+            const spot = Spot(stream)
+            if (typeof result == 'string' && result.length < 128) {
+                spot.url = result
+            } else if (typeof result == 'number' && result === result) {
+                const u = spot.url || ''
+                const v = Math.max(-maxRawMagnitude, Math.min(result, maxRawMagnitude))
+                const norm = signalNormalize(v, await store.get(u))
+                // Update the page's reward-stream statistics, and cross-page improvement.
+                store.set(u, mom => signalUpdate(v, mom, maxHorizon))
+                store.set('ALL', mom => signalUpdate(norm, mom, maxHorizon))
+                spot.score = norm
+            }
+        },
+        observer: [function(media, io, end) {
+            return end()
+        }],
+        inject: [function inj(script) {
+            if (!inj.did) {
+                // Inject a <script>, and listen for its executions.
+                const scr = document.createElement('script')
+                scr.textContent = script
+                document.documentElement.append(scr)
+                setTimeout(() => scr.remove(), 30000) // Removing immediately seems to not be 100% stable.
+                inj.sum = inj.num = 0
+                if (window._directScoreListener) document.removeEventListener('_directScore', window._directScoreListener)
+                document.addEventListener('_directScore', window._directScoreListener = evt => {
+                    if (typeof evt.detail == 'number') inj.sum += evt.detail, ++inj.num
+                })
+                inj.init = 0
+                inj.did = true
+            }
+            if (inj.init++ < 5) return url() // On navigations, report URL. (Many times, just in case communication is unreliable.)
+            if (!inj.num) {
+                if (Math.random() < .001) return url()
+                return null
+            }
+            try { return inj.sum / inj.num }
+            finally { inj.sum = inj.num = 0 }
+            async function url(s = ''+location.href) {
+                if (s.indexOf('#') >= 0) s = s.slice(0, s.indexOf('#'))
+                if (typeof crypto != ''+void 0) { // Hash, so that server-side can't *easily* know real URLs.
+                    const b = new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode('url is ' + s + ' so yeah')))
+                    let bin = '';  for (let i=0; i < b.length; ++i) bin += String.fromCharCode(b[i])
+                    return btoa(bin)
+                } else { // Really limit URL length. Collisions are not that important.
+                    s = s.slice(0,128)
+                    if (JSON.stringify(s).length > 256) s = s.slice(0,32)
+                    return s
+                }
+            }
+        }, script],
         async read(stream, obs, end) {
-            if (!stream.page) return
-            const v = scoreSum / scoreNum // NaN if no scores since the last frame.
-            scoreSum = scoreNum = 0
-            const u = stream.page.url()
-
-            const norm = signalNormalize(v, data[u])
-            if (v === v) // Update the page's reward-stream statistics, and cross-page improvement.
-                data[u] = signalUpdate(v, data[u], maxHorizon),
-                data.ALL = signalUpdate(norm, data.ALL, maxHorizon)
+            const spot = Spot(stream)
+            const norm = +spot.score
             if (!hidden) await end(), obs[0] = norm
         },
-        init(stream) {
-            stream.score = data
-            if (timeoutID === null)
-                active = true, timeoutID = setTimeout(saveData, saveInterval*1000)
-            if (!stream.page) return
-            return stream.page.exposeFunction(name, async score => {
-                if (typeof score != 'number' || score !== score) return false
-                scoreSum += Math.max(-maxRawMagnitude, Math.min(score, maxRawMagnitude))
-                ++scoreNum
-                return updated = true
-            })
-        },
-        deinit(stream) {
-            return active = false, saveData(true)
-        },
+        init(stream) { store.open() },
+        deinit(stream) { store.close() },
         visualize: !hidden ? [function(elem, obs, pred) {
             elem.textContent = `Score: ${obs[0].toFixed(2)} real | ${pred[0].toFixed(2)} predicted`
             elem.style.fontFamily = 'monospace, monospace'
         }] : undefined,
     }
-    async function saveData(stop = false) {
-        limitStreamCount()
-        const prevID = timeoutID
-        timeoutID = null
-        if (scoreFile && updated && prevID != null) {
-            updated = false
-            if (n) await fs.writeFile(scoreFile, JSON.stringify(data), { encoding:'utf8' })
+    function Spot(o) { return o[key] || (o[key] = Object.create(null)) }
+    async function jsonSaving({ scoreFile='', saveInterval=300, maxUrls=1000000 }) {
+        const fs = require('fs/promises')
+        let data = Object.create(null) // Running-average scores.
+        if (scoreFile)
+            try { data = JSON.parse(await fs.readFile(scoreFile, { encoding:'utf8' })) }
+            catch (err) {}
+        let timeoutID = null, active = 0, updated = false
+        return {
+            open() { !active++ && (timeoutID = setTimeout(saveData, saveInterval*1000)) },
+            close() { !--active && saveData(true) },
+            get(k) {
+                return data[k]
+            },
+            set(k, update) {
+                updated = true
+                data[k] = update(data[k])
+            },
         }
-        if (active && !stop) timeoutID = setTimeout(saveData, saveInterval*1000)
-        if (stop) clearTimeout(prevID)
-    }
-    function limitStreamCount() {
-        const size = Object.keys(data).length
-        const delta = size - (maxUrls+1)
-        if (delta <= 0) return
-        const keys = Object.keys(data)
-        for (let i = 0; i < delta; ++i) {
-            let u = null, pop = 0
-            for (let j = 0; j < 3; ++j) { // Pick some unpopular stream.
-                const u2 = keys[Math.random() * keys.length | 0]
-                if (!data[u2] || u2 === 'ALL') continue
-                if (u == null || data[u2][0] < pop) u = u2, pop = data[u2][0]
+        async function saveData(stop = false) {
+            limitURLCount()
+            const prevID = timeoutID
+            timeoutID = null
+            if (scoreFile && updated && prevID != null) {
+                updated = false
+                if (n) await fs.writeFile(scoreFile, JSON.stringify(data), { encoding:'utf8' })
             }
-            if (u != null) delete data[u] // And kill it.
+            if (stop) clearTimeout(prevID)
+            else timeoutID = setTimeout(saveData, saveInterval*1000)
+        }
+        function limitURLCount() {
+            const size = Object.keys(data).length
+            const delta = size - (maxUrls+1)
+            if (delta <= 0) return
+            const keys = Object.keys(data)
+            for (let i = 0; i < delta; ++i) {
+                let u = null, pop = 0
+                for (let j = 0; j < 3; ++j) { // Try to pick some unpopular URL.
+                    const u2 = keys[Math.random() * keys.length | 0]
+                    if (!data[u2] || u2 === 'ALL') continue
+                    if (u == null || data[u2][0] < pop) u = u2, pop = data[u2][0]
+                }
+                if (u != null) delete data[u] // And kill it.
+            }
         }
     }
 })
@@ -1991,7 +2041,7 @@ Args:
 
 
 exports.fetchSlice = docs(`\`webenv.fetchSlice()\`
-This replaces a dataset server for \`file:\` pages, for convenience.
+This replaces a dataset server for \`file:\` pages, for convenience. Puppeteer-only.
 
 Pages should wrap the uses of the exposed \`_fetchLocalFileSlice\` in the following:
 \`\`\`js
@@ -2049,7 +2099,7 @@ async function fetchSlice(url, start = 0, end = null) {
                 if (end !== null && end < start)
                     throw new Error('End must be after start')
                 if (end !== null && (end - start > 20 * 2**20))
-                    throw new Error('Max slice size is 20MB')
+                    throw new Error('Max slice size is 20MB, so slice up your slice')
                 const resolved = new URL(url, stream.page.url())
                 const buf = Buffer.alloc(end - start)
                 const file = await fs.open(resolved, 'r')
