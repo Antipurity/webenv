@@ -9,7 +9,6 @@ This document outlines what still needs to be done to reach MVP state (or the "r
             - Request access to `*://*/*` in `manifest.json`'s `permissions`.
             - Design a web page that connects to a remote port to be controlled.
     - Make the Capture extension usable by humans.
-        - In-ext `directLink`, with injected code instead of Puppeteer functions.
         - No-Puppeteer `directScore`, which reports null or the avg-score-this-frame (number) or URL-changed-events (string, 3 times to kinda ensure sending, then with .1% probability on NaN frames) in JSON, and the other side uses that info to normalize score and set `obs[0]`. (This way, data about avg scores cannot be leaked.)
 
 - Make the Python example production-ready:

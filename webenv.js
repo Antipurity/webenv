@@ -882,11 +882,15 @@ In a page, \`directLink(PageAgent, Inputs = 0, Outputs = 0)\` will return \`true
 `, function directLink(name = 'directLink', maxReads = 2**16, maxWrites = 2**16) {
     // This goes for low-latency over reliability.
     //   Expect some frames to have extra obs/act (reads/writes) updates, or skip updates.
+
+    // Test: `directLink((a,o) => console.log('step', a[0]) || (Math.random()>.001 ? (o[0]=.2,true) : false),1,1)`
+    //   You might notice that `a[0]` is `0` for a few steps.
+    // Test: `directLink(a => console.log('A', a[0]) || (Math.random()>.01 ? true : false),1), directLink(a => console.log('B', a[0]) || (Math.random()>.01 ? true : false),1)`
     const script = `
 if (!window.${name}) {
     window.${name} = function link(agent, inputs=0, outputs=0) {
         if (typeof agent != 'function') throw new Error('Not a func')
-        if (typeof ins != 'number' || typeof outs != 'number') throw new Error('Not a number')
+        if (typeof inputs != 'number' || typeof outputs != 'number') throw new Error('Not a number')
         if (!link.obs) link.obs = new Float32Array(0)
         if (!link.act) link.act = new Float32Array(0)
         if (link.obs.length + outputs > ${maxReads} || link.act.length + inputs > ${maxWrites}) return false
@@ -894,25 +898,26 @@ if (!window.${name}) {
         if (inputs) link.act = new Float32Array(link.act.length + inputs)
         return (link.agents || (link.agents = [])).push({ agent, act:inputs, obs:outputs }), true
     }
-    document.addEventListener('_directLinkAct', async function step(a64) { // Get acts, call agents, return obs.
-        if (!window.${name}.agents || !window.${name}.agents.length) return
-        const ag = window.${name}.agents, act = window.${name}.act, obs = window.${name}.obs
-        fromBinStr(atob(a64), act)
-        let res = new Array(ag.length).fill(), promises = false
-        const abb = act.buffer, abo = act.byteOffset, obb = obs.buffer, obo = obs.byteOffset
-        for (let i=0, r=0, w=0; i < ag.length; ++i) {
-            res[i] = ag[i](new Float32Array(abb, abo+w, ag[i].act*4), new Float32Array(obb, obo+r, ag[i].obs*4))
-            if (res[i] instanceof Promise) promises = true
-            r += ag[i].obs, w += ag[i].act
+    document.addEventListener('_directLinkAct', async function step(evt) { // Get acts, call agents, return obs.
+        if (typeof evt.detail != 'string' || !window.${name}.agents || !window.${name}.agents.length) return
+        let ag = window.${name}.agents, act = window.${name}.act, obs = window.${name}.obs
+        fromBinStr(atob(evt.detail), act)
+        let res = new Array(ag.length).fill()
+        if (!step.blackList) step.blackList = new WeakSet
+        for (let i=0, r=0, w=0; i < ag.length; r += ag[i].obs, w += ag[i].act, ++i)
+            try {
+                res[i] = !step.blackList.has(ag[i]) && ag[i].agent(act.subarray(w, w+ag[i].act), obs.subarray(r, r+ag[i].obs))
+            } catch (err) { console.error(err), step.blackList.add(ag[i]) }
+        for (let i=0; i < ag.length; ++i)
+            try { res[i] = res[i] instanceof Promise ? await res[i] : res[i];  res[i] !== true && step.blackList.add(ag[i]) }
+            catch (err) { console.error(err), step.blackList.add(ag[i]) }
+        if (ag.some(x => step.blackList.has(x))) {
+            const ag2 = window.${name}.agents = ag.filter(x => !step.blackList.has(x))
+            const r = ag2.reduce((v,a) => v + a.obs, 0), w = ag2.reduce((v,a) => v + a.act, 0)
+            obs = window.${name}.obs = new Float32Array(r), act = window.${name}.act = new Float32Array(w)
         }
-        if (promises) res = await Promise.all(res)
-        if (res.some(x => x !== true)) {
-            const ag2 = window.${name}.agents = ag.filter((a,i) => res[i] === true)
-            const r = ag2.reduce((a,v) => v + a.obs, 0), w = ag2.reduce((a,v) => v + a.act, 0)
-            window.${name}.obs = new Float32Array(r), window.${name}.act = new Float32Array(w)
-        }
-        const evt = new CustomEvent()
-        document.dispatchEvent(evt, { detail:btoa(toBinStr(new Uint8Array(obs.buffer, obs.byteOffset, obs.byteLength))) })
+        const evt2 = new CustomEvent('_directLinkObs', { detail: act.length+' '+btoa(toBinStr(new Uint8Array(obs.buffer, obs.byteOffset, obs.byteLength))) })
+        document.dispatchEvent(evt2)
     })
     function fromBinStr(s, into) {
         const b = new Uint8Array(into.buffer, into.byteOffset, into.byteLength)
@@ -927,23 +932,24 @@ if (!window.${name}) {
     }
 }`
     return {
-        init(stream) {
-            if (stream._directLinkAct !== undefined) throw new Error('Cannot directLink twice')
-            stream._directLinkObs = stream._directLinkAct = 0, stream.IOArraySizeReserve += Math.max(maxReads, maxWrites)
+        reads:'rest',
+        writes:'rest',
+        init(s) {
+            if (s._directLinkAct !== undefined) s.IOArraySizeReserve = 0 // For relaunching.
+            s._directLinkObs = s._directLinkAct = 0, s.IOArraySizeReserve += Math.max(maxReads, maxWrites)
         },
-        deinit(stream) { stream._directLinkObs = stream._directLinkAct = undefined, stream.IOArraySizeReserve -= Math.max(maxReads, maxWrites) },
+        deinit(s) { s._directLinkObs = s._directLinkAct = undefined, s.IOArraySizeReserve -= Math.max(maxReads, maxWrites) },
         priority: -999999999,
         reactToObserver(stream, result) {
             // Resize observations + actions.
-            if (!Array.isArray(result) || result.length != 2) return
-            const [obsLen, actLen] = result
+            let [obsLen, actLen] = Array.isArray(result) && result.length == 2 ? result : [0,0]
             if (typeof obsLen != 'number' || obsLen !== obsLen>>>0) return
             if (typeof actLen != 'number' || actLen !== actLen>>>0) return
             obsLen = Math.min(obsLen, maxReads), actLen = Math.min(actLen, maxWrites)
             stream.resize(stream.reads + obsLen - stream._directLinkObs, stream.writes + actLen - stream._directLinkAct)
             stream._directLinkObs = obsLen, stream._directLinkAct = actLen
         },
-        // Lots of data format conversions below. But, eh, not nearly as bad for the WebEnv server as doing it on-server.
+        // Lots of data format conversions below. But, eh, not nearly as bad for the WebEnv server as doing them on-server.
         observer: [async function observeLinks(media, {obs,pred,act}, end) {
             // Send the content script our actions.
             if (!(act instanceof Float32Array)) throw new Error('Expected f32')
@@ -962,21 +968,33 @@ if (!window.${name}) {
                     observeLinks.listening = true
                 }
                 // Send actions as a message. (port.sender.frameId could have helped distinguish <iframe>s.)
-                window._directLinkPorts.forEach(port => port.sendMessage(act64))
+                window._directLinkPorts.forEach(port => port.postMessage(act64))
             } else if (typeof window._directLinkAct == 'function')
                 window._directLinkAct(act64)
 
             // Receive our observations from the content script.
-            const result = (await end()).split(' ')
+            const result = await end()
+            if (typeof result != 'string') return resizeObs(0)
+            const res = result.split(' ')
             try {
-                const actLen = +result[0], newObs2 = fromBinStr(atob(result[1]), obs)
-                return [newObs2.length, actLen]
-            } catch (err) { console.error(err) }
+                const actLen = +res[0] || 0, obsLen = fromBinStr(atob(res[1] || ''), obs)
+                resizeObs(obsLen)
+                return [obsLen, actLen]
+            } catch (err) { typeof PRINT == 'function' && PRINT(err.stack), resizeObs(0) }
+            function resizeObs(obsLen) {
+                if (!RCV.obsLen) RCV.obsLen = 0
+                if (RCV.obsLen !== obsLen) { // Resize extension's observations ourselves.
+                    const L = RCV.obs.length + obsLen - RCV.obsLen, old = RCV.obs.subarray(0, L)
+                    RCV.obs = new RCV.obs.constructor(L)
+                    RCV.obs.set(old)
+                    RCV.obsLen = obsLen
+                }
+            }
             function fromBinStr(s, into) {
                 const b = new Uint8Array(into.buffer, into.byteOffset, into.byteLength)
                 const end = s.length - (s.length % into.BYTES_PER_ELEMENT)
                 for (let i = 0; i < b.length && i < end; ++i) b[i] = s.charCodeAt(i)
-                return into
+                return s.length / into.BYTES_PER_ELEMENT | 0
             }
             function toBinStr(b) {
                 let s = '', d = Object.create(null)
@@ -989,14 +1007,18 @@ if (!window.${name}) {
                 // Do stuff on init: inject <script> for JS interaction, and set up port/event listeners.
                 const scr = document.createElement('script')
                 scr.textContent = script
-                document.documentElement.append(scr), scr.remove()
+                document.documentElement.append(scr)
+                setTimeout(() => scr.remove(), 30000) // Removing immediately seems to not be 100% stable.
                 if (!window._directLinkAct) {
-                    window._directLinkAct = function a(a64) { window.directLinkAct.a64 = a64 }
-                    document.addEventListener('_directLinkObs', o64 => window.directLinkAct.o64 = o64)
+                    window._directLinkAct = function a(a64) { window._directLinkAct.a64 = a64 }
+                    document.addEventListener('_directLinkObs', evt => {
+                        if (typeof evt.detail != 'string') return
+                        window._directLinkAct.obsMsg = evt.detail !== '0 ' ? evt.detail : undefined // `${actLen} ${obs64}`
+                    })
                 }
                 if (typeof chrome != ''+void 0) {
                     if (window._directLinkPort) window._directLinkPort.disconnect(), window._directLinkPort = undefined
-                    chrome.runtime.connect({ name:'directLinkAct' }, port => (window._directLinkPort = port).onMessage.addListener(window._directLinkAct))
+                    ;(window._directLinkPort = chrome.runtime.connect({ name:'directLinkAct' })).onMessage.addListener(window._directLinkAct)
                 }
                 injLinks.inited = true
             }
@@ -1004,124 +1026,9 @@ if (!window.${name}) {
             const evt = new CustomEvent('_directLinkAct', { detail:window._directLinkAct.a64 })
             document.dispatchEvent(evt)
             try {
-                const actLen = atob(window._directLinkAct.a64).length // Peak inefficiency.
-                return actLen + ' ' + (window._directLinkAct.o64 || '')
+                return window._directLinkAct.obsMsg || ''
             } catch (err) { console.error(err) }
         }, script],
-    }
-    // TODO: Test that direct links work.
-
-    // TODO: Remove what's below.
-    // Data communication is not quite as optimized as it could be,
-    //   since this sends/receives float32 instead of int16.
-    return {
-        init(stream) {
-            stream.page.evaluateOnNewDocument((name, maxReads, maxWrites) => {
-                const agents = {}
-                let reads = 0, writes = 0
-                self[name] = directLink
-                directLink.evalAgent = (agentId, act, actBuf, obsBuf, toBinaryString, fromBinaryString) => {
-                    fromBinaryString(atob(act), actBuf)
-                    let result
-                    try { result = agents[agentId].call(null, actBuf, obsBuf) }
-                    catch (err) { document.body.append(err.message, document.createElement('br'), err.stack) }
-                    if (result !== true) return delete agents[agentId], null
-                    return btoa(toBinaryString(obsBuf))
-                }
-                function directLink(agent, ins = 0, outs = 0) {
-                    if (typeof agent != 'function') throw new Error('Not a func')
-                    if (typeof ins != 'number' || typeof outs != 'number') throw new Error('Not a number')
-                    if (reads + outs > maxReads) return false
-                    if (writes + ins > maxWrites) return false
-                    let id = 0
-                    while (agents[id]) ++id
-                    agents[id] = agent, reads += outs, writes += ins
-                    _directLinkRegister(id, ins, outs)
-                    return true
-                }
-            }, name, maxReads, maxWrites)
-            let agentCount = 0, reads = 0, writes = 0
-            return stream.page.exposeFunction('_directLinkRegister', async (agentId, ins = 0, outs = 0) => {
-                if (typeof agentId != 'number') return false
-                if (typeof ins != 'number' || typeof outs != 'number') return false
-                if (reads + outs > maxReads) return false
-                if (writes + ins > maxWrites) return false
-                ++agentCount, reads += outs, writes += ins
-                let continues = true, initialized = false
-                const p = stream.page
-                const doHandle = await p.evaluateHandle(name => self[name].evalAgent, name)
-                const actHandle = await p.evaluateHandle(sz => new Float32Array(sz), ins)
-                const obsHandle = await p.evaluateHandle(sz => new Float32Array(sz), outs)
-                const toBinaryStringHandle = await p.evaluateHandle('('+toBinaryString+')')
-                const fromBinaryStringHandle = await p.evaluateHandle('('+fromBinaryString+')')
-                await stream.relink(stream.interfaces, {
-                    queue:[], // This can't be a real word.
-                    priority:-1000,
-                    reads:outs,
-                    writes:ins,
-                    init(stream) { initialized && (continues = false), initialized = true },
-                    async read(stream, obs, end) {
-                        if (!continues) return
-                        if (!this.queue.length) return
-                        const obsSource = this.queue.shift()
-                        await end()
-                        overwriteArray(obs, obsSource)
-                    },
-                    agent(stream, {obs, pred, act}) { return continues }, // Ensure that steps always happen.
-                    async write(stream, pred, act) {
-                        if (stream.page !== stream.page) continues = false
-                        if (!continues) return
-                        if (!stream.page || stream.page.isClosed()) return
-                        // Call the page-agent with our action, to get observation.
-                        const actBase64 = Buffer.from(act.buffer, act.byteOffset, act.byteLength).toString('base64')
-                        let result
-                        try {
-                            result = await stream.page.evaluate((f, ...a) => f(...a), doHandle, agentId, actBase64, actHandle, obsHandle, toBinaryStringHandle, fromBinaryStringHandle)
-                        } catch (err) {}
-                        if (typeof result != 'string')
-                            return continues = false
-                        const obsBuf = Buffer.from(result, 'base64')
-                        const obs = new Observations(obsBuf.buffer, obsBuf.byteOffset, obsBuf.byteLength / Observations.BYTES_PER_ELEMENT | 0)
-                        for (let i = 0; i < obs.length; ++i)
-                            obs[i] = obs[i] !== obs[i] ? NaN : Math.max(-1, Math.min(obs[i], 1))
-                        this.queue.push(obs)
-                    },
-                    deinit(stream) {
-                        if (!continues) return
-                        try {
-                            doHandle.dispose()
-                            actHandle.dispose()
-                            obsHandle.dispose()
-                            toBinaryStringHandle.dispose()
-                            fromBinaryStringHandle.dispose()
-                        } catch (err) {}
-                        this.queue.length = 0
-                    },
-                })
-                return true
-            })
-        },
-    }
-    // We communicate via base64, to deal with JSON de/serialization.
-    // No endianness conversions, because it's all on the same processor.
-    function toBinaryString(buf) {
-        // A Blob is faster than this, for big enough strings.
-        if (!(buf instanceof Uint8Array))
-            buf = new Uint8Array(buf.buffer, buf.byteOffset, buf.byteLength)
-        const tmp = toBinaryString.tmp || (toBinaryString.tmp = [])
-        tmp.length = buf.length
-        for (let i = 0; i < buf.length; ++i)
-            tmp[i] = String.fromCharCode(buf[i])
-        return tmp.join('')
-    }
-    function fromBinaryString(str, into) {
-        const Format = into.constructor
-        const buf = Format === Uint8Array ? into : new Uint8Array(into.buffer, into.byteOffset, into.byteLength)
-        if (str.length !== buf.length) throw new Error('Buffer and binary-string lengths mismatch')
-        for (let i = 0; i < buf.length; ++i)
-            buf[i] = str.charCodeAt(i)
-        if (Format === Uint8Array) return buf
-        return new Format(buf.buffer, buf.byteOffset, buf.length / Format.BYTES_PER_ELEMENT | 0)
     }
 })
 
@@ -2295,6 +2202,7 @@ To write new interfaces, look at the pre-existing interfaces.
         const p = this.relink(...oldInters)
 
         // Set the viewport.
+        await Promise.resolve()
         const targetId = (await this.cdp.send('Target.getTargets')).targetInfos[0].targetId
         windowId = (await this.cdp.send('Browser.getWindowForTarget', {targetId})).windowId
         await resizeWindow(this)

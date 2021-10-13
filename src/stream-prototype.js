@@ -253,23 +253,22 @@ The result is a promise for the environment, which is an object with:
         // Resize observations/actions. Preserve previous data if possible.
         const obsFloats  = chR ? new Observations(reads).fill(NaN) : this._obsFloats
         const predFloats = chR ? new Observations(reads).fill(NaN) : this._predFloats
-        const actFloats  = chW ? new Observations(writes).fill(NaN) : this._actFloats
+        const actFloats  = chW ? new Observations(writes).fill(0) : this._actFloats
         chR && overwriteArray(obsFloats, this._obsFloats)
         chR && overwriteArray(predFloats, this._predFloats)
         chW && overwriteArray(actFloats, this._actFloats)
 
         // Pre-compute observation/action slices.
-        const bpe = Observations.BYTES_PER_ELEMENT
         const _ = undefined
         const views = new Array(all.length).fill()
         for (let i = 0; i < all.length; ++i) {
-            const o = all[i], last = i===all.length-1
+            const o = all[i]
             const ro = allReadOffsets[i], wo = allWriteOffsets[i]
-            const r = !last ? o.reads : _, w = !last ? o.writes : _
+            const re = o.reads !== 'rest' ? ro + o.reads : _, we = o.writes !== 'rest' ? wo + o.writes : _
             views[i] = {
-                obs:  chR ? (r !== _ ? new Observations(obsFloats.buffer,  ro * bpe, r) :  obsFloats) : this._views[i].obs,
-                pred: chR ? (r !== _ ? new Observations(predFloats.buffer, ro * bpe, r) : predFloats) : this._views[i].pred,
-                act:  chW ? (w !== _ ? new Observations(actFloats.buffer,  wo * bpe, w) :  actFloats) : this._views[i].act,
+                obs:  chR ? (o.reads  !== _ ?  obsFloats.subarray(ro, re) :  obsFloats) : this._views[i].obs,
+                pred: chR ? (o.reads  !== _ ? predFloats.subarray(ro, re) : predFloats) : this._views[i].pred,
+                act:  chW ? (o.writes !== _ ?  actFloats.subarray(wo, we) :  actFloats) : this._views[i].act,
             }
         }
 

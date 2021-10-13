@@ -33,6 +33,7 @@ Other interfaces that want this ought to define, for the 3 execution contexts (W
 - WebEnv: \`reactToObserver(stream, result)\`.
   - If this is defined, \`observer\` below should return a JSON-serializable result, as small as possible (else the data stream may close). Having \`1024\` total bytes is definitely safe. Per-frame JSON is expensive.
   - (Might want to double-check that \`result\` did come from your \`observer\` and not another one.)
+  - Log with \`console.error\`.
 - Extension: \`.observer: [(media, { obs, pred, act }, end, ...args)=>…, ...args]\`
   - Can access video/audio; cannot access the DOM.
   - Calling \`await end()\` at the end or just before writing to \`obs\` (f32 array) is MANDATORY.
@@ -41,10 +42,12 @@ Other interfaces that want this ought to define, for the 3 execution contexts (W
   - Media access:
     - \`await media.video(x,y,w,h)=>pixels\`
     - \`await media.audio(sampleN=2048, sampleRate=44100)=>samples\`
+  - Log with \`PRINT\` if present.
 - Content script: \`.inject: [(...args)=>report, ...args]\`
   - Cannot access video/audio; can access the DOM.
   - If executing in a regular web page, \`.observer\` and \`.inject\` execute in the same scope, which is also visible to page JS.
-  - Result must be JSON-serializable. It will become the result of \`await end()\` in \`.observer\` (or \`null\` on exception or timeout).
+  - Result must be JSON-serializable. It will become the result of \`await end()\` in \`.observer\` (or \`null\` on exception or timeout or before injection).
+  - Log with \`console.log\`.
 `,
     key: Symbol('observers'),
     async init(stream) {
@@ -148,13 +151,8 @@ async function readAllData(stream, ch) {
                 spot.cons = intSize === 0 ? Float32Array : intSize === 1 ? Int8Array : Int16Array
             } else {
                 if (obsLen > stream.maxIOArraySize) return ch.close()
-                const old = stream._obsFloats
                 const obs = await readFromChannel(ch, obsLen, spot.cons, spot.byteswap)
-                if (old) {
-                    const d = obs.length - old.length
-                    if (d) stream.resize(stream.reads + d, stream.writes)
-                    decodeInts(obs, old)
-                }
+                decodeInts(obs, stream._obsFloats) // No resizing here. `directLink` can fend for itself.
                 const jsonLen = await readFromChannel(ch, 1, Number, spot.byteswap)
                 if (jsonLen) {
                     if (jsonLen > stream.maxIOArraySize) return ch.close()
@@ -202,10 +200,9 @@ async function compileJS(stream) {
             const offR = stream._allReadOffsets[i], lenR = o.reads || 0
             const offW = stream._allWriteOffsets[i], lenW = o.writes || 0
             items.push(item)
-            const last = i < stream._all.length-1
-            const p = `RCV.P.subarray(${offR}, ${last ? '' : offR + lenR})`
-            const a = `RCV.A.subarray(${offW}, ${last ? '' : offW + lenW})`
-            const obs = `RCV.obs.subarray(${offR}, ${last ? '' : offR + lenR})`
+            const p = `RCV.P.subarray(${offR}, ${lenR==='rest' ? '' : offR + lenR})`
+            const a = `RCV.A.subarray(${offW}, ${lenW==='rest' ? '' : offW + lenW})`
+            const obs = `RCV.obs.subarray(${offR}, ${lenR==='rest' ? '' : offR + lenR})`
             // Injectors read injection results; all others do not have closures allocated on each step.
             const e = !Array.isArray(inj) ? `RCV.end` : `bindInjEnd(RCV.end, ${injectedParts.length})`
             staticArgs.set(item, `RCV.media,{pred:${p},act:${a},obs:${obs}},${e}`)
@@ -232,6 +229,7 @@ async function compileJS(stream) {
     staticArgs.set(injected, `RCV.end`)
     prelude.push(`function bindInjEnd(end,i) { return ()=>end().then(a=>a&&a[i]) }`)
     prelude.push(`RCV.obs=new ${Observations.name}(${stream.reads})`)
+    prelude.push(`RCV.obsEncoded=new ${cons.name}(0)`)
     // Imagine not having JS highlighting for strings, and considering such code unreadable.
     prelude.push(`RCV.media={
         stream:null, w:0, h:0, sr:0,
@@ -368,7 +366,6 @@ async function compileJS(stream) {
     }`)
     prelude.push(''+encodeInts)
     prelude.push(''+decodeInts)
-    prelude.push(`RCV.obsEncoded=new ${cons.name}(0)`)
     if (injectedParts.length) {
         // JS-`inject`ion stuff:
         //   Update the injected code on startup and page navigation (and relink).
