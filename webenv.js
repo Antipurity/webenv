@@ -869,7 +869,6 @@ Communication protocol details, simple for easy adoption:
 
 
 
-// TODO: Update docs.
 exports.directLink = docs(`\`webwenv.directLink(name = 'directLink', maxReads = 2**16, maxWrites = 2**16)\`
 Allows web pages to dynamically establish a high-bandwidth connection, via calling \`directLink\`.
 (Abusing this feature will cause agents to get very confused, as they have no way to know about format changes apart from prediction.)
@@ -881,37 +880,138 @@ In a page, \`directLink(PageAgent, Inputs = 0, Outputs = 0)\` will return \`true
 \`PageAgent(Act, Obs)\` synchronously reads \`Act\` (of length \`Inputs\`) and writes to \`Obs\` (of length \`Outputs\`). All values are 32-bit floats, \`-1\`…\`1\` or \`NaN\`.
 (No predictions, and thus no iffiness about copyright.)
 `, function directLink(name = 'directLink', maxReads = 2**16, maxWrites = 2**16) {
-    // TODO: In `observer`:
-    //   TODO: Send a message to `inject` ('directLinkAct'-port), containing base64 actions.
-    //     TODO: If `chrome`, use its messaging; else simply call `window.directLinkAct` if defined.
-    //   TODO: `await end()` to decode base64 and remember the last observations (if a string), and continually set them. (After trimming to the size limit.)
-    //   TODO: Return the directLink-actions size.
-    // TODO: In `inject`:
-    //   TODO: If we're first initializing:
-    //     TODO: Inject a <script> into the page (and immediately remove it, cause <script> is not required):
-    //       TODO: If `window.directLink` is already defined, do nothing.
-    //       TODO: Expose `directLink(agent(act,obs)=>bool, inputs=0, outputs=0)`.
-    //         TODO: directLink.agents:[…, { agent, act, obs }, …].
-    //         TODO: When called, simply add the agent at the end.
-    //       TODO: On 'directLinkAct':
-    //         TODO: Decode & remember float32 acts.
-    //         TODO: Call all agents, with slices of act/obs arrays (accumulate offsets each time).
-    //           TODO: `await` them all.
-    //           TODO: Filter out those that returned non-`true`.
-    //         TODO: Post 'directLinkObs' with base64 obs.
-    //     TODO: Listen to 'directLinkAct'-port messages, by connecting to a port and defining `window.directLinkAct`. On message, set local base64 acts.
-    //     TODO: Listen to 'directLinkObs' in-page messages, by setting local base64 obs.
-    //   TODO: In-page, post a 'directLinkAct' message, with the local base64 acts.
-    //   TODO: Return local base64 obs.
-    // TODO: In `reactToObserver(stream, result)`:
-    //   TODO: `stream.resize`, adding directLink-actions size delta to stream.writes. (Unless the size is egregious.)
-    // TODO: `priority:-999999999`
-    // TODO: In `init`: set `stream.IOArraySizeReserve` to `Math.max(maxReads, maxWrites)`.
+    // This goes for low-latency over reliability.
+    //   Expect some frames to have extra obs/act (reads/writes) updates, or skip updates.
+    const script = `
+if (!window.${name}) {
+    window.${name} = function link(agent, inputs=0, outputs=0) {
+        if (typeof agent != 'function') throw new Error('Not a func')
+        if (typeof ins != 'number' || typeof outs != 'number') throw new Error('Not a number')
+        if (!link.obs) link.obs = new Float32Array(0)
+        if (!link.act) link.act = new Float32Array(0)
+        if (link.obs.length + outputs > ${maxReads} || link.act.length + inputs > ${maxWrites}) return false
+        if (outputs) link.obs = new Float32Array(link.obs.length + outputs)
+        if (inputs) link.act = new Float32Array(link.act.length + inputs)
+        return (link.agents || (link.agents = [])).push({ agent, act:inputs, obs:outputs }), true
+    }
+    document.addEventListener('_directLinkAct', async function step(a64) { // Get acts, call agents, return obs.
+        if (!window.${name}.agents || !window.${name}.agents.length) return
+        const ag = window.${name}.agents, act = window.${name}.act, obs = window.${name}.obs
+        fromBinStr(atob(a64), act)
+        let res = new Array(ag.length).fill(), promises = false
+        const abb = act.buffer, abo = act.byteOffset, obb = obs.buffer, obo = obs.byteOffset
+        for (let i=0, r=0, w=0; i < ag.length; ++i) {
+            res[i] = ag[i](new Float32Array(abb, abo+w, ag[i].act*4), new Float32Array(obb, obo+r, ag[i].obs*4))
+            if (res[i] instanceof Promise) promises = true
+            r += ag[i].obs, w += ag[i].act
+        }
+        if (promises) res = await Promise.all(res)
+        if (res.some(x => x !== true)) {
+            const ag2 = window.${name}.agents = ag.filter((a,i) => res[i] === true)
+            const r = ag2.reduce((a,v) => v + a.obs, 0), w = ag2.reduce((a,v) => v + a.act, 0)
+            window.${name}.obs = new Float32Array(r), window.${name}.act = new Float32Array(w)
+        }
+        const evt = new CustomEvent()
+        document.dispatchEvent(evt, { detail:btoa(toBinStr(new Uint8Array(obs.buffer, obs.byteOffset, obs.byteLength))) })
+    })
+    function fromBinStr(s, into) {
+        const b = new Uint8Array(into.buffer, into.byteOffset, into.byteLength)
+        const end = s.length - (s.length % into.BYTES_PER_ELEMENT)
+        for (let i = 0; i < b.length && i < end; ++i) b[i] = s.charCodeAt(i)
+        return into
+    }
+    function toBinStr(b) {
+        let s = '', d = Object.create(null)
+        for (let i = 0; i < b.length; ++i) s += d[b[i]] || (d[b[i]] = String.fromCharCode(b[i]))
+        return s // The loop above is optimized by JS engines, so no quadratic time/space complexity.
+    }
+}`
+    return {
+        init(stream) {
+            if (stream._directLinkAct !== undefined) throw new Error('Cannot directLink twice')
+            stream._directLinkObs = stream._directLinkAct = 0, stream.IOArraySizeReserve += Math.max(maxReads, maxWrites)
+        },
+        deinit(stream) { stream._directLinkObs = stream._directLinkAct = undefined, stream.IOArraySizeReserve -= Math.max(maxReads, maxWrites) },
+        priority: -999999999,
+        reactToObserver(stream, result) {
+            // Resize observations + actions.
+            if (!Array.isArray(result) || result.length != 2) return
+            const [obsLen, actLen] = result
+            if (typeof obsLen != 'number' || obsLen !== obsLen>>>0) return
+            if (typeof actLen != 'number' || actLen !== actLen>>>0) return
+            obsLen = Math.min(obsLen, maxReads), actLen = Math.min(actLen, maxWrites)
+            stream.resize(stream.reads + obsLen - stream._directLinkObs, stream.writes + actLen - stream._directLinkAct)
+            stream._directLinkObs = obsLen, stream._directLinkAct = actLen
+        },
+        // Lots of data format conversions below. But, eh, not nearly as bad for the WebEnv server as doing it on-server.
+        observer: [async function observeLinks(media, {obs,pred,act}, end) {
+            // Send the content script our actions.
+            if (!(act instanceof Float32Array)) throw new Error('Expected f32')
+            const act64 = btoa(toBinStr(new Uint8Array(act.buffer, act.byteOffset, act.byteLength)))
+            if (typeof chrome != ''+void 0) {
+                // Establish a listener to open ports.
+                if (!observeLinks.listening) {
+                    window._directLinkPortListener && chrome.runtime.onConnect.removeListener(window._directLinkPortListener)
+                    window._directLinkPortListener = p => {
+                        if (p.name !== 'directLinkAct') return
+                        window._directLinkPorts.add(p)
+                        p.onDisconnect.addListener(p => window._directLinkPorts.delete(p))
+                    }
+                    chrome.runtime.onConnect.addListener(window._directLinkPortListener)
+                    if (!window._directLinkPorts) window._directLinkPorts = new Set
+                    observeLinks.listening = true
+                }
+                // Send actions as a message. (port.sender.frameId could have helped distinguish <iframe>s.)
+                window._directLinkPorts.forEach(port => port.sendMessage(act64))
+            } else if (typeof window._directLinkAct == 'function')
+                window._directLinkAct(act64)
+
+            // Receive our observations from the content script.
+            const result = (await end()).split(' ')
+            try {
+                const actLen = +result[0], newObs2 = fromBinStr(atob(result[1]), obs)
+                return [newObs2.length, actLen]
+            } catch (err) { console.error(err) }
+            function fromBinStr(s, into) {
+                const b = new Uint8Array(into.buffer, into.byteOffset, into.byteLength)
+                const end = s.length - (s.length % into.BYTES_PER_ELEMENT)
+                for (let i = 0; i < b.length && i < end; ++i) b[i] = s.charCodeAt(i)
+                return into
+            }
+            function toBinStr(b) {
+                let s = '', d = Object.create(null)
+                for (let i = 0; i < b.length; ++i) s += d[b[i]] || (d[b[i]] = String.fromCharCode(b[i]))
+                return s // The loop above is optimized by JS engines, so no quadratic time/space complexity.
+            }
+        }],
+        inject: [function injLinks(script) {
+            if (!injLinks.inited) {
+                // Do stuff on init: inject <script> for JS interaction, and set up port/event listeners.
+                const scr = document.createElement('script')
+                scr.textContent = script
+                document.documentElement.append(scr), scr.remove()
+                if (!window._directLinkAct) {
+                    window._directLinkAct = function a(a64) { window.directLinkAct.a64 = a64 }
+                    document.addEventListener('_directLinkObs', o64 => window.directLinkAct.o64 = o64)
+                }
+                if (typeof chrome != ''+void 0) {
+                    if (window._directLinkPort) window._directLinkPort.disconnect(), window._directLinkPort = undefined
+                    chrome.runtime.connect({ name:'directLinkAct' }, port => (window._directLinkPort = port).onMessage.addListener(window._directLinkAct))
+                }
+                injLinks.inited = true
+            }
+            // Post actions.
+            const evt = new CustomEvent('_directLinkAct', { detail:window._directLinkAct.a64 })
+            document.dispatchEvent(evt)
+            try {
+                const actLen = atob(window._directLinkAct.a64).length // Peak inefficiency.
+                return actLen + ' ' + (window._directLinkAct.o64 || '')
+            } catch (err) { console.error(err) }
+        }, script],
+    }
     // TODO: Test that direct links work.
 
-    // This goes for latency over reliability.
-    //   Expect some frames to have extra act/obs updates, or skip updates.
-
+    // TODO: Remove what's below.
     // Data communication is not quite as optimized as it could be,
     //   since this sends/receives float32 instead of int16.
     return {
@@ -930,10 +1030,9 @@ In a page, \`directLink(PageAgent, Inputs = 0, Outputs = 0)\` will return \`true
                 }
                 function directLink(agent, ins = 0, outs = 0) {
                     if (typeof agent != 'function') throw new Error('Not a func')
-                    if (typeof ins != 'number' || typeof outs != 'number')
-                        throw new Error('Not a number')
-                    if (reads + outs > maxReads) throw new Error('Too many reads')
-                    if (writes + ins > maxWrites) throw new Error('Too many writes')
+                    if (typeof ins != 'number' || typeof outs != 'number') throw new Error('Not a number')
+                    if (reads + outs > maxReads) return false
+                    if (writes + ins > maxWrites) return false
                     let id = 0
                     while (agents[id]) ++id
                     agents[id] = agent, reads += outs, writes += ins

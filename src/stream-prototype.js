@@ -244,18 +244,19 @@ The result is a promise for the environment, which is an object with:
     resize(reads, writes) {
         // This is for `directLink` only.
         // Resizes reads/writes, making the last interface access more or less.
-        if (this._obsFloats && this.reads === reads && this.writes === writes) return
+        const chR = !this._views || this.reads !== reads, chW = !this._views || this.writes !== writes
+        if (!chR && !chW) return
         this.maxIOArraySize = Math.max(1024, reads, writes) + this.IOArraySizeReserve
 
         const all = this._all, allReadOffsets = this._allReadOffsets, allWriteOffsets = this._allWriteOffsets
 
         // Resize observations/actions. Preserve previous data if possible.
-        const obsFloats = new Observations(reads).fill(NaN)
-        const predFloats = new Observations(reads).fill(NaN)
-        const actFloats = new Observations(writes).fill(NaN)
-        overwriteArray(obsFloats, this._obsFloats)
-        overwriteArray(predFloats, this._predFloats)
-        overwriteArray(actFloats, this._actFloats)
+        const obsFloats  = chR ? new Observations(reads).fill(NaN) : this._obsFloats
+        const predFloats = chR ? new Observations(reads).fill(NaN) : this._predFloats
+        const actFloats  = chW ? new Observations(writes).fill(NaN) : this._actFloats
+        chR && overwriteArray(obsFloats, this._obsFloats)
+        chR && overwriteArray(predFloats, this._predFloats)
+        chW && overwriteArray(actFloats, this._actFloats)
 
         // Pre-compute observation/action slices.
         const bpe = Observations.BYTES_PER_ELEMENT
@@ -266,9 +267,9 @@ The result is a promise for the environment, which is an object with:
             const ro = allReadOffsets[i], wo = allWriteOffsets[i]
             const r = !last ? o.reads : _, w = !last ? o.writes : _
             views[i] = {
-                obs:  r !== _ ? new Observations(obsFloats.buffer,  ro * bpe, r) : obsFloats,
-                pred: r !== _ ? new Observations(predFloats.buffer, ro * bpe, r) : predFloats,
-                act:  w !== _ ? new Observations(actFloats.buffer,  wo * bpe, w) : actFloats,
+                obs:  chR ? (r !== _ ? new Observations(obsFloats.buffer,  ro * bpe, r) :  obsFloats) : this._views[i].obs,
+                pred: chR ? (r !== _ ? new Observations(predFloats.buffer, ro * bpe, r) : predFloats) : this._views[i].pred,
+                act:  chW ? (w !== _ ? new Observations(actFloats.buffer,  wo * bpe, w) :  actFloats) : this._views[i].act,
             }
         }
 

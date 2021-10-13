@@ -33,7 +33,7 @@ Other interfaces that want this ought to define, for the 3 execution contexts (W
 - WebEnv: \`reactToObserver(stream, result)\`.
   - If this is defined, \`observer\` below should return a JSON-serializable result, as small as possible (else the data stream may close). Having \`1024\` total bytes is definitely safe. Per-frame JSON is expensive.
   - (Might want to double-check that \`result\` did come from your \`observer\` and not another one.)
-- Extension: \`.observer: [(media, {pred, act, obs}, end, ...args)=>…, ...args]\`
+- Extension: \`.observer: [(media, { obs, pred, act }, end, ...args)=>…, ...args]\`
   - Can access video/audio; cannot access the DOM.
   - Calling \`await end()\` at the end or just before writing to \`obs\` (f32 array) is MANDATORY.
   - Communication cost is reduced as much as possible without compression, don't worry.
@@ -43,6 +43,7 @@ Other interfaces that want this ought to define, for the 3 execution contexts (W
     - \`await media.audio(sampleN=2048, sampleRate=44100)=>samples\`
 - Content script: \`.inject: [(...args)=>report, ...args]\`
   - Cannot access video/audio; can access the DOM.
+  - If executing in a regular web page, \`.observer\` and \`.inject\` execute in the same scope, which is also visible to page JS.
   - Result must be JSON-serializable. It will become the result of \`await end()\` in \`.observer\` (or \`null\` on exception or timeout).
 `,
     key: Symbol('observers'),
