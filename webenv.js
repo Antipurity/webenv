@@ -2237,7 +2237,7 @@ To write new interfaces, look at the pre-existing interfaces.
             page.target().createCDPSession(),
             page.evaluate(() => outerWidth - innerWidth),
             page.evaluate(() => outerHeight - innerHeight),
-            browser.waitForTarget(t => t.type() === 'background_page' && t._targetInfo.title === 'capture').then(t => t.page()),
+            browser.waitForTarget(t => t.type() === 'background_page' && t._targetInfo.title === 'WebEnv capture').then(t => t.page()),
             page.setUserAgent(''),
             page.evaluateOnNewDocument(langParts => {
                 Object.defineProperty(navigator, 'language', { value:langParts[0] })

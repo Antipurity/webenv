@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset=utf-8>
+  <title>WebEnv taking control of your pages</title>
+
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      font-family: system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,"Noto Sans","Liberation Sans",sans-serif,"Apple Color Emoji","Segoe UI Emoji","Segoe UI Symbol","Noto Color Emoji";
+      font-size: 1rem;
+      margin: 0;
+    }
+    .controls>* { width: 20em;  margin: .5em;  display: block;  transition: all .2s; }
+    button, input {
+      font-family: inherit;
+      font-size: inherit;
+      line-height: inherit;
+    }
+    .input {
+      /* https://design.firefox.com/photon/components/input-fields.html (more or less) */
+      height: 32px;
+      line-height: 32px;
+      border-radius: 2px;
+      padding: 0 8px 0 8px;
+      border-color: rgba(12, 12, 13, 0.2);
+      text-overflow: ellipsis;
+    }
+    .input::placeholder {
+      color: #737373;
+      font: 0.833rem/1.4;
+    }
+    .input:hover {
+      border-color: rgba(12, 12, 13, 0.3);
+    }
+    .input:focus {
+      outline: none;
+      border-color: #0a84ff;
+      box-shadow: 0 0 0 1px #0a84ff, 0 0 0 4px rgba(10, 132, 255, 0.3);
+    }
+    .button {
+      /* https://design.firefox.com/photon/components/buttons.html */
+      height: 32px;
+      border: none;
+      color: #fff;
+      border-radius: 2px;
+      padding: 0 8px 0 8px;
+      background: radial-gradient(circle at var(--x,-4em) var(--y,-4em), #ffffff99, #ffffff55 1em, #ffffff22 4em, transparent 8em) #0060df;
+    }
+    .button:hover {
+      background-color: #003eaa;
+    }
+    .button:active {
+      background-color: #002275;
+    }
+    .button:focus {
+      box-shadow: 0 0 0 1px #0a84ff inset, 0 0 0 1px #0a84ff, 0 0 0 4px rgba(10, 132, 255, 0.3);
+    }
+    .button.disabled {
+      opacity: .4;
+    }
+  </style>
+</head>
+<body>
+  <div class=controls>
+    <input id=server-url type=url placeholder="WebEnv server URL" spellcheck=false class=input>
+    <button id=connect-btn class=button>Connect</button>
+  </div>
+  <!-- TODO: ...How do we wire up those actions... What do we do on click? -->
+
+  <script src=popup.js></script>
+</body>
+</html>

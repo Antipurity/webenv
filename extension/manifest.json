@@ -1,12 +1,18 @@
 {
     "key":"MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAy5/+aXTi/dkVcztqQ9gJI5YTagt/PznmzFLvlTyEct6fDJvZVtI5hdIaYkfTUbze78JgvFpIE71NrHqsgKJHN69b/Ob/+ZXh0RIElfdwxv9xDog2oOK8ECqis/PPXa6M0jUM6FHH4a2LNvjZNrpgI1vUdAoBufJZnSOOK2paQoU8HdYkcgOO4jKrQK07GdkNZqLneJ5Z2XDdqCyy0nbhCJ3GtSDf0P3UQZyNtgSpqbGlnYmqMkamqrJqpzxkNH+O0Am1mTWbHi/a+N74N4bkYR6pUGRN3zFc5PQQK2KVYQ9G5B3hc2rrEEvgs26tbQVNjhgmx3d4OQ+LVgT8J78AWwIDAQAB",
-    "name":"capture",
+    "name":"WebEnv capture",
     "version":"0.1.0",
     "manifest_version":2,
     "background":{
         "persistent":true,
         "scripts":["capture.js"]
     },
-    "permissions":["tabs", "<all_urls>", "tabCapture"],
-    "content_security_policy":"script-src 'self' 'unsafe-eval'; object-src 'self'"
+    "permissions":["tabs", "activeTab", "tabCapture"],
+    "content_security_policy":"script-src 'self' 'unsafe-eval'; object-src 'self'",
+    "browser_action":{
+        "browser_style":true,
+        "default_title":"Give control to a WebEnv instance...",
+        "default_icon":"agent-pred.png",
+        "default_popup":"popup.html"
+    }
 }
