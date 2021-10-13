@@ -13,3 +13,7 @@ function setMousePosition(evt) {
 }
 addEventListener('mouseover', setMousePosition, {passive:true})
 addEventListener('mousemove', setMousePosition, {passive:true})
+
+
+
+if (navigator.webdriver) document.querySelector('body>.controls').textContent = '<Already auto-controlled, stop fooling around>'
