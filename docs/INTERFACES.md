@@ -142,6 +142,24 @@ Ideally, you should not treat observations/actions as anything other than vector
 
 Top-level interfaces given to `webenv.init(…)` are copied into all streams, so adding extra browsers can be done as simply `we.init(…, we.browser(), we.browser())` (which runs 2).
 
+```js
+webenv.remote(path='/connect', maxConnections=4)
+```
+
+Allows users to connect their own streams, via:
+
+```js
+let toCancel
+const socket = new WebSocket(…url…)
+socket.binaryType = 'arraybuffer', socket.onmessage = evt => {
+    toCancel = new Function(new TextDecoder().decode(evt.data))()(socket, { bytesPerValue:1|2|4 })
+}
+```
+
+(And do `toCancel()` to disconnect.)
+
+See the `/extension` folder for a ready-made extension that can do that. Web pages can also connect, though they will not be able to navigate.
+
 # Observations
 
 These interfaces define numbers that agents can see.
@@ -415,10 +433,11 @@ webenv.defaults = [
     webenv.keyboard(),
     webenv.augmentations(),
     webenv.interval(webenv.triggers.homepage, 60),
-    exports.triggers(
+    webenv.triggers(
         { maxAtOnce:1, cooldown:3600 },
-        exports.triggers.goBack,
-        exports.triggers.randomLink),
+        webenv.triggers.goBack,
+        webenv.triggers.randomLink),
+    webenv.remote(),
 ]
 ```
 

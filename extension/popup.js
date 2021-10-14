@@ -19,7 +19,8 @@ addEventListener('mousemove', setMousePosition, {passive:true})
 
 
 const options = Object.assign(Object.create(null), {
-  url:'',
+  url: '',
+  bytesPerValue: 1,
 })
 function changeOpt(k, v) { options[k] = v } // TODO: Also save options on change.
 // TODO: Load opts from sync storage if possible.
@@ -45,21 +46,13 @@ function changeState(state) {
   } else throw new Error('Unknown state: ' + state)
 }
 const port = typeof chrome != ''+void 0 && chrome.runtime && chrome.runtime.connect({ name:'popupInteraction' })
-port && port.onMessage.addListener(changeState)
+if (port) port.onMessage.addListener(changeState)
+else changeState('idling')
 function connect(evt) {
   if (port) port.postMessage(options)
-  else changeState('connecting'), setTimeout(() => changeState('connected'), 1000) // TODO
+  else changeState('connecting'), setTimeout(() => changeState('connected'), 1000)
 }
-changeState('idling') // TODO
-
-// TODO: In `background.js`:
-//   TODO: Have `tabState={ tabId:{ cancel:null|'connecting'|func, port:null|Port } }`
-//   TODO: On port connections named 'popupInteraction' (https://developer.mozilla.org/en-US/docs/Mozilla/Add-ons/WebExtensions/API/runtime/onConnect):
-//     TODO: First, send the tab state: 'idling' if tabId is not present, 'connecting' if .cancel is null, else 'connected'.
-//     TODO: On messages { url:'…', …opts }:
-//       TODO: Cancel if .cancel is a function, ignore if 'connecting'; else:
-//       TODO: Set .cancel to 'connecting', try to connect a WebSocket to there and execute its JS code, and set .cancel to the resulting func.
-//       TODO: On each state change, notify the tab's port.
+// TODO: Test the extension. (Have to reload the browser for that, though.)
 
 
 

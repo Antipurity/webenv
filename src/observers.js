@@ -21,7 +21,7 @@ Extensions/pages should connect like:
 let toCancel
 const socket = new WebSocket(…url…)
 socket.binaryType = 'arraybuffer', socket.onmessage = evt => {
-    toCancel = new Function(new TextDecoder().decode(evt.data))()(0|1|2, socket)
+    toCancel = new Function(new TextDecoder().decode(evt.data))()(socket, { bytesPerValue:1|2|4 })
 }
 \`\`\`
 
@@ -60,8 +60,7 @@ Other interfaces that want this ought to define, for the 3 execution contexts (W
         const bpv = 1 // The most important setting. (`1` loses audio info, compared to `2`.)
         await stream.extensionPage.evaluate(
             `const socket = new WebSocket("ws${secure}://localhost:${stream.settings.port}/${spot.id}")
-            socket.binaryType = 'arraybuffer'
-            socket.onmessage = evt => {
+            socket.binaryType = 'arraybuffer', socket.onmessage = evt => {
                 new Function(new TextDecoder().decode(evt.data))()(socket, {bytesPerValue:${bpv}})
             }`,
         )
@@ -130,7 +129,7 @@ const handleUpgrade = exports.handleUpgrade = (stream, ...args) => webSocketUpgr
 
 async function readAllData(stream, ch) {
     // Protocol (we're right-to-left):
-    //   Start → 0xFFFFFFFF 0x01020304 JsonLen Json (For {bytesPerValue: 0|1|2}.)
+    //   Start → 0xFFFFFFFF 0x01020304 JsonLen Json (For {bytesPerValue: 1|2|4}.)
     //   0xFFFFFFFF JsLen Js → update (`RCV = new Function(Js)()`)
     //   PredLen Pred ActLen Act JsonLen Json → ObsLen Obs
     const spot = Spot(stream)
@@ -148,8 +147,8 @@ async function readAllData(stream, ch) {
                 const jsonStr = Buffer.from(json).toString('utf8')
                 const obj = JSON.parse(jsonStr)
                 const intSize = obj.bytesPerValue
-                if (![0,1,2].includes(intSize)) throw new Error('Bad intSize: '+intSize)
-                spot.cons = intSize === 0 ? Float32Array : intSize === 1 ? Int8Array : Int16Array
+                if (![1,2,4].includes(intSize)) throw new Error('Bad intSize: '+intSize)
+                spot.cons = intSize === 4 ? Float32Array : intSize === 1 ? Int8Array : Int16Array
             } else {
                 if (obsLen > stream.maxIOArraySize) return ch.close()
                 const obs = await readFromChannel(ch, obsLen, spot.cons, spot.byteswap)
@@ -418,7 +417,7 @@ async function compileJS(stream) {
 
 function connectChannel(socket, opts) {
     // Starts capturing. To stop, call the returned func.
-    // In `opts`, `bytesPerValue` is 0 (float32) or 1 (int8) or 2 (int16).
+    // In `opts`, `bytesPerValue` is 1 (int8) or 2 (int16) or 4 (float32).
     const channel = TO_CHANNEL(socket)
     let flowing = true, timerID = null
 
@@ -435,7 +434,7 @@ function connectChannel(socket, opts) {
     return function stopCapture() { flowing = false, cancelTimeout(timerID), channel.close() }
     async function readAllData() {
         // Protocol (we're left-to-right):
-        //   Start → 0xFFFFFFFF 0x01020304 JsonLen Json (For {bytesPerValue: 0|1|2}.)
+        //   Start → 0xFFFFFFFF 0x01020304 JsonLen Json (For {bytesPerValue: 1|2|4}.)
         //   0xFFFFFFFF JsLen Js → update (`RCV = new Function(Js)()`)
         //   PredLen Pred ActLen Act JsonLen Json → ObsLen Obs
         await writeIntro()

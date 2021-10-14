@@ -6,9 +6,9 @@
 const channels = require('./src/data-channels.js')
 const { signalUpdate, signalNormalize } = require('./src/signal-stats.js')
 const { Observations, performance, streamPrototype } = require('./src/stream-prototype.js')
-const { observers } = require('./src/observers.js')
+const { observers, handleUpgrade } = require('./src/observers.js')
 const { compileSentJS } = require('./src/compile-sent-js.js')
-const { encodeInts, decodeInts, overwriteArray } = require('./src/int-encoding.js')
+const { encodeInts, decodeInts } = require('./src/int-encoding.js')
 const { writeToChannel, readFromChannel, swapBytes } = channels
 
 
@@ -2276,17 +2276,55 @@ To write new interfaces, look at the pre-existing interfaces.
 
 
 
-exports.remote = docs(`\`webenv.remote(path='/', maxConnections=4)\`
-// TODO: Docs.
-`, function(path='/', maxConnections=4) {
-    // TODO: How do we launch a server that listens to incoming WebSocket connections? (And responds with creating a new stream if possible.)
-    //   (Yeah, no initial stream, just an interface that would create them.)
+exports.remote = docs(`\`webenv.remote(path='/connect', maxConnections=4)\`
+
+Allows users to connect their own streams, via:
+
+\`\`\`js
+let toCancel
+const socket = new WebSocket(…url…)
+socket.binaryType = 'arraybuffer', socket.onmessage = evt => {
+    toCancel = new Function(new TextDecoder().decode(evt.data))()(socket, { bytesPerValue:1|2|4 })
+}
+\`\`\`
+
+(And do \`toCancel()\` to disconnect.)
+
+See the \`/extension\` folder for a ready-made extension that can do that. Web pages can also connect, though they will not be able to navigate.
+`, function remote(path='/connect', maxConnections=4) {
+    const key = remote.key || (remote.key = Symbol('remote'))
     return {
         init(stream) {
-            // TODO: Listen to incoming connections, and have a queue of unclosed ones; on stream close or here, take connections from that queue and upgrade them to a stream.
-            //   `stream.env.upgrade(path, (...a)=>observers.js/handleUpgrade(stream, ...a))`
+            const env = stream.env, spot = Spot(env)
+            env.upgrade(path, (request, socket, head) => {
+                spot.connections.add([request, socket, head])
+                openConnections(env)
+            })
         },
     }
+    function openConnections(env) {
+        // Upgrades already-open connections to the "connected" status.
+        const spot = Spot(env)
+        spot.connections.forEach(args => {
+            if (spot.open >= maxConnections) return
+            spot.connections.delete(args), ++spot.open
+            openConnection(env, args)
+        })
+    }
+    async function relaunch() {
+        // There is no relaunching a user's browser.
+    }
+    async function openConnection(env, [request, socket, head]) {
+        const stream = streamPrototype.create(relaunch)
+        await env.reinit(env.interfaces, env.streams, stream)
+        handleUpgrade(stream, request, socket, head)
+    }
+    async function closeConnection(env, stream) { // TODO: When to use this? How to detect that the connection has closed?
+        await env.reinit(env.interfaces, env.streams.filter(s => s !== stream))
+        --Spot(stream.env).open
+        openConnections(stream.env)
+    }
+    function Spot(o) { return o[key] || (o[key] = Object.create(null), o[key].connections = new Set, o[key].open = 0, o[key]) }
 })
 
 
@@ -2316,4 +2354,5 @@ exports.defaults = [
         { maxAtOnce:1, cooldown:3600 },
         exports.triggers.goBack,
         exports.triggers.randomLink),
+    exports.remote(),
 ]
