@@ -1,5 +1,6 @@
-document.getElementById('server-url').onfocus = evt => evt.target.select()
-document.getElementById('server-url').oninput = evt => changeOpt('url', evt.target.value)
+const serverUrl = document.getElementById('server-url')
+serverUrl.onfocus = evt => evt.target.select()
+serverUrl.oninput = evt => changeOpt('url', evt.target.value)
 document.getElementById('connect-btn').onclick = connect
 
 
@@ -37,10 +38,12 @@ function changeState(state) {
     btn.classList.add('idling')
     btn.classList.remove('disabled')
     // TODO: If we have an error message, also display that under the button.
-  } else if (state === 'connecting') {
+  } else if (state.slice(0,11) === 'connecting ') {
+    serverUrl.value = state.slice(11)
     btn.classList.add('connecting')
     btn.classList.add('disabled')
-  } else if (state === 'connected') {
+  } else if (state.slice(0,10) === 'connected ') {
+    serverUrl.value = state.slice(10)
     btn.classList.add('connected')
     btn.classList.remove('disabled')
   } else throw new Error('Unknown state: ' + state)
@@ -50,7 +53,7 @@ if (port) port.onMessage.addListener(changeState)
 else changeState('idling')
 function connect(evt) {
   if (port) port.postMessage(options)
-  else changeState('connecting'), setTimeout(() => changeState('connected'), 1000)
+  else changeState('connecting '+serverUrl.value), setTimeout(() => changeState('connected '+serverUrl.value), 1000)
 }
 // TODO: Test the extension. (Have to reload the browser for that, though.)
 
