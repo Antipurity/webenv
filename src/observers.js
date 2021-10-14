@@ -122,7 +122,7 @@ const handleUpgrade = exports.handleUpgrade = (stream, ...args) => webSocketUpgr
     ch.write(new Uint8Array(Buffer.from(str)))
 
     readAllData(stream, ch)
-    return () => Spot(stream).ended = true // Return a cancellation func.
+    return [ch, () => Spot(stream).ended = true] // Return the channel (with settable `.onClose`) and a cancellation func.
 })
 
 

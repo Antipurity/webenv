@@ -1,13 +1,8 @@
 This document outlines what still needs to be done to reach MVP state (or the "ready" state).
 
 - Joint training and deployment:
-	- Extension-only user streams: have `webenv.remote(path='/', max=16)`, which for each incoming Web Socket connection, refuses it if over the limit, else establishes the control connection, re-using all code from the Capture's rework.
-        - UI:
-            - Make sure that the Capture extension can be used by actual humans.
-            - Have `popup.html`, and have server URL and the "Connect"/"Stop" button there.
-        - Code:
-            - Request access to `*://*/*` in `manifest.json`'s `permissions`.
-            - Design a web page that connects to a remote port to be controlled.
+    - Make sure that the Capture extension can be used by actual humans.
+    - Design a web page that connects to a remote port to be controlled. Make it work.
 
 - Make the Python example production-ready:
     - Save + load, checking that all unchangeable hyperparams are the same; also have a list of hparams that can change, such as the learning rate. Ask the user if they want to warm-start from the previous checkpoint if changed. (No tracing: batch size could pick up the slack.) ([Should be very easy.](https://pytorch.org/tutorials/beginner/saving_loading_models.html))

@@ -4,6 +4,7 @@
 //   `ch.skip()` after each message, to delimit what to skip to if packets are dropped.
 //   `await ch.read(len)→bytes`, which can `throw 'skip'`, to resume reading at the next skip.
 //   `ch.close()` to end this existence.
+//   Settable `ch.onClose=null` to react to the end.
 // As a bonus, to send a channel creator's JS elsewhere, simply `''+func`.
 // As another bonus, at the end are some utilities for maybe-byteswapped read/write, NodeJS-only.
 
@@ -40,9 +41,10 @@ exports.streams = function streams(read = process.stdin, write = process.stdout)
     })
   }
   read.on('readable', onReadable)
+  read.on('close', () => result.close())
   write.on('drain', onDrain)
   write.on('error', () => {}) // Ignore "other end has closed" errors.
-  return {
+  const result = {
     write(bytes) {
       // Can be `await`ed to wait until the buffer gets emptier.
       write.cork()
@@ -52,8 +54,9 @@ exports.streams = function streams(read = process.stdin, write = process.stdout)
     },
     skip() {},
     read(len) { return readBytes(len) },
-    close() { read.destroy(), write.destroy() },
+    close() { read.destroy(), write.destroy(), typeof this.onClose == 'function' && this.onClose() },
   }
+  return result
 }
 
 
@@ -75,7 +78,8 @@ exports.webSocket = function webSocket(ws) {
   let opened = ws.readyState === 0 ? new Promise(then => ws.onopen = then) : 0
   const msgs = [], reqs = []
   ws.onmessage = onReadable
-  return {
+  ws.onclose = evt => result.close()
+  const result = {
     async write(bytes) {
       let b = bytes.buffer
       if (opened || bytes.byteOffset || (bytes.byteLength || bytes.length) !== b.byteLength)
@@ -88,8 +92,9 @@ exports.webSocket = function webSocket(ws) {
       if (opened) await opened, opened = null
       return readBytes(len)
     },
-    close() { ws.close() },
+    close() { ws.close(), typeof this.onClose == 'function' && this.onClose() },
   }
+  return result
   function toU8(b) { // Normalize the very annoying buffers, trying to avoid a copy.
     if (b instanceof ArrayBuffer) return new Uint8Array(b)
     if (b.byteOffset & 3) return new Uint8Array(b) // Ensure alignment via copy.

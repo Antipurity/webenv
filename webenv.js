@@ -2317,9 +2317,10 @@ See the \`/extension\` folder for a ready-made extension that can do that. Web p
     async function openConnection(env, [request, socket, head]) {
         const stream = streamPrototype.create(relaunch)
         await env.reinit(env.interfaces, env.streams, stream)
-        handleUpgrade(stream, request, socket, head)
+        const [ch, cancel] = handleUpgrade(stream, request, socket, head)
+        ch.onClose = () => closeConnection(env, stream)
     }
-    async function closeConnection(env, stream) { // TODO: When to use this? How to detect that the connection has closed?
+    async function closeConnection(env, stream) {
         await env.reinit(env.interfaces, env.streams.filter(s => s !== stream))
         --Spot(stream.env).open
         openConnections(stream.env)
