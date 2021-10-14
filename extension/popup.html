@@ -5,7 +5,7 @@
   <title>WebEnv taking control of your pages</title>
 
   <style>
-    .controls {width:100%; white-space:nowrap}
+    .controls { width:100%; white-space:nowrap }
     * { box-sizing: border-box; }
     body {
       font-family: system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,"Noto Sans","Liberation Sans",sans-serif,"Apple Color Emoji","Segoe UI Emoji","Segoe UI Symbol","Noto Color Emoji";
@@ -43,31 +43,99 @@
       /* https://design.firefox.com/photon/components/buttons.html */
       height: 32px;
       border: none;
+      outline: none;
       color: #fff;
       border-radius: 2px;
       padding: 0 8px 0 8px;
-      background: radial-gradient(circle at var(--x,-4em) var(--y,-4em), #ffffff99, #ffffff55 1em, #ffffff22 4em, transparent 8em) #0060df;
+      background: radial-gradient(circle at var(--x,-40em) var(--y,-40em), #ffffffff, #ffffff99 .1em, #ffffff55 1em, #ffffff22 4em, transparent 8em) #0060df;
+      display: flex;
+      flex-flow: row nowrap;
+      align-items: center;
+      justify-content: center;
     }
     .button:hover {
       background-color: #003eaa;
     }
-    .button:active {
+    .button:active:not(.disabled) {
       background-color: #002275;
     }
-    .button:focus {
+    .button:focus:not(.disabled) {
       box-shadow: 0 0 0 1px #0a84ff inset, 0 0 0 1px #0a84ff, 0 0 0 4px rgba(10, 132, 255, 0.3);
     }
     .button.disabled {
       opacity: .4;
+    }
+    /* Button states. */
+    .onidling, .onconnecting, .onconnected { width:0; height:0; display:flex; align-items:center; justify-content:center }
+    .onidling { animation: .2s forwards fade-out }
+    .idling .onidling { animation: .2s forwards fade-in; width:8rem }
+    .onconnecting { animation: .2s forwards fade-out }
+    .connecting .onconnecting { animation: .2s forwards fade-in; width:8rem }
+    .onconnected { animation: .2s forwards fade-out }
+    .connected .onconnected { animation: .2s forwards fade-in; width:8rem }
+    /* Spinner. */
+    .spinner {
+      display: inline-block;
+      position: relative;
+      width: 24px;
+      height: 24px;
+      margin: 4px;
+    }
+    .button .spinner { animation: .2s forwards fade-out }
+    .button.disabled .spinner { animation: .2s forwards fade-in }
+    .spinner>div {
+      box-sizing: content-box;
+      position: absolute;
+      border: 3px solid #fff;
+      opacity: 1;
+      border-radius: 50%;
+      animation: lds-ripple 1s cubic-bezier(0, 0.2, 0.8, 1) infinite;
+      top: 50%;  left: 50%;
+    }
+    .spinner>div:nth-child(2) {
+      animation-delay: -0.5s;
+    }
+    @keyframes lds-ripple {
+      0% {
+        width: 0;
+        height: 0;
+        opacity: 0;
+        transform: translate(-50%, -50%) scale(0);
+      }
+      30% {
+        width: 0;
+        height: 0;
+        opacity: 1;
+        transform: translate(-50%, -50%) scale(1);
+      }
+      100% {
+        width: 100%;
+        height: 100%;
+        opacity: 0;
+        transform: translate(-50%, -50%) scale(1);
+      }
+    }
+    @keyframes fade-in {
+      0% { opacity: 0; width: 0; height: 0 }
+      100% { opacity: 1 }
+    }
+    @keyframes fade-out {
+      0% { opacity: 1 }
+      100% { opacity: 0; width: 0; height: 0 }
     }
   </style>
 </head>
 <body>
   <div class=controls>
     <input id=server-url type=url placeholder="WebEnv server URL" spellcheck=false class=input>
-    <button id=connect-btn class=button>Connect</button>
+    <button id=connect-btn class=button>
+      <span class=spinner><div></div><div></div></span>
+      <span class=onidling>Connect</span>
+      <span class=onconnecting>Connecting…</span>
+      <span class=onconnected>Stop</span>
+    </button>
   </div>
-  <!-- TODO: ...How do we wire up those actions... What do we do on click? -->
+  <!-- TODO: Also have a smoothly-collapsible details area, where bytesPerValue and checkboxes for extra injected modules (such as `directScore` keybindings) live. -->
 
   <script src=popup.js></script>
 </body>

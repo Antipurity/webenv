@@ -2276,6 +2276,21 @@ To write new interfaces, look at the pre-existing interfaces.
 
 
 
+exports.remote = docs(`\`webenv.remote(path='/', maxConnections=4)\`
+// TODO: Docs.
+`, function(path='/', maxConnections=4) {
+    // TODO: How do we launch a server that listens to incoming WebSocket connections? (And responds with creating a new stream if possible.)
+    //   (Yeah, no initial stream, just an interface that would create them.)
+    return {
+        init(stream) {
+            // TODO: Listen to incoming connections, and have a queue of unclosed ones; on stream close or here, take connections from that queue and upgrade them to a stream.
+            //   `stream.env.upgrade(path, (...a)=>observers.js/handleUpgrade(stream, ...a))`
+        },
+    }
+})
+
+
+
 function docs(str, fun) { fun.docs = str;  return fun }
 
 

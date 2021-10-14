@@ -62,13 +62,13 @@ Other interfaces that want this ought to define, for the 3 execution contexts (W
             `const socket = new WebSocket("ws${secure}://localhost:${stream.settings.port}/${spot.id}")
             socket.binaryType = 'arraybuffer'
             socket.onmessage = evt => {
-                new Function(new TextDecoder().decode(evt.data))()(${bpv}, socket)
+                new Function(new TextDecoder().decode(evt.data))()(socket, {bytesPerValue:${bpv}})
             }`,
         )
     },
     deinit(stream) {
         const spot = Spot(stream)
-        stream.env.upgrade(spot.id)
+        stream.env.upgrade('/'+spot.id)
         spot.ended = true
     },
     async read(stream, obs, _) {
@@ -118,11 +118,12 @@ const handleUpgrade = exports.handleUpgrade = (stream, ...args) => webSocketUpgr
     Spot(stream).ch = ch
 
     // Write how to connect. (In one message, with no length before it.)
-    //   Do `msg => new Function(msg)()(bytesPerValue, socket)`
+    //   Do `msg => new Function(msg)()({bytesPerValue}, socket)`
     const str = collapseWhitespace('return ' + String(connectChannel).replace(/TO_CHANNEL/, ''+webSocket))
     ch.write(new Uint8Array(Buffer.from(str)))
 
     readAllData(stream, ch)
+    return () => Spot(stream).ended = true // Return a cancellation func.
 })
 
 
@@ -166,7 +167,7 @@ async function readAllData(stream, ch) {
                             stream._all[i].reactToObserver(stream, json[j++])
                 }
             }
-        } catch (err) { if (err !== 'skip') throw ch.close(), err }
+        } catch (err) { if (err !== 'skip') return ch.close(), console.error(err) }
     ch.close()
 }
 
@@ -186,7 +187,7 @@ async function compileJS(stream) {
         if (tabId != null) {
             return new Promise(then => {
                 // Send a message to the active tab. (If not in an extension, just call.)
-                if (typeof chrome!=''+void 0) chrome.tabs.sendMessage(tabId, args, then)
+                if (typeof chrome!=''+void 0 && chrome.tabs) chrome.tabs.sendMessage(tabId, args, then)
                 else window.onMSG(args, null, then)
                 setTimeout(then, 200) // Don't wait for stalls infinitely.
             }).then(a => end(a))
@@ -372,19 +373,19 @@ async function compileJS(stream) {
         prelude.push(`function updateInjection() {
             if (tabId == null) return
             const injection = ${JSON.stringify(`
-                if (window.onMSG && typeof chrome!=''+void 0) chrome.runtime.onMessage.removeListener(window.onMSG)
+                if (window.onMSG && typeof chrome!=''+void 0 && chrome.runtime) chrome.runtime.onMessage.removeListener(window.onMSG)
                 ${injectedParts.map((a,i) => 'window.F'+i + '=' + a[0]).join('\n')}
                 window.onMSG = (a, sender, sendResponse) => {
                     Promise.all([${injectedParts.map((a,i) => 'F'+i+'('+a.slice(1)+')')}]).then(sendResponse, sendResponse)
                     return true
                 }
-                if (typeof chrome!=''+void 0) chrome.runtime.onMessage.addListener(window.onMSG)
+                if (typeof chrome!=''+void 0 && chrome.runtime) chrome.runtime.onMessage.addListener(window.onMSG)
             `)}
-            if (typeof chrome!=''+void 0) chrome.tabs.executeScript(tabId, { code:injection, runAt:'document_start' })
+            if (typeof chrome!=''+void 0 && chrome.tabs) chrome.tabs.executeScript(tabId, { code:injection, runAt:'document_start' })
             else new Function(injection)()
         }`)
         prelude.push(`
-        if (typeof chrome!=''+void 0) {
+        if (typeof chrome!=''+void 0 && chrome.tabs) {
             if (window.onNavigation) chrome.tabs.onUpdated.removeListener(window.onNavigation)
             chrome.tabs.onUpdated.addListener(window.onNavigation = updateInjection)
         }
@@ -392,7 +393,7 @@ async function compileJS(stream) {
         //   Remember the tab ID that started this.
         prelude.push(`let tabId`)
         prelude.push(`
-        if (typeof chrome!=''+void 0) {
+        if (typeof chrome!=''+void 0 && chrome.tabs) {
             const setId = tabs => tabs[0] && (tabId = tabs[0].id, updateInjection())
             chrome.tabs.query({active:true, currentWindow:true}, setId)
         }
@@ -415,9 +416,9 @@ async function compileJS(stream) {
 
 
 
-function connectChannel(bytesPerValue = 1, socket) {
+function connectChannel(socket, opts) {
     // Starts capturing. To stop, call the returned func.
-    // `bytesPerValue` is 0 (float32) or 1 (int8) or 2 (int16).
+    // In `opts`, `bytesPerValue` is 0 (float32) or 1 (int8) or 2 (int16).
     const channel = TO_CHANNEL(socket)
     let flowing = true, timerID = null
 
@@ -457,9 +458,9 @@ function connectChannel(bytesPerValue = 1, socket) {
     }
     async function writeIntro() {
         // Could be bad with unreliable channels.
-        const jsonBytes = encoder.encode(JSON.stringify({
-            bytesPerValue,
-        }))
+        const opts2 = Object.assign({}, opts)
+        delete opts2['url']
+        const jsonBytes = encoder.encode(JSON.stringify(opts2))
         await Promise.all([
             writeU32(0xffffffff),
             writeU32(0x01020304),

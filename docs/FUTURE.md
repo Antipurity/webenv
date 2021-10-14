@@ -32,12 +32,10 @@ With that, this really will be all I can do. Besides, who would ever be impresse
 - Logo, for the extension, and for remembering.
 
 - Communication:
-    - Make `webenv.directScore` hash URLs on client-side, to reduce privacy concerns.
     - Replace Web Socket communication with WebRTC.
     - Compression.
 
 - Visualization:
-    - Track observation delay, and make `webenv.imageRect` and `webenv.imageFovea` positioning account for that. (It lags a bit now.)
     - Allow listening to real & predicted audio.
     - Plots of numbers-over-time, like the score.
 
