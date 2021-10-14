@@ -19,12 +19,12 @@ chrome.runtime.onConnect.addListener(port => {
       if (state.cancel === 'connecting') return // Never stop trying to connect.
       if (typeof state.cancel == 'function') cancel(tabId) // Stop on button click.
       else { // Start on button click.
-        state.cancel = 'connecting', sendPopupStateOf(port, state)
+        state.cancel = 'connecting', sendPopupStateOf(port, tabId)
         const socket = new WebSocket(state.url = msg.url) // Yeah, never just .close() this.
         socket.binaryType = 'arraybuffer', socket.onmessage = evt => {
             state.cancel = new Function(new TextDecoder().decode(evt.data))()(socket, { bytesPerValue:1|2|4 })
-            sendPopupStateOf(port, state)
-        }
+            sendPopupStateOf(port, tabId)
+        }, socket.onerror = evt => { socket.close(), state.cancel = null, state.url = evt.reason, sendPopupStateOf(port, tabId) }
       }
     })
   }
@@ -33,7 +33,7 @@ chrome.runtime.onConnect.addListener(port => {
 })
 function sendPopupStateOf(port, tabId) {
   const u = tabState[tabId].url
-  port.postMessage(!(tabId in tabState) || tabState[tabId].cancel === null ? 'idling' : (tabState[tabId].cancel === 'connecting' ? 'connecting ' : 'connected ') + u)
+  port.postMessage(!(tabId in tabState) || tabState[tabId].cancel === null ? 'idling '+u : (tabState[tabId].cancel === 'connecting' ? 'connecting ' : 'connected ') + u)
 }
 function cancel(tabId) {
   typeof tabState[tabId].cancel == 'function' && tabState[tabId].cancel()

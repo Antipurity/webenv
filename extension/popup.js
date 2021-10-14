@@ -30,14 +30,15 @@ function changeOpt(k, v) { options[k] = v } // TODO: Also save options on change
 
 
 function changeState(state) {
+  if (typeof state != 'string') return
   const btn = document.getElementById('connect-btn')
   btn.classList.remove('idling')
   btn.classList.remove('connecting')
   btn.classList.remove('connected')
-  if (state === 'idling' || typeof state == 'string' && state.slice(0,6) === 'idling') {
+  if (state.slice(0,7) === 'idling ') {
+    // TODO: If we have an error message, also display that under the button.
     btn.classList.add('idling')
     btn.classList.remove('disabled')
-    // TODO: If we have an error message, also display that under the button.
   } else if (state.slice(0,11) === 'connecting ') {
     serverUrl.value = state.slice(11)
     btn.classList.add('connecting')
@@ -50,7 +51,7 @@ function changeState(state) {
 }
 const port = typeof chrome != ''+void 0 && chrome.runtime && chrome.runtime.connect({ name:'popupInteraction' })
 if (port) port.onMessage.addListener(changeState)
-else changeState('idling')
+else changeState('idling ')
 function connect(evt) {
   if (port) port.postMessage(options)
   else changeState('connecting '+serverUrl.value), setTimeout(() => changeState('connected '+serverUrl.value), 1000)
