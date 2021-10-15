@@ -59,7 +59,7 @@ Other interfaces that want this ought to define, for the 3 execution contexts (W
         const secure = stream.settings.httpsOptions ? 's' : ''
         const bpv = 1 // The most important setting. (`1` loses audio info, compared to `2`.)
         await stream.extensionPage.evaluate(
-            `const socket = new WebSocket("ws${secure}://localhost:${stream.settings.port}/${spot.id}")
+            `const socket = new WebSocket("ws${secure}://localhost:${stream.env.settings.port}/${spot.id}")
             socket.binaryType = 'arraybuffer', socket.onmessage = evt => {
                 new Function(new TextDecoder().decode(evt.data))()(socket, {bytesPerValue:${bpv}})
             }`,
@@ -235,7 +235,7 @@ async function compileJS(stream) {
     prelude.push(`RCV.media={
         stream:null, w:0, h:0, sr:0,
         closeStream() {
-            if (this.stream)
+            if (this.stream && this.stream.getTracks)
                 for (let track of this.stream.getTracks())
                     track.stop()
             this.stream = null
@@ -388,9 +388,9 @@ async function compileJS(stream) {
             if (ti != null && ti !== tabId) return
             const injection = ${JSON.stringify(`
                 if (window.onMSG && typeof chrome!=''+void 0 && chrome.runtime) chrome.runtime.onMessage.removeListener(window.onMSG)
-                ${injectedParts.map((a,i) => 'const F'+i + '=' + a[0]).join('\n')}
+                ${injectedParts.map((a,i) => 'window.$_F'+i + '=' + a[0]).join('\n')}
                 window.onMSG = (a, sender, sendResponse) => {
-                    Promise.all([${injectedParts.map((a,i) => 'F'+i + '('+a.slice(1)+')')}]).then(sendResponse, sendResponse)
+                    Promise.all([${injectedParts.map((a,i) => 'window.$_F'+i + '('+a.slice(1)+')')}]).then(sendResponse, sendResponse)
                     return true
                 }
                 if (typeof chrome!=''+void 0 && chrome.runtime) chrome.runtime.onMessage.addListener(window.onMSG)

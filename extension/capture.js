@@ -123,7 +123,7 @@ if (!navigator.webdriver)
     }
     function cancel(tabId) {
       const state = tabState[tabId]
-      state && typeof state.cancel == 'function' && state.cancel()
+      state && (typeof state.cancel == 'function' && state.cancel(), state.cancel = null)
       updatePopup(tabId)
       if (!state.port) delete tabState[tabId]
     }

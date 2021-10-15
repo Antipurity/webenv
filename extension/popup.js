@@ -23,6 +23,7 @@ const options = Object.assign(Object.create(null), {
   url: '',
   bytesPerValue: 1,
 })
+let url = '' // For detecting some unpleasantness early.
 let tabId = null // The tab that the popup was invoked on.
 let port = null // How we communicate with `capture.js`.
 typeof chrome != ''+void 0 && chrome.tabs ? chrome.tabs.query({active:true, currentWindow:true}, gotTabs) : gotTabs()
@@ -34,11 +35,7 @@ function changeOpt(k, v) { options[k] = v } // TODO: Also save options on change
 
 function gotTabs(tabs) {
   tabId = tabs && tabs[0] ? tabs[0].id : null
-  const u = tabs && tabs[0] && tabs[0].url || ''
-  if (u === 'about:blank' || u.slice(0,9) === 'chrome://') {
-    document.querySelector('body>.controls').textContent = '<Cannot connect here>'
-    return
-  }
+  url = tabs && tabs[0] && tabs[0].url || ''
   port = tabs && tabs[0] ? chrome.runtime.connect({ name:'popupInteraction '+tabId }) : null
   if (port) port.onMessage.addListener(changeState)
   else changeState('idling ')
@@ -65,6 +62,9 @@ function changeState(state) {
     err.textContent = state.slice(7)
     state.slice(7) && main.classList.add('error')
     main.classList.add('idling')
+    if (url === 'about:blank' || url.slice(0,9) === 'chrome://') {
+      document.querySelector('body>.controls').textContent = '<Cannot connect here>'
+    }
   } else if (state.slice(0,11) === 'connecting ') {
     serverUrl.value = state.slice(11)
     main.classList.add('connecting')

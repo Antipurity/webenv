@@ -15,10 +15,10 @@ const { writeToChannel, readFromChannel, swapBytes } = channels
 
 exports.init = docs(`Function. Pass in numeric streams and/or interfaces, receive a promise of an object that manages bidirectional numeric data streams: Env.
 
-See \`webenv.browser\` for an example of a type of stream.
+See \`webenv.browser\` and \`webenv.remote\` for stream types.
 All top-level non-stream interfaces will be copied into all streams.
 
-(Uniting many streams in one allows agents to process streams in batches, which is good for performance in master-slave computing architectures such as CPU+GPU.)
+(Uniting many streams in one allows agents to process streams in batches, which is good for performance in master-slave computing architectures such as CPU+GPU. Alternatively, launch separate WebEnv processes with separate computing-backends on separate machines, and synchronize parameter-updates manually.)
 
 Env's methods:
 - \`.reinit(...streams)\`: for dynamically changing the set of streams/interfaces; \`await\` it.
@@ -29,10 +29,13 @@ Env's methods:
     - If \`func\` is \`null\` but \`path\` is not, this cancels the subscription.
     - Port & HTTPS settings are taken from \`webenv.settings(…)\` of the first stream.
 - \`.upgrade(path='/', func)\`: routes upgrade requests to \`func\`, for establishing Web Socket connections. Same semantics as \`.listen\`.
+
+(This reacts to interface-module props \`settings:{port,httpsOptions}\` and \`streamsReinit(env)\` and \`countsAsAStream:true\`.)
 `, async function init(...interfaces) {
     const env = {
         streams: [],
         interfaces: [],
+        settings: { port:1234, httpsOptions:null },
         _reinitLock: null,
         _server: null,
         _listenPaths: Object.create(null),
@@ -53,15 +56,18 @@ Env's methods:
                 }
                 // Remember the top-level interfaces, in `.interfaces`.
                 const next = [], nonStreams = []
+                let anyStreams = false
                 await (async function track(o) {
                     if (o instanceof Promise) o = await o
                     if (Array.isArray(o)) return Promise.all(o.map(track))
                     if (!o || typeof o != 'object') throw new Error('All must be webenv streams/interfaces, got '+o)
-                    if (Object.getPrototypeOf(o) === streamPrototype) next.push(o)
-                    else nonStreams.push(o)
+                    if (Object.getPrototypeOf(o) === streamPrototype) next.push(o), anyStreams = true
+                    else nonStreams.push(o), o.countsAsAStream && (anyStreams = true)
                 })(interfaces)
+                nonStreams.forEach(x => x.settings && typeof x.settings=='function' && Object.assign(this.settings, x.settings))
+                nonStreams.forEach(x => typeof x.streamsReinit=='function' && x.streamsReinit(this))
                 this.interfaces = nonStreams
-                if (!next.length)
+                if (!anyStreams)
                     next.push(this.streams[0] || (await exports.browser()))
                 const newStreams = [], preservedStreams = new Set
                 for (let s of next) { // Preserve the new+old.
@@ -97,7 +103,7 @@ Env's methods:
         return had ? path : null
     }
     async function setupServer(env) {
-        const opt = env.streams[0].settings.httpsOptions
+        const opt = env.settings.httpsOptions
         const http = require('http'), https = require('https')
         const server = !opt ? (f => http.createServer(f)) : (f => https.createServer(opt, f))
         env._server = server((req, res) => {
@@ -110,7 +116,7 @@ Env's methods:
             if (u in paths) paths[u](req, socket, head)
             else socket.end()
         })
-        return new Promise(then => env._server.listen(env.streams[0].settings.port, then))
+        return new Promise(then => env._server.listen(env.settings.port, then))
     }
 })
 
@@ -516,9 +522,7 @@ Other interfaces may define:
     function route(...p) { return '/' + p.filter(s=>s).join('/') }
     function Spot(o) { return o[key] || (o[key] = Object.create(null)) }
     return {
-        async init(stream) {
-            const env = stream.env, id = stream.index
-            sendRestream(env, Spot(env).connections) // Adding/removing many streams at once will send quadratically-many stream indices. Who cares.
+        async streamsReinit(env) {
             await Promise.all([
                 // API.
                 env.listen(route('observations', path), (req, res) => {
@@ -528,14 +532,6 @@ Other interfaces may define:
                     to.add(res), res.on('close', () => to.delete(res))
                     res.writeHead(200, serverSentEvents)
                     sendRestream(env, to)
-                }),
-                env.listen(route('observations', path, ''+id), (req, res) => {
-                    // Remember to later send events to here whenever observations arrive.
-                    const spot = Spot(stream)
-                    const to = spot.connections || (spot.connections = new Set)
-                    to.add(res), res.on('close', () => to.delete(res))
-                    res.writeHead(200, serverSentEvents)
-                    sendRelink(stream, to)
                 }),
                 // UI.
                 env.listen(route(path), (req, res) => {
@@ -633,6 +629,19 @@ ${endian}
 </script>`)
                 }),
             ])
+        },
+        async init(stream) {
+            const env = stream.env, id = stream.index
+            sendRestream(env, Spot(env).connections) // Adding/removing many streams at once will send quadratically-many stream indices. Who cares.
+            // API.
+            await env.listen(route('observations', path, ''+id), (req, res) => {
+                // Remember to later send events to here whenever observations arrive.
+                const spot = Spot(stream)
+                const to = spot.connections || (spot.connections = new Set)
+                to.add(res), res.on('close', () => to.delete(res))
+                res.writeHead(200, serverSentEvents)
+                sendRelink(stream, to)
+            })
         },
         async deinit(stream) {
             // '/observations/path' and '/path' never get unlinked,
@@ -1102,7 +1111,7 @@ Training-only (Puppeteer-only).
 
 
 
-exports.triggers = docs(`\`webenv.triggers({ threshold=.5, resetOnNewPage=true, maxAtOnce=0, cooldown=0, priority=0 }, ...triggers)\`
+exports.triggers = docs(`\`webenv.triggers({ threshold=.5, restartOnNewPage=true, maxAtOnce=0, cooldown=0, priority=0 }, ...triggers)\`
 
 Exposes a group of triggers, such as keys on a keyboard: actions which \`start\` when over \`threshold\` and \`stop\` when under \`threshold\`.
 
@@ -1115,14 +1124,14 @@ The cooldown is in agent steps, not real time.
     const key = triggersModule.key || (triggersModule.key = Symbol('triggers'))
     const opts = Object.assign({
         threshold: .5,
-        resetOnNewPage: true,
+        restartOnNewPage: true,
         maxAtOnce: 0,
         cooldown: 0,
     }, opt || {})
     return {
         init(stream) {
             const p = stream.page
-            if (!opts.resetOnNewPage || !p) return
+            if (!opts.restartOnNewPage || !p) return
             p.on('framenavigated', frame => frame === p.mainFrame() && reset())
             p.on('domcontentloaded', reset)
         },
@@ -1236,6 +1245,7 @@ The cooldown is in agent steps, not real time.
                 let n = 0
                 for (let i = at*32; i < triggers.length && i < (at+1)*32; ++i)
                     n |= (spot.next[i] & 1) << (i%32)
+                if (opts.cooldown) spot.next.fill(0) // No "infinite `randomLink`" miracles.
                 return n
             }
             const str = ''+fn
@@ -2306,8 +2316,9 @@ See the \`/extension\` folder for a ready-made extension that can do that. Web p
 `, function remote(path='/connect', maxConnections=4) {
     const key = remote.key || (remote.key = Symbol('remote'))
     return {
-        init(stream) {
-            const env = stream.env, spot = Spot(env)
+        countsAsAStream: true, // If `we.remote` is the only stream-like interface, don't launch an extra stream.
+        streamsReinit(env) {
+            const spot = Spot(env)
             env.upgrade(path, (...args) => {
                 spot.connections.add(args)
                 openConnections(env)
@@ -2367,6 +2378,5 @@ exports.defaults = [
     exports.interval(exports.triggers.homepage, 60),
     exports.triggers(
         { maxAtOnce:1, cooldown:3600 },
-        exports.triggers.goBack,
         exports.triggers.randomLink),
 ]

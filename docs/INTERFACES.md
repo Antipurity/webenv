@@ -281,7 +281,7 @@ Training-only (Puppeteer-only).
 
 ```js
 webenv.triggers({
-  threshold=.5, resetOnNewPage=true, maxAtOnce=0, cooldown=0, priority=0,
+  threshold=.5, restartOnNewPage=true, maxAtOnce=0, cooldown=0, priority=0,
 }, ...triggers)
 ```
 
@@ -435,7 +435,6 @@ webenv.defaults = [
     webenv.interval(webenv.triggers.homepage, 60),
     webenv.triggers(
         { maxAtOnce:1, cooldown:3600 },
-        webenv.triggers.goBack,
         webenv.triggers.randomLink),
 ]
 ```

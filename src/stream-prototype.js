@@ -65,8 +65,6 @@ The result is a promise for the environment, which is an object with:
             width: 640,
             height: 480,
             userProfile: stream => require('path').join(__dirname, '..', 'puppeteer-chrome-profile-' + stream.index),
-            port: 1234,
-            httpsOptions: null,
             hidePredictions: false,
         })
         // Private state.

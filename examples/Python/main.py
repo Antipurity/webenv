@@ -136,7 +136,6 @@ webenv.webenv(
     # Note: ideally, the homepage would be a redirector to random websites.
     #   (Install & use the RandomURL dataset if you can. No pre-existing website is good enough.)
   ],
-  *[['we.browser'] for i in range(hparams['batch_size'])], # TODO
-  ['we.remote', '"/connect"', hparams['remote_size']], # TODO
-  # TODO: Understand why no-streams Python thing just does 10MB/sec disk IO.
+  *[['we.browser'] for i in range(hparams['batch_size'])],
+  ['we.remote', '"/connect"', hparams['remote_size']],
   webenv_path=we_p)
