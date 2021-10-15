@@ -78,6 +78,7 @@ exports.webSocket = function webSocket(ws) {
   let opened = ws.readyState === 0 ? new Promise(then => ws.onopen = then) : 0
   const msgs = [], reqs = []
   ws.onmessage = onReadable
+  ws.onerror = null
   ws.onclose = evt => result.close()
   const result = {
     async write(bytes) {

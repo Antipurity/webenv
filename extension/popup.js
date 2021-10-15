@@ -23,41 +23,55 @@ const options = Object.assign(Object.create(null), {
   url: '',
   bytesPerValue: 1,
 })
+let tabId = null // The tab that the popup was invoked on.
+let port = null // How we communicate with `capture.js`.
+typeof chrome != ''+void 0 && chrome.tabs ? chrome.tabs.query({active:true, currentWindow:true}, gotTabs) : gotTabs()
 function changeOpt(k, v) { options[k] = v } // TODO: Also save options on change.
 // TODO: Load opts from sync storage if possible.
 // TODO: Create UI for non-URL options.
 
 
 
+function gotTabs(tabs) {
+  tabId = tabs && tabs[0] ? tabs[0].id : null
+  port = tabs && tabs[0] ? chrome.runtime.connect({ name:'popupInteraction '+tabId }) : null
+  if (port) port.onMessage.addListener(changeState)
+  else changeState('idling ')
+}
+function connect(evt) {
+  const btn = document.getElementById('connect-btn')
+  if (btn.classList.contains('disabled')) return
+  if (port) tabId != null && port.postMessage(options)
+  else changeState('connecting '+serverUrl.value), setTimeout(() => {
+    changeState(Math.random() < .5 ? 'connected '+serverUrl.value : 'idling Some example error has occured.')
+  }, 1000)
+}
 function changeState(state) {
   if (typeof state != 'string') return
+  const main = document.getElementById('main-view')
   const btn = document.getElementById('connect-btn')
-  btn.classList.remove('idling')
-  btn.classList.remove('connecting')
-  btn.classList.remove('connected')
+  const err = document.getElementById('error-message')
+  main.classList.remove('error')
+  main.classList.remove('idling')
+  main.classList.remove('connecting')
+  main.classList.remove('connected')
+  btn.classList.remove('disabled')
   if (state.slice(0,7) === 'idling ') {
-    // TODO: If we have an error message, also display that under the button.
-    btn.classList.add('idling')
-    btn.classList.remove('disabled')
+    err.textContent = state.slice(7)
+    state.slice(7) && main.classList.add('error')
+    main.classList.add('idling')
   } else if (state.slice(0,11) === 'connecting ') {
     serverUrl.value = state.slice(11)
-    btn.classList.add('connecting')
+    main.classList.add('connecting')
     btn.classList.add('disabled')
   } else if (state.slice(0,10) === 'connected ') {
+    err.textContent = ''
     serverUrl.value = state.slice(10)
-    btn.classList.add('connected')
-    btn.classList.remove('disabled')
+    main.classList.add('connected')
   } else throw new Error('Unknown state: ' + state)
 }
-const port = typeof chrome != ''+void 0 && chrome.runtime && chrome.runtime.connect({ name:'popupInteraction' })
-if (port) port.onMessage.addListener(changeState)
-else changeState('idling ')
-function connect(evt) {
-  if (port) port.postMessage(options)
-  else changeState('connecting '+serverUrl.value), setTimeout(() => changeState('connected '+serverUrl.value), 1000)
-}
-// TODO: Test the extension. (Have to reload the browser for that, though.)
+// TODO: Test the extension.
 
 
 
-// if (navigator.webdriver) document.querySelector('body>.controls').textContent = '<Already auto-controlled, stop fooling around>' // TODO
+if (navigator.webdriver) document.querySelector('body>.controls').textContent = '<Already auto-controlled, stop fooling around>'
