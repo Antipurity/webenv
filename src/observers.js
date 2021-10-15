@@ -431,7 +431,7 @@ function connectChannel(socket, opts) {
     const encoder = new TextEncoder(), decoder = new TextDecoder()
 
     readAllData()
-    return function stopCapture() { flowing = false, cancelTimeout(timerID), channel.close() }
+    return function stopCapture() { flowing = false, clearTimeout(timerID), channel.close() }
     async function readAllData() {
         // Protocol (we're left-to-right):
         //   Start → 0xFFFFFFFF 0x01020304 JsonLen Json (For {bytesPerValue: 1|2|4}.)

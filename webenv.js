@@ -2307,23 +2307,26 @@ See the \`/extension\` folder for a ready-made extension that can do that. Web p
         const spot = Spot(env)
         spot.connections.forEach(args => {
             if (spot.open >= maxConnections) return
-            spot.connections.delete(args), ++spot.open
+            spot.connections.delete(args)
             openConnection(env, args)
         })
     }
     async function relaunch() {
         // There is no relaunching a user's browser.
     }
-    async function openConnection(env, [request, socket, head]) {
+    async function openConnection(env, args) {
+        console.error('openConnection') // TODO
+        ++Spot(env).open
         const stream = streamPrototype.create(relaunch)
         await env.reinit(env.interfaces, env.streams, stream)
-        const [ch, cancel] = handleUpgrade(stream, request, socket, head)
+        const [ch, cancel] = await handleUpgrade(stream, ...args)
         ch.onClose = () => closeConnection(env, stream)
     }
     async function closeConnection(env, stream) {
+        console.error('closeConnection') // TODO: ...Why one open and two closes...
         await env.reinit(env.interfaces, env.streams.filter(s => s !== stream))
-        --Spot(stream.env).open
-        openConnections(stream.env)
+        --Spot(env).open
+        openConnections(env)
     }
     function Spot(o) { return o[key] || (o[key] = Object.create(null), o[key].connections = new Set, o[key].open = 0, o[key]) }
 })

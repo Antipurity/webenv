@@ -22,6 +22,7 @@ exports.streams = function streams(read = process.stdin, write = process.stdout)
   if (streams.W.has(write)) throw new Error('Already writing the stream')
   streams.R.add(read), streams.W.add(write)
   const thens = [], reqs = []
+  let closed = false
   function onDrain() {
     thens.forEach(f => f()), thens.length = 0
   }
@@ -54,7 +55,9 @@ exports.streams = function streams(read = process.stdin, write = process.stdout)
     },
     skip() {},
     read(len) { return readBytes(len) },
-    close() { read.destroy(), write.destroy(), typeof this.onClose == 'function' && this.onClose() },
+    close() {
+      if (!closed) read.destroy(), write.destroy(), typeof this.onClose == 'function' && this.onClose(), closed = true
+    },
   }
   return result
 }
@@ -76,6 +79,7 @@ exports.webSocket = function webSocket(ws) {
   if (typeof ws == 'string') ws = new WebSocket(ws)
   ws.binaryType = 'arraybuffer'
   let opened = ws.readyState === 0 ? new Promise(then => ws.onopen = then) : 0
+  let closed = false
   const msgs = [], reqs = []
   ws.onmessage = onReadable
   ws.onerror = null
@@ -93,7 +97,9 @@ exports.webSocket = function webSocket(ws) {
       if (opened) await opened, opened = null
       return readBytes(len)
     },
-    close() { ws.close(), typeof this.onClose == 'function' && this.onClose() },
+    close() {
+      if (!closed) ws.close(), typeof this.onClose == 'function' && this.onClose(), closed = true
+    },
   }
   return result
   function toU8(b) { // Normalize the very annoying buffers, trying to avoid a copy.

@@ -71,6 +71,7 @@ function changeState(state) {
   } else throw new Error('Unknown state: ' + state)
 }
 // TODO: Test the extension.
+//   TODO: Why is the connection seemingly established, but nothing happens?
 
 
 
