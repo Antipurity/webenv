@@ -1,9 +1,5 @@
 This document outlines what still needs to be done to reach MVP state (or the "ready" state).
 
-- Joint training and deployment:
-    - Design a web page that connects to a remote port to be controlled. Make it work.
-    - Find out what is up with no-streams Python.
-
 - Make the Python example production-ready:
     - Save + load, checking that all unchangeable hyperparams are the same; also have a list of hparams that can change, such as the learning rate. Ask the user if they want to warm-start from the previous checkpoint if changed. (No tracing: batch size could pick up the slack.) ([Should be very easy.](https://pytorch.org/tutorials/beginner/saving_loading_models.html))
     - Weight decay, maybe only on 95% least-magnitude weights, as a kind of soft sparsification (might have synergy with LDL's greater-than-DL capacity).

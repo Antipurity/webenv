@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset=utf-8>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Connect to WebEnv</title>
+
+  <style>
+    html { height: 100%; padding: 1em }
+    body { display: flex; flex-flow: column; height: 100%; margin: 0 }
+    #biginput { width: 100%;  height: 100% }
+    * { box-sizing: border-box;  transition: .2s all }
+    body {
+      font-family: system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,"Noto Sans","Liberation Sans",sans-serif,"Apple Color Emoji","Segoe UI Emoji","Segoe UI Symbol","Noto Color Emoji";
+      font-size: 1rem;
+    }
+    .controls {
+      display: flex;
+      flex-flow: column nowrap;
+      align-items: center;
+      justify-content: center;
+    }
+    .controls>* { width: 20em;  margin: .5em;  display: block;  transition: all .2s; }
+    .controls>* { margin-bottom: 0 }
+    button, input {
+      font-family: inherit;
+      font-size: inherit;
+      line-height: inherit;
+    }
+    .input {
+      /* https://design.firefox.com/photon/components/input-fields.html (more or less) */
+      height: 32px;
+      line-height: 32px;
+      border-radius: 2px;
+      padding: 0 8px 0 8px;
+      border-color: rgba(12, 12, 13, 0.2);
+      text-overflow: ellipsis;
+    }
+    .input::placeholder {
+      color: #737373;
+      font: 0.833rem/1.4;
+    }
+    .input:hover {
+      border-color: rgba(12, 12, 13, 0.3);
+    }
+    .input:focus {
+      outline: none;
+      border-color: #0a84ff;
+      box-shadow: 0 0 0 1px #0a84ff, 0 0 0 4px rgba(10, 132, 255, 0.3);
+    }
+  </style>
+</head>
+<body>
+  <input id=server-url class=input type=url placeholder="WebEnv server URL" spellcheck=false title="It's called a 'server' because it serves you, not the other way around.">
+  <textarea id=biginput class=input spellcheck=false></textarea>
+  <script>
+let toCancel, socket
+document.getElementById('server-url').onfocus = evt => evt.target.select()
+document.getElementById('server-url').onchange = evt => {
+  if (toCancel) toCancel(), socket = toCancel = null
+  if (socket) socket.close(), socket = null
+  if (!evt.target.value) return
+  socket = new WebSocket(evt.target.value)
+  socket.binaryType = 'arraybuffer', socket.onmessage = evt => {
+    toCancel = new Function(new TextDecoder().decode(evt.data))()(socket, { bytesPerValue:1 })
+    toCancel.onClose = () => document.getElementById('server-url').value = ''
+  }
+}
+  </script>
+</body>
+</html>

@@ -162,7 +162,7 @@ Slloooooooow.
             this.reads = stream.settings.width * stream.settings.height * 3
         },
         reads:'computed',
-        observer: [async function(media, {obs}, end, w, h, maskColor) {
+        observer: [async function image(media, {obs}, end, w, h, maskColor) {
             const d = await media.video(0, 0, w, h, w, h)
             // Normalize and write.
             await end()
@@ -254,7 +254,7 @@ Provide a mask color (0xRRGGBB) to mask exact matches, or \`null\` to disable th
             stream._obsMouseY = result % 10000
         },
         observer: [
-            async function(media, {obs}, end, x, y, w, h, maxW, maxH, maskColor) {
+            async function imageRect(media, {obs}, end, x, y, w, h, maxW, maxH, maskColor) {
                 const result = x*10000 + y
                 x -= (w/2) | 0, y -= (h/2) | 0
                 const d = await media.video(x, y, w, h, maxW, maxH)
@@ -315,20 +315,20 @@ Provide a mask color (0xRRGGBB) to mask exact matches, or \`null\` to disable th
             stream._obsMouseY = result % 10000
         },
         observer: [
-            async function observeFovea(media, {obs}, end, closestPoint, x, y, w, h, maxW, maxH, maskColor) {
+            async function imageFovea(media, {obs}, end, closestPoint, x, y, w, h, maxW, maxH, maskColor) {
                 const result = x*10000 + y
                 x -= (w/2) | 0, y -= (h/2) | 0
-                if (!observeFovea.pointSum) { // Prepare data, if not prepared already.
+                if (!imageFovea.pointSum) { // Prepare data, if not prepared already.
                     let max = 0
                     for (let i = 0; i < closestPoint.length; ++i)
                         max = Math.max(max, closestPoint[i])
                     const numPoints = max + 1
-                    observeFovea.pointSum = new Float32Array(numPoints * 3)
-                    observeFovea.pointNum = new Int32Array(numPoints)
+                    imageFovea.pointSum = new Float32Array(numPoints * 3)
+                    imageFovea.pointNum = new Int32Array(numPoints)
                 }
                 // Get image data.
                 const d = await media.video(x, y, w, h, maxW, maxH)
-                const pointSum = observeFovea.pointSum, pointNum = observeFovea.pointNum
+                const pointSum = imageFovea.pointSum, pointNum = imageFovea.pointNum
                 // Normalize, average, and write.
                 await end()
                 pointSum.fill(0), pointNum.fill(0)
@@ -479,7 +479,7 @@ To calculate \`samples\`, divide \`sampleRate\` by the expected frames-per-secon
 `, function imageRect(samples = 2048, sampleRate = 44100) {
     return [observers, {
         reads: samples,
-        observer: [async function(media, {obs}, end, samples, sampleRate) {
+        observer: [async function audio(media, {obs}, end, samples, sampleRate) {
             // A copy, but this is small-time compared to `webenv.image(...)`.
             const data = await media.audio(samples, sampleRate)
             await end()
@@ -519,8 +519,8 @@ Other interfaces may define:
         'Content-Type': 'text/html',
     }
     const key = visualize.key || (visualize.key = Symbol('visualize'))
-    function route(...p) { return '/' + p.filter(s=>s).join('/') }
     function Spot(o) { return o[key] || (o[key] = Object.create(null)) }
+    function route(...p) { return '/' + p.filter(s=>s).join('/') }
     return {
         async streamsReinit(env) {
             await Promise.all([
@@ -1132,8 +1132,9 @@ The cooldown is in agent steps, not real time.
         init(stream) {
             const p = stream.page
             if (!opts.restartOnNewPage || !p) return
-            p.on('framenavigated', frame => frame === p.mainFrame() && reset())
-            p.on('domcontentloaded', reset)
+            const mainFrame = p.mainFrame()
+            p.on('framenavigated', frame => frame === mainFrame && reset(stream))
+            p.on('domcontentloaded', () => reset(stream))
         },
         priority: typeof opt.priority == 'number' ? opt.priority : 0,
         writes:triggers.length,
@@ -1141,7 +1142,10 @@ The cooldown is in agent steps, not real time.
         inject: getCodeToInject(),
     }
     function Spot(o) { return o[key] || (o[key] = Object.create(null)) }
-    function reset() { trigger.prev && trigger.prev.fill(0) }
+    function reset(stream) {
+        const spot = Spot(stream)
+        spot.prev && spot.prev.fill(0)
+    }
     function trigger(tr, opts, act, stream) {
         const spot = Spot(stream)
         if (!spot.prev) {
@@ -1171,8 +1175,7 @@ The cooldown is in agent steps, not real time.
         if (oldMax > 0)
             for (let i = 0; i < tr.length; ++i)
                 next[i] = act[i] >= (prev[i] ? oldThr : newThr) ? 1 : 0
-        else
-            next.fill(0)
+        else next.fill(0)
         // Allocate new triggers, and cooldown.
         if (cooldown) {
             let newTriggers = 0
@@ -1185,8 +1188,8 @@ The cooldown is in agent steps, not real time.
         }
         // Un/trigger.
         for (let i = 0; i < tr.length; ++i)
-            if (tr[i].start && !prev[i] && next[i]) tr[i].start(stream)
-            else if (tr[i].stop && prev[i] && !next[i]) tr[i].stop(stream)
+            if (!prev[i] && next[i] && tr[i].start) tr[i].start(stream)
+            else if (prev[i] && !next[i] && tr[i].stop) tr[i].stop(stream)
         prev.set(next)
     }
     async function getCodeToInject() {
@@ -1307,44 +1310,44 @@ exports.keyboard = docs(`\`webenv.keyboard(Options={maxAtOnce:3}, Keys='...')\`
 Exposes the keyboard as actions. https://developer.mozilla.org/en-US/docs/Web/API/KeyboardEvent/key/Key_Values
 For more details on \`Options\`, see \`webenv.triggers\`.
 \`Keys\` is a space-separated string of keys or \`'Space'\`. (Shift does not modify keys, so, with-Shift versions have to be manually included.)
-`, function(opt = {maxAtOnce:3}, kb = 'Alt Control Shift Enter Tab Space ArrowDown ArrowLeft ArrowRight ArrowUp End Home PageDown PageUp Backspace Delete Escape ` ~ 1 2 3 4 5 6 7 8 9 0 ! @ # $ % ^ & * ( ) q w e r t y u i o p [ ] \\ a s d f g h j k l ; \' z x c v b n m , . / Q W E R T Y U I O P { } | A S D F G H J K L : " Z X C V B N M < > ?') {
+`, function keyboard(opt = {maxAtOnce:3}, kb = 'Alt Control Shift Enter Tab Space ArrowDown ArrowLeft ArrowRight ArrowUp End Home PageDown PageUp Backspace Delete Escape ` ~ 1 2 3 4 5 6 7 8 9 0 ! @ # $ % ^ & * ( ) q w e r t y u i o p [ ] \\ a s d f g h j k l ; \' z x c v b n m , . / Q W E R T Y U I O P { } | A S D F G H J K L : " Z X C V B N M < > ?') {
     const keys = kb.split(' ').map(k => k === 'Space' ? ' ' : k)
     const info = require('puppeteer/lib/cjs/puppeteer/common/USKeyboardLayout.js').keyDefinitions
-    let inj, injP = new Promise(then => inj = then)
-    return [
-        { init(stream) { inj(stream.cdp ? undefined : true) } },
-        exports.triggers(
-            opt,
-            ...keys.map(k => {
-                const desc = info[k]
-                const down = keyOpts(desc, 'down'), up = keyOpts(desc, 'up')
-                return {
-                    start: stream => CDP(stream, down),
-                    stop: stream => CDP(stream, up),
-                    injectStart: injP.then(b => b && [
-                        (desc,txt) => {
-                            const t = document.activeElement || document.body
-                            t.dispatchEvent(new KeyboardEvent('keydown', desc))
-                            txt && t.dispatchEvent(new InputEvent('beforeinput', { data:txt, bubbles:true, cancelable:true, composed:true }))
-                            txt && t.dispatchEvent(new InputEvent('input', { data:txt, bubbles:true, cancelable:true, composed:true }))
-                            // Text-insertion has to be manual.
-                            //   `execCommand` is deprecated, but works nicely.
-                            //   Why is everything nice deprecated?
-                            desc.key==='Backspace' && document.execCommand('delete', false, '')
-                            desc.key==='Delete' && document.execCommand('forward-delete', false, '')
-                            txt && document.execCommand('insertText', false, txt)
-                        },
-                        { ...desc, bubbles:true, cancelable:true, composed:true },
-                        desc.key.length === 1 ? desc.key : '',
-                    ]),
-                    injectStop: injP.then(b => b && [desc => {
+    return exports.triggers(
+        opt,
+        ...keys.map(k => {
+            const desc = info[k]
+            const down = keyOpts(desc, 'down'), up = keyOpts(desc, 'up')
+            const desc2 = { ...desc, bubbles:true, cancelable:true, composed:true }
+            return {
+                start: stream => CDP(stream, down),
+                stop: stream => CDP(stream, up),
+                injectStart: [
+                    (puppet, desc, txt) => {
+                        if (puppet) return
                         const t = document.activeElement || document.body
-                        t.dispatchEvent(new KeyboardEvent('keyup', desc))
-                    }, desc, desc.key.length === 1 ? desc.key : '']),
-                }
-            }),
-        ),
-    ]
+                        t.dispatchEvent(new KeyboardEvent('keydown', desc))
+                        txt && t.dispatchEvent(new InputEvent('beforeinput', { data:txt, bubbles:true, cancelable:true, composed:true }))
+                        txt && t.dispatchEvent(new InputEvent('input', { data:txt, bubbles:true, cancelable:true, composed:true }))
+                        // Text-insertion has to be manual.
+                        //   `execCommand` is deprecated, but works nicely.
+                        //   Why is everything nice deprecated?
+                        desc.key==='Backspace' && document.execCommand('delete', false, '')
+                        desc.key==='Delete' && document.execCommand('forward-delete', false, '')
+                        txt && document.execCommand('insertText', false, txt)
+                    },
+                    stream => stream.cdp ? 1 : 0,
+                    desc2,
+                    desc.key.length === 1 ? desc.key : '',
+                ],
+                injectStop: [(puppet, desc) => {
+                    if (puppet) return
+                    const t = document.activeElement || document.body
+                    t.dispatchEvent(new KeyboardEvent('keyup', desc))
+                }, stream => stream.cdp ? 1 : 0, desc2],
+            }
+        }),
+    )
     function CDP(stream, opts) {
         if (!stream.cdp) return
         stream.cdp.send('Input.dispatchKeyEvent', opts).catch(doNothing)
@@ -1962,7 +1965,7 @@ if (!window.${name}) window.${name} = function(score) {
                 spot.score = norm
             }
         },
-        observer: [function(media, io, end) {
+        observer: [function observeScore(media, io, end) {
             return end()
         }],
         inject: [function inj(script) {

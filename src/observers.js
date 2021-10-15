@@ -42,7 +42,7 @@ Other interfaces that want this ought to define, for the 3 execution contexts (W
   - Media access:
     - \`await media.video(x,y,w,h)=>pixels\`
     - \`await media.audio(sampleN=2048, sampleRate=44100)=>samples\`
-  - Log with \`PRINT\` if present.
+  - Log with \`PRINT\` if present, else \`console.log\`.
 - Content script: \`.inject: [(...args)=>report, ...args]\`
   - Cannot access video/audio; can access the DOM.
   - If executing in a regular web page, \`.observer\` and \`.inject\` execute in the same scope, which is also visible to page JS.
@@ -183,14 +183,12 @@ async function compileJS(stream) {
     }`]) // Reinterpret pred/act bytes as f32/i8/i16.
     const endFunc = items.push([`()=>{}`])-1
     const injected = [(end, ...args) => { // Handle `inject` definers.
-        if (tabId != null) {
-            return new Promise(then => {
-                // Send a message to the active tab. (If not in an extension, just call.)
-                if (typeof chrome!=''+void 0 && chrome.tabs) chrome.tabs.sendMessage(tabId, args, then)
-                else window.onMSG(args, null, then)
-                setTimeout(then, 200) // Don't wait for stalls infinitely.
-            }).then(a => end(a))
-        }
+        return new Promise(then => {
+            // Send a message to the active tab. (If not in an extension, just call.)
+            setTimeout(then, 200) // But don't wait for stalls infinitely.
+            if (typeof chrome!=''+void 0 && chrome.tabs) tabId != null && chrome.tabs.sendMessage(tabId, args, then)
+            else window.onMSG(args, null, then)
+        }).then(a => end(a))
     }], injectedParts = [];  items.push(injected)
     for (let i = 0; i < stream._all.length; ++i) {
         const o = stream._all[i]
@@ -218,14 +216,16 @@ async function compileJS(stream) {
             injectedParts.push([''+inj[0], ...args])
         }
     }
-    items.push([async function encode() {
-        await RCV.end(), await Promise.resolve()
-        RCV.obsEncoded = encodeInts(RCV.obs, RCV.obsEncoded)
-    }])
     items[endFunc] = [`() => {
         const end = RCV.end = ${end}
         end.inj = null, end.items = ${staticArgs.size + (injectedParts.length ? 2 : 1)}, end.p = new Promise(then => end.then = then)
-    }`] // Account for all end() calls: injector, obs-encoder, and all observers.
+    }`] // Account for all end() calls: injector above, obs-encoder right below, and all observers.
+    const encodeItem = [async function encode(end) {
+        await end(), await Promise.resolve()
+        RCV.obsEncoded = encodeInts(RCV.obs, RCV.obsEncoded)
+    }]
+    staticArgs.set(encodeItem, `RCV.end`)
+    items.push(encodeItem)
     staticArgs.set(injected, `RCV.end`)
     prelude.push(`RCV.onClose=[]`)
     prelude.push(`function bindInjEnd(end,i) { return ()=>end().then(a=>a&&a[i]) }`)
@@ -379,12 +379,11 @@ async function compileJS(stream) {
     }`)
     prelude.push(''+encodeInts)
     prelude.push(''+decodeInts)
+    prelude.push(`let tabId, tabW, tabH`)
     if (injectedParts.length) {
-        prelude.push(`let tabId, tabW, tabH`)
         // JS-`inject`ion stuff:
         //   Update the injected code on startup and page navigation (and relink).
         prelude.push(`function updateInjection(ti) {
-            if (tabId == null) return
             if (ti != null && ti !== tabId) return
             const injection = ${JSON.stringify(`
                 if (window.onMSG && typeof chrome!=''+void 0 && chrome.runtime) chrome.runtime.onMessage.removeListener(window.onMSG)
@@ -397,7 +396,7 @@ async function compileJS(stream) {
             `)}
             if (typeof chrome!=''+void 0 && chrome.tabs)
                 // JS injection could fail, such as on about:blank. Just ignore such cases.
-                chrome.tabs.executeScript(tabId, { code:injection, runAt:'document_start' }, () => chrome.runtime.lastError)
+                tabId != null && chrome.tabs.executeScript(tabId, { code:injection, runAt:'document_start' }, () => chrome.runtime.lastError)
             else new Function(injection)()
         }`)
         //   Remember the tab ID that started this.
@@ -411,11 +410,12 @@ async function compileJS(stream) {
                 chrome.tabs.onUpdated.addListener(updateInjection)
                 RCV.onClose.push(() => chrome.tabs.onUpdated.removeListener(updateInjection))
             })
-        }
+        } else tabId=null, tabW=innerWidth, tabH=innerHeight, updateInjection()
         `)
     } else {
         items.splice(items.indexOf(injected), 1)
         for (let i=0; i < needReaction.length; ++i) --needReaction[i]
+        prelude.push(`tabId=null, tabW=innerWidth, tabH=innerHeight`)
     }
     // And compile to [sendFunc, receiveStr].
     spot.snd = null
