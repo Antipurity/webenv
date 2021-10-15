@@ -11,6 +11,7 @@ import torch
 
 hparams = {
   'batch_size': 1,
+  'remote_size': 1,
 
   'lr': .001,
   'optim': 'Adam', # https://pytorch.org/docs/stable/optim.html
@@ -117,7 +118,7 @@ def loss(pred, got, obs, act_len):
     L = L + max_model(act_only, Return.detach())
   return L
 agent = recurrent.recurrent(
-  (hparams['batch_size'], N), loss=loss, optimizer=optim,
+  (hparams['batch_size'] + hparams['remote_size'], N), loss=loss, optimizer=optim,
   unroll_length=hparams['unroll_length'], synth_grad=synth_grad,
   input = getattr(recurrent, 'webenv_' + hparams['merge_obs']),
   device=dev,
@@ -136,5 +137,6 @@ webenv.webenv(
     #   (Install & use the RandomURL dataset if you can. No pre-existing website is good enough.)
   ],
   *[['we.browser'] for i in range(hparams['batch_size'])], # TODO
-  # TODO: Understand why no-streams Python thing just does 10MB/S disk IO.
+  ['we.remote', '"/connect"', hparams['remote_size']], # TODO
+  # TODO: Understand why no-streams Python thing just does 10MB/sec disk IO.
   webenv_path=we_p)

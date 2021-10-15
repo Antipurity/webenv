@@ -34,6 +34,11 @@ function changeOpt(k, v) { options[k] = v } // TODO: Also save options on change
 
 function gotTabs(tabs) {
   tabId = tabs && tabs[0] ? tabs[0].id : null
+  const u = tabs && tabs[0] && tabs[0].url || ''
+  if (u === 'about:blank' || u.slice(0,9) === 'chrome://') {
+    document.querySelector('body>.controls').textContent = '<Cannot connect here>'
+    return
+  }
   port = tabs && tabs[0] ? chrome.runtime.connect({ name:'popupInteraction '+tabId }) : null
   if (port) port.onMessage.addListener(changeState)
   else changeState('idling ')
@@ -70,8 +75,6 @@ function changeState(state) {
     main.classList.add('connected')
   } else throw new Error('Unknown state: ' + state)
 }
-// TODO: Test the extension.
-//   TODO: Why is the connection seemingly established, but nothing happens?
 
 
 

@@ -156,7 +156,7 @@ socket.binaryType = 'arraybuffer', socket.onmessage = evt => {
 }
 ```
 
-(And do `toCancel()` to disconnect.)
+(And do `toCancel()` to disconnect, and set `toCancel.onClose = ()=>{}` to react to disconnects.)
 
 See the `/extension` folder for a ready-made extension that can do that. Web pages can also connect, though they will not be able to navigate.
 
@@ -437,7 +437,6 @@ webenv.defaults = [
         { maxAtOnce:1, cooldown:3600 },
         webenv.triggers.goBack,
         webenv.triggers.randomLink),
-    webenv.remote(),
 ]
 ```
 

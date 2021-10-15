@@ -25,7 +25,7 @@ socket.binaryType = 'arraybuffer', socket.onmessage = evt => {
 }
 \`\`\`
 
-(And do \`toCancel()\` to disconnect.)
+(And do \`toCancel()\` to disconnect, and set \`toCancel.onClose = ()=>{}\` to react to disconnects.)
 
 (To make interface modules handle connections, use \`handleUpgrade\` from this file: \`stream.env.upgrade('/path', (...a) => handleUpgrade(stream, ...a))\`.)
 
@@ -227,12 +227,19 @@ async function compileJS(stream) {
         end.inj = null, end.items = ${staticArgs.size + (injectedParts.length ? 2 : 1)}, end.p = new Promise(then => end.then = then)
     }`] // Account for all end() calls: injector, obs-encoder, and all observers.
     staticArgs.set(injected, `RCV.end`)
+    prelude.push(`RCV.onClose=[]`)
     prelude.push(`function bindInjEnd(end,i) { return ()=>end().then(a=>a&&a[i]) }`)
     prelude.push(`RCV.obs=new ${Observations.name}(${stream.reads})`)
     prelude.push(`RCV.obsEncoded=new ${cons.name}(0)`)
     // Imagine not having JS highlighting for strings, and considering such code unreadable.
     prelude.push(`RCV.media={
         stream:null, w:0, h:0, sr:0,
+        closeStream() {
+            if (this.stream)
+                for (let track of this.stream.getTracks())
+                    track.stop()
+            this.stream = null
+        },
         async getStream(width, height, sampleRate) {
             // (Should probably also measure frame-rate, and re-request the stream on too much deviation.)
             if (this.stream instanceof Promise || this.w >= width && this.h >= height && this.sr >= sampleRate)
@@ -241,12 +248,20 @@ async function compileJS(stream) {
             this.w = Math.max(this.w, width)
             this.h = Math.max(this.h, height)
             this.sr = Math.max(this.sr, sampleRate)
+            // Chrome's tab capture inserts black bars if we don't preserve the aspect ratio.
+            const aspectRatio = (tabH || 1) / (tabW || 1)
+            const w = Math.max(this.w, this.h / aspectRatio)
+            const h = w * aspectRatio
             const opt = haveTabCapture ? {
                 audio:true,
                 video:true,
                 videoConstraints:{
                     // Docs are sparse.
-                    mandatory:{ maxWidth:this.w, maxHeight:this.h },
+                    mandatory:{
+                        chromeMediaSource:'tab',
+                        minWidth:w, minHeight:h,
+                        maxWidth:w, maxHeight:h,
+                    },
                 },
             } : {
                 audio:{
@@ -265,9 +280,7 @@ async function compileJS(stream) {
                     if (track.applyConstraints)
                         track.applyConstraints(opt), reapplied = true
             if (reapplied) return
-            if (this.stream)
-                for (let track of this.stream.getTracks())
-                    track.stop()
+            this.closeStream()
             return this.stream = new Promise((resolve, reject) => {
                 const gotStream = (s, err) => {
                     if (s) {
@@ -367,10 +380,12 @@ async function compileJS(stream) {
     prelude.push(''+encodeInts)
     prelude.push(''+decodeInts)
     if (injectedParts.length) {
+        prelude.push(`let tabId, tabW, tabH`)
         // JS-`inject`ion stuff:
         //   Update the injected code on startup and page navigation (and relink).
-        prelude.push(`function updateInjection() {
+        prelude.push(`function updateInjection(ti) {
             if (tabId == null) return
+            if (ti != null && ti !== tabId) return
             const injection = ${JSON.stringify(`
                 if (window.onMSG && typeof chrome!=''+void 0 && chrome.runtime) chrome.runtime.onMessage.removeListener(window.onMSG)
                 ${injectedParts.map((a,i) => 'window.F'+i + '=' + a[0]).join('\n')}
@@ -380,21 +395,22 @@ async function compileJS(stream) {
                 }
                 if (typeof chrome!=''+void 0 && chrome.runtime) chrome.runtime.onMessage.addListener(window.onMSG)
             `)}
-            if (typeof chrome!=''+void 0 && chrome.tabs) chrome.tabs.executeScript(tabId, { code:injection, runAt:'document_start' })
+            if (typeof chrome!=''+void 0 && chrome.tabs)
+                // JS injection could fail, such as on about:blank. Just ignore such cases.
+                chrome.tabs.executeScript(tabId, { code:injection, runAt:'document_start' }, () => chrome.runtime.lastError)
             else new Function(injection)()
         }`)
-        prelude.push(`
-        if (typeof chrome!=''+void 0 && chrome.tabs) {
-            if (window.onNavigation) chrome.tabs.onUpdated.removeListener(window.onNavigation)
-            chrome.tabs.onUpdated.addListener(window.onNavigation = updateInjection)
-        }
-        `)
         //   Remember the tab ID that started this.
-        prelude.push(`let tabId`)
+        //     (And re-inject JS, on start and on tab navigation.)
         prelude.push(`
-        if (typeof chrome!=''+void 0 && chrome.tabs) {
-            const setId = tabs => tabs[0] && (tabId = tabs[0].id, updateInjection())
-            chrome.tabs.query({active:true, currentWindow:true}, setId)
+        if (typeof chrome!=''+void 0 && chrome.tabs && chrome.tabs.query) {
+            chrome.tabs.query({active:true, currentWindow:true}, tabs => {
+                if (!tabs || !tabs[0]) return
+                tabId = tabs[0].id, tabW = tabs[0].width, tabH = tabs[0].height
+                updateInjection()
+                chrome.tabs.onUpdated.addListener(updateInjection)
+                RCV.onClose.push(() => chrome.tabs.onUpdated.removeListener(updateInjection))
+            })
         }
         `)
     } else {
@@ -431,7 +447,15 @@ function connectChannel(socket, opts) {
     const encoder = new TextEncoder(), decoder = new TextDecoder()
 
     readAllData()
-    return function stopCapture() { flowing = false, clearTimeout(timerID), channel.close() }
+    const result = function stopCapture() {
+        channel.close()
+    }
+    channel.onClose = () => {
+        flowing = false, clearTimeout(timerID), result.onClose && result.onClose()
+        RCV && RCV.media && RCV.media.closeStream()
+        RCV && RCV.onClose && RCV.onClose.forEach(f => f())
+    }
+    return result
     async function readAllData() {
         // Protocol (we're left-to-right):
         //   Start → 0xFFFFFFFF 0x01020304 JsonLen Json (For {bytesPerValue: 1|2|4}.)

@@ -50,6 +50,7 @@ The result is a promise for the environment, which is an object with:
         res._relaunch = relaunch
         return res
     },
+
     async open(env, index) {
         // Public interface. (More efficient to set this to defaults than to have many object shapes.)
         this.interfaces = null

@@ -151,15 +151,16 @@ def recurrent(
     async def step(lock, indices, obs, *args):
       # Step.
       nonlocal start_state, state, unroll_index, unroll_loss, unrolls
+      if indices.max() >= state.shape[0]:
+        raise TypeError('Got too many streams: got ' + str(indices.max()+1) + ' but only have state for ' + str(state.shape[0]))
       obs_t = list_to_torch(obs, device)
       state2 = gather(state, indices)
-      prev_state2 = state2
-      state2 = input(prev_state2, obs_t)
+      state3 = input(state2, obs_t)
       # Prev frame predicts this one:
-      unroll_loss = unroll_loss + loss(prev_state2, (webenv_merge(prev_state2, obs_t) if input is not webenv_merge else state2).detach(), obs_t, *args)
+      unroll_loss = unroll_loss + loss(state2, (webenv_merge(state2, obs_t) if input is not webenv_merge else state3).detach(), obs_t, *args)
 
-      state2 = transition(state2)
-      state = scatter(state, indices, state2)
+      state4 = transition(state3)
+      state = scatter(state, indices, state4)
       unroll_index += 1
       # Backprop.
       if unroll_length(unroll_index) if callable(unroll_length) else (unroll_length <= unroll_index):

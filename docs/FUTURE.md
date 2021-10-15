@@ -1,7 +1,6 @@
 This document outlines what still needs to be done to reach MVP state (or the "ready" state).
 
 - Joint training and deployment:
-    - Make sure that the Capture extension can be used by actual humans.
     - Design a web page that connects to a remote port to be controlled. Make it work.
 
 - Make the Python example production-ready:

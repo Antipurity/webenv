@@ -547,6 +547,7 @@ Other interfaces may define:
 <!DOCTYPE html>
 <style>
     html { display:flex; flex-flow:row wrap; height:100%; justify-content:center; align-items:center; overflow-x:hidden; }
+    canvas { box-shadow: 0 0 .1em gray }
     button { border:none; width:2em; height:2em }
     button.active { background-color:#4dc1ed }
     @media (prefers-color-scheme: dark) {
@@ -636,7 +637,7 @@ ${endian}
         async deinit(stream) {
             // '/observations/path' and '/path' never get unlinked,
             //   but the server gets stopped for closed envs, so no memory leak.
-            const env = stream.env
+            const env = stream.env, id = stream.index
             sendRestream(env, Spot(env).connections)
             Spot(stream).connections && Spot(stream).connections.forEach(res => res.end())
             await env.listen(route('observations', path, ''+id))
@@ -949,25 +950,27 @@ if (!window.${name}) {
             stream._directLinkObs = obsLen, stream._directLinkAct = actLen
         },
         // Lots of data format conversions below. But, eh, not nearly as bad for the WebEnv server as doing them on-server.
+        // (This is not really friendly to having many open human connections at once.)
         observer: [async function observeLinks(media, {obs,pred,act}, end) {
             // Send the content script our actions.
             if (!(act instanceof Float32Array)) throw new Error('Expected f32')
             const act64 = btoa(toBinStr(new Uint8Array(act.buffer, act.byteOffset, act.byteLength)))
-            if (typeof chrome != ''+void 0) {
+            if (typeof chrome != ''+void 0 && chrome.runtime && chrome.runtime.onConnect) {
                 // Establish a listener to open ports.
                 if (!observeLinks.listening) {
-                    window._directLinkPortListener && chrome.runtime.onConnect.removeListener(window._directLinkPortListener)
-                    window._directLinkPortListener = p => {
+                    const ports = observeLinks.ports = new Set
+                    const ltr = p => {
                         if (p.name !== 'directLinkAct') return
-                        window._directLinkPorts.add(p)
-                        p.onDisconnect.addListener(p => window._directLinkPorts.delete(p))
+                        ports.add(p)
+                        p.onDisconnect.addListener(p => ports.delete(p))
                     }
-                    chrome.runtime.onConnect.addListener(window._directLinkPortListener)
-                    if (!window._directLinkPorts) window._directLinkPorts = new Set
+                    chrome.runtime.onConnect.addListener(ltr)
+                    if (!ports) ports = new Set
+                    RCV.onClose.push(() => chrome.runtime.onConnect.removeListener(ltr))
                     observeLinks.listening = true
                 }
                 // Send actions as a message. (port.sender.frameId could have helped distinguish <iframe>s.)
-                window._directLinkPorts.forEach(port => port.postMessage(act64))
+                observeLinks.ports.forEach(port => port.postMessage(act64))
             } else if (typeof window._directLinkAct == 'function')
                 window._directLinkAct(act64)
 
@@ -1015,7 +1018,7 @@ if (!window.${name}) {
                         window._directLinkAct.obsMsg = evt.detail !== '0 ' ? evt.detail : undefined // `${actLen} ${obs64}`
                     })
                 }
-                if (typeof chrome != ''+void 0) {
+                if (typeof chrome != ''+void 0 && chrome.runtime && chrome.runtime.connect) {
                     if (window._directLinkPort) window._directLinkPort.disconnect(), window._directLinkPort = undefined
                     ;(window._directLinkPort = chrome.runtime.connect({ name:'directLinkAct' })).onMessage.addListener(window._directLinkAct)
                 }
@@ -1080,7 +1083,6 @@ Exposes 2 actions, which add to viewport scroll position (in pixels).
             const dy = Math.round(sensitivity * Math.max(-1, Math.min(act[1], 1)))
             stream[DX] = dx, stream[DY] = dy
         },
-        observer: [(media,{obs},end)=>{end()}],
         inject: [(dx, dy) => scrollBy(dx, dy), s => s[DX], s => s[DY]],
     }]
 })
@@ -1255,7 +1257,7 @@ Training-only (Puppeteer-only): users should not be asked to sample random web p
 exports.triggers.goBack = docs(`\`webenv.triggers({}, webenv.triggers.goBack)\`
 Back to the previous page, please.
 `, {
-    injectStart: [function() { typeof chrome!=''+void 0 && history.go(-1) }],
+    injectStart: [function() { typeof chrome != ''+void 0 && chrome.runtime && history.go(-1) }],
 })
 
 
@@ -1264,6 +1266,8 @@ exports.triggers.randomLink = docs(`\`webenv.triggers({}, webenv.triggers.random
 Picks a random file: or http: or https: link on the current page, and follows it.
 `, {
     injectStart: [function() {
+        // TODO: ...Wait, why aren't these ever called... Isn't this suspicious?
+        if (typeof chrome == ''+void 0 || !chrome.runtime) return // Extension-only.
         let place = ''+location.href, i = place.lastIndexOf('#')
         if (i >= 0) place = place.slice(0, i) // `URL#ID` → `URL`
         const urls = [...document.querySelectorAll('a')].map(a => a.href)
@@ -1274,7 +1278,7 @@ Picks a random file: or http: or https: link on the current page, and follows it
             if (u.slice(0,7) === 'http://') return true
             if (u.slice(0,8) === 'https://') return true
         })
-        if (!urls.length || typeof chrome==''+void 0) return
+        if (!urls.length) return
         location.href = urls[Math.random() * urls.length | 0]
     }],
 })
@@ -2228,7 +2232,7 @@ To write new interfaces, look at the pre-existing interfaces.
         page.on('error', err => { throw err })
         closeAllPagesExcept(browser, page)
         const langParts = this.lang.split(',')
-        ;[ // Thanks, async/await, very helpful for efficiency via parallelization. (Sarcasm.)
+        ;[
             this.cdp,
             chromeWidth,
             chromeHeight,
@@ -2288,7 +2292,7 @@ socket.binaryType = 'arraybuffer', socket.onmessage = evt => {
 }
 \`\`\`
 
-(And do \`toCancel()\` to disconnect.)
+(And do \`toCancel()\` to disconnect, and set \`toCancel.onClose = ()=>{}\` to react to disconnects.)
 
 See the \`/extension\` folder for a ready-made extension that can do that. Web pages can also connect, though they will not be able to navigate.
 `, function remote(path='/connect', maxConnections=4) {
@@ -2296,8 +2300,8 @@ See the \`/extension\` folder for a ready-made extension that can do that. Web p
     return {
         init(stream) {
             const env = stream.env, spot = Spot(env)
-            env.upgrade(path, (request, socket, head) => {
-                spot.connections.add([request, socket, head])
+            env.upgrade(path, (...args) => {
+                spot.connections.add(args)
                 openConnections(env)
             })
         },
@@ -2312,10 +2316,10 @@ See the \`/extension\` folder for a ready-made extension that can do that. Web p
         })
     }
     async function relaunch() {
-        // There is no relaunching a user's browser.
+        // There is no relaunching a remote user's browser. But we do provide interfaces.
+        await this.relink(this.env.interfaces)
     }
     async function openConnection(env, args) {
-        console.error('openConnection') // TODO
         ++Spot(env).open
         const stream = streamPrototype.create(relaunch)
         await env.reinit(env.interfaces, env.streams, stream)
@@ -2323,7 +2327,6 @@ See the \`/extension\` folder for a ready-made extension that can do that. Web p
         ch.onClose = () => closeConnection(env, stream)
     }
     async function closeConnection(env, stream) {
-        console.error('closeConnection') // TODO: ...Why one open and two closes...
         await env.reinit(env.interfaces, env.streams.filter(s => s !== stream))
         --Spot(env).open
         openConnections(env)
@@ -2358,5 +2361,4 @@ exports.defaults = [
         { maxAtOnce:1, cooldown:3600 },
         exports.triggers.goBack,
         exports.triggers.randomLink),
-    exports.remote(),
 ]
