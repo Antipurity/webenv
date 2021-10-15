@@ -2,7 +2,6 @@ This document outlines what still needs to be done to reach MVP state (or the "r
 
 - Joint training and deployment:
     - Design a web page that connects to a remote port to be controlled. Make it work.
-    - Re-test `directLink`.
     - Find out what is up with no-streams Python.
 
 - Make the Python example production-ready:
