@@ -22,12 +22,13 @@ exports.compileSentJS = async function compileSentJS(staticArgs, items, prelude 
     const constStringToIndex = new Map
     for (let i = 0; i < items.length; ++i) {
         const item = items[i] instanceof Promise ? await items[i] : items[i]
-        if (!Array.isArray(item)) throw new Error('Can only compile arrays, first received func then sent args')
+        if (!Array.isArray(item)) throw new Error('Can only compile arrays, first the received func then sent args')
         prefix.push(`RCV.F${i} = ${item[0]}`)
         const args = []
         for (let j = 1; j < item.length; ++j) {
             const arg = item[j] instanceof Promise ? await item[j] : item[j]
             if (typeof arg == 'function') { // Unknown; send it each time.
+                // (If you use closures instead of stateless funcs like we assume, override `.toString()`, I guess.)
                 const at = allocSent(''+arg, sentStringToIndex)
                 sendFuncs[at] = arg
                 args.push(`sent[${at}]`)

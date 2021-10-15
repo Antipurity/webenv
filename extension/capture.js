@@ -11,6 +11,7 @@ if (!navigator.webdriver)
     // Safeguard against malicious server-sent `.observer`s. We only want to give it the current tab.
     // I think this is every possibility accounted for. If not, contribute.
     //   (To access more of the `chrome` API, you have to add it here, or give up your dreams.)
+    //   Fingerprinting & resource starvation should be the most malicious possible uses.
     const navigationListeners = new WeakMap
     const realTabIds = Object.create(null), fakeTabIds = Object.create(null)
     function please(fake) {

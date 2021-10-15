@@ -1110,8 +1110,9 @@ Each trigger is \`{ start, stop,  injectStart, injectStop }\`, all functions if 
 (\`start\`/\`stop\` are functions if defined. \`injectStart\`/\`injectStop\` are arrays, where the first item is the funcs and the rest are its args; try to keep args static.)
 For example: \`webenv.triggers({ maxAtOnce:1, cooldown:600 }, {start(stream) { stream.page.goto('https://www.youtube.com/watch?v=dQw4w9WgXcQ') }})\`
 The cooldown is in agent steps, not real time.
-`, function(opt, ...triggers) {
+`, function triggersModule(opt, ...triggers) {
     if (!Array.isArray(triggers)) throw new Error('Not an array')
+    const key = triggersModule.key || (triggersModule.key = Symbol('triggers'))
     const opts = Object.assign({
         threshold: .5,
         resetOnNewPage: true,
@@ -1130,18 +1131,17 @@ The cooldown is in agent steps, not real time.
         write(stream, pred, act) { trigger(triggers, opts, act, stream) },
         inject: getCodeToInject(),
     }
+    function Spot(o) { return o[key] || (o[key] = Object.create(null)) }
     function reset() { trigger.prev && trigger.prev.fill(0) }
-    function trigger(tr, opts, act, ...args) {
-        const f = trigger
-        if (!f.prev) {
-            f.prev = new Uint8Array(tr.length)
-            f.next = new Uint8Array(tr.length)
-            f.sorted = new Float32Array(tr.length)
-            f.framesUntilReady = new Uint8Array(opts.maxAtOnce || tr.length)
+    function trigger(tr, opts, act, stream) {
+        const spot = Spot(stream)
+        if (!spot.prev) {
+            spot.prev = new Uint8Array(tr.length)
+            spot.next = new Uint8Array(tr.length)
+            spot.sorted = new Float32Array(tr.length)
+            spot.framesUntilReady = new Uint32Array(opts.maxAtOnce || tr.length)
         }
-        const prev = f.prev, next = f.next
-        const sorted = f.sorted
-        const framesUntilReady = f.framesUntilReady
+        const { prev, next, sorted, framesUntilReady } = spot
         const { threshold, maxAtOnce, cooldown } = opts
         let oldThr = threshold, oldMax = maxAtOnce || tr.length
         let newThr = threshold, newMax = maxAtOnce || tr.length
@@ -1176,15 +1176,17 @@ The cooldown is in agent steps, not real time.
         }
         // Un/trigger.
         for (let i = 0; i < tr.length; ++i)
-            if (tr[i].start && !prev[i] && next[i]) tr[i].start(...args)
-            else if (tr[i].stop && prev[i] && !next[i]) tr[i].stop(...args)
+            if (tr[i].start && !prev[i] && next[i]) tr[i].start(stream)
+            else if (tr[i].stop && prev[i] && !next[i]) tr[i].stop(stream)
         prev.set(next)
     }
     async function getCodeToInject() {
+        let hasInjected = false
         const bods = [], args = []
         for (let t of triggers) {
             const iStart = await t.injectStart, iStop = await t.injectStop
             const argInds = []
+            if (iStart || iStop) hasInjected = true
             bods.push((iStart || iStop) ? {
                 start: iStart && (''+iStart[0]),
                 stop: iStop && (''+iStop[0]),
@@ -1198,7 +1200,7 @@ The cooldown is in agent steps, not real time.
                 argInds.push(...subargs.map((_,i) => args.length+i)),
                 args.push(...subargs)
         }
-        if (!bods.length) return
+        if (!hasInjected) return
         return [
             // There's no observer→inject communication, so we use webenv→inject (JSON).
             `function f(triggerBodies, ...active) {
@@ -1220,21 +1222,28 @@ The cooldown is in agent steps, not real time.
                     if (tr[i] && tr[i].start && !prev[i] && next[i]) tr[i].start(...tr[i].args.map(a=>args[a]))
                     else if (tr[i] && tr[i].stop && prev[i] && !next[i]) tr[i].stop(...tr[i].args.map(a=>args[a]))
                 prev.set(next)
-                
-            }
-            `,
+            }`,
             bods,
             ...args,
-            // Encode trigger.next in u32 numbers, to not be TOO egregious with bandwidth.
-            ...(new Array(Math.ceil(triggers.length / 32)).fill().map((_,at) => stream => {
+            // Encode Spot(stream).next in u32 numbers, to not be TOO egregious with bandwidth.
+            ...(new Array(Math.ceil(triggers.length / 32)).fill().map(streamTrigger)),
+        ]
+        function streamTrigger(_,at) {
+            const fn = stream => {
                 // Not completely sure whether 32th bit gets encoded correctly.
-                if (!trigger.next) return 0
+                const spot = Spot(stream)
+                if (!spot.next) return 0
                 let n = 0
                 for (let i = at*32; i < triggers.length && i < (at+1)*32; ++i)
-                    n |= (trigger.next[i] & 1) << (i%32)
+                    n |= (spot.next[i] & 1) << (i%32)
                 return n
-            })),
-        ]
+            }
+            const str = ''+fn
+            fn.toString = () => str + '\n// ' + Math.random() + ' ' + Math.random()
+            // No merging in `compileSentJS`.
+            //   (Yes, very annoying, and very hard to debug. But so convenient for non-closures.)
+            return fn
+        }
     }
 })
 
@@ -1266,11 +1275,10 @@ exports.triggers.randomLink = docs(`\`webenv.triggers({}, webenv.triggers.random
 Picks a random file: or http: or https: link on the current page, and follows it.
 `, {
     injectStart: [function() {
-        // TODO: ...Wait, why aren't these ever called... Isn't this suspicious?
         if (typeof chrome == ''+void 0 || !chrome.runtime) return // Extension-only.
         let place = ''+location.href, i = place.lastIndexOf('#')
         if (i >= 0) place = place.slice(0, i) // `URL#ID` → `URL`
-        const urls = [...document.querySelectorAll('a')].map(a => a.href)
+        let urls = [...document.documentElement.querySelectorAll('a')].map(a => a.href)
         urls = urls.filter(u => {
             // Relative links are already resolved by .href.
             if (u.slice(0, place.length) === place && u[place.length] === '#') return false

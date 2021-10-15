@@ -388,9 +388,9 @@ async function compileJS(stream) {
             if (ti != null && ti !== tabId) return
             const injection = ${JSON.stringify(`
                 if (window.onMSG && typeof chrome!=''+void 0 && chrome.runtime) chrome.runtime.onMessage.removeListener(window.onMSG)
-                ${injectedParts.map((a,i) => 'window.F'+i + '=' + a[0]).join('\n')}
+                ${injectedParts.map((a,i) => 'const F'+i + '=' + a[0]).join('\n')}
                 window.onMSG = (a, sender, sendResponse) => {
-                    Promise.all([${injectedParts.map((a,i) => 'F'+i+'('+a.slice(1)+')')}]).then(sendResponse, sendResponse)
+                    Promise.all([${injectedParts.map((a,i) => 'F'+i + '('+a.slice(1)+')')}]).then(sendResponse, sendResponse)
                     return true
                 }
                 if (typeof chrome!=''+void 0 && chrome.runtime) chrome.runtime.onMessage.addListener(window.onMSG)

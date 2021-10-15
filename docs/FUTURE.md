@@ -2,6 +2,8 @@ This document outlines what still needs to be done to reach MVP state (or the "r
 
 - Joint training and deployment:
     - Design a web page that connects to a remote port to be controlled. Make it work.
+    - Re-test `directLink`.
+    - Find out what is up with no-streams Python.
 
 - Make the Python example production-ready:
     - Save + load, checking that all unchangeable hyperparams are the same; also have a list of hparams that can change, such as the learning rate. Ask the user if they want to warm-start from the previous checkpoint if changed. (No tracing: batch size could pick up the slack.) ([Should be very easy.](https://pytorch.org/tutorials/beginner/saving_loading_models.html))
