@@ -1279,7 +1279,10 @@ Training-only (Puppeteer-only): users should not be asked to sample random web p
 exports.triggers.goBack = docs(`\`webenv.triggers({}, webenv.triggers.goBack)\`
 Back to the previous page, please.
 `, {
-    injectStart: [function() { typeof chrome != ''+void 0 && chrome.runtime && history.go(-1) }],
+    injectStart: [function() {
+        if (performance.now() < 10000) return // Don't navigate TOO frequently.
+        typeof chrome != ''+void 0 && chrome.runtime && history.go(-1)
+    }],
 })
 
 
@@ -1289,6 +1292,8 @@ Picks a random file: or http: or https: link on the current page, and follows it
 `, {
     injectStart: [function() {
         if (typeof chrome == ''+void 0 || !chrome.runtime) return // Extension-only.
+        if (performance.now() < 10000) return // Don't navigate TOO frequently.
+
         let place = ''+location.href, i = place.lastIndexOf('#')
         if (i >= 0) place = place.slice(0, i) // `URL#ID` → `URL`
         let urls = [...document.documentElement.querySelectorAll('a')].map(a => a.href)
@@ -2248,10 +2253,9 @@ To write new interfaces, look at the pre-existing interfaces.
                 '--disable-gpu',
             ],
         })
-        const page = this.page = await browser.newPage()
+        const page = this.page = (await browser.pages())[0]
         if (!page) throw new Error('Puppeteer returned null')
         page.on('error', err => { throw err })
-        closeAllPagesExcept(browser, page)
         const langParts = this.lang.split(',')
         ;[
             this.cdp,
@@ -2278,7 +2282,7 @@ To write new interfaces, look at the pre-existing interfaces.
 
         // Set the viewport.
         await Promise.resolve()
-        const targetId = (await this.cdp.send('Target.getTargets')).targetInfos[0].targetId
+        const targetId = page._target._targetInfo.targetId // Sure hope this does not change.
         windowId = (await this.cdp.send('Browser.getWindowForTarget', {targetId})).windowId
         await resizeWindow(this)
 

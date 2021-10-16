@@ -21,11 +21,11 @@ Extensions/pages should connect like:
 let toCancel
 const socket = new WebSocket(…url…)
 socket.binaryType = 'arraybuffer', socket.onmessage = evt => {
-    toCancel = new Function(new TextDecoder().decode(evt.data))()(socket, { bytesPerValue:1|2|4 })
+    toCancel = new Function(new TextDecoder().decode(evt.data))()(socket, { bytesPerValue:1|2|4 }, null)
 }
 \`\`\`
 
-(And do \`toCancel()\` to disconnect, and set \`toCancel.onClose = ()=>{}\` to react to disconnects.)
+(And do \`toCancel()\` to disconnect, and set \`toCancel.onClose = ()=>{}\` to react to disconnects. The last arg is from the \`chrome.tabs.query({active:true, currentWindow:true}, tabs=>…)\` array if an extension: \`{id, width, height}\`.)
 
 (To make interface modules handle connections, use \`handleUpgrade\` from this file: \`stream.env.upgrade('/path', (...a) => handleUpgrade(stream, ...a))\`.)
 
@@ -52,23 +52,26 @@ Other interfaces that want this ought to define, for the 3 execution contexts (W
     key: Symbol('observers'),
     async init(stream) {
         const spot = Spot(stream)
-        stream.env.upgrade('/'+spot.id, (...a) => handleUpgrade(stream, ...a))
         if (!stream.extensionPage) return
+        stream.env.upgrade('/'+spot.id, (...a) => handleUpgrade(stream, ...a))
         stream.extensionPage.exposeFunction('PRINT', console.error) // For debugging.
         // Auto-connect if Puppeteer-controlled.
         const secure = stream.settings.httpsOptions ? 's' : ''
         const bpv = 1 // The most important setting. (`1` loses audio info, compared to `2`.)
         await stream.extensionPage.evaluate(
-            `const socket = new WebSocket("ws${secure}://localhost:${stream.env.settings.port}/${spot.id}")
-            socket.binaryType = 'arraybuffer', socket.onmessage = evt => {
-                new Function(new TextDecoder().decode(evt.data))()(socket, {bytesPerValue:${bpv}})
-            }`,
+            `chrome.tabs.query({active:true, currentWindow:true}, tabs => {
+                const socket = new WebSocket("ws${secure}://localhost:${stream.env.settings.port}/${spot.id}")
+                socket.binaryType = 'arraybuffer', socket.onmessage = evt => {
+                    new Function(new TextDecoder().decode(evt.data))()(socket, {bytesPerValue:${bpv}}, tabs[0])
+                }
+            })`,
         )
     },
     deinit(stream) {
         const spot = Spot(stream)
-        stream.env.upgrade('/'+spot.id)
         spot.ended = true
+        if (!stream.extensionPage) return
+        stream.env.upgrade('/'+spot.id)
     },
     async read(stream, obs, _) {
         const spot = Spot(stream)
@@ -117,7 +120,7 @@ const handleUpgrade = exports.handleUpgrade = (stream, ...args) => webSocketUpgr
     Spot(stream).ch = ch
 
     // Write how to connect. (In one message, with no length before it.)
-    //   Do `msg => new Function(msg)()({bytesPerValue}, socket)`
+    //   Do `msg => new Function(msg)()({bytesPerValue}, socket, tab=null)`
     const str = collapseWhitespace('return ' + String(connectChannel).replace(/TO_CHANNEL/, ''+webSocket))
     ch.write(new Uint8Array(Buffer.from(str)))
 
@@ -130,7 +133,7 @@ const handleUpgrade = exports.handleUpgrade = (stream, ...args) => webSocketUpgr
 async function readAllData(stream, ch) {
     // Protocol (we're right-to-left):
     //   Start → 0xFFFFFFFF 0x01020304 JsonLen Json (For {bytesPerValue: 1|2|4}.)
-    //   0xFFFFFFFF JsLen Js → update (`RCV = new Function(Js)()`)
+    //   0xFFFFFFFF JsLen Js → update (`RCV = new Function('tab', Js)(tab)`)
     //   PredLen Pred ActLen Act JsonLen Json → ObsLen Obs
     const spot = Spot(stream)
     while (!spot.ended)
@@ -227,6 +230,7 @@ async function compileJS(stream) {
     staticArgs.set(encodeItem, `RCV.end`)
     items.push(encodeItem)
     staticArgs.set(injected, `RCV.end`)
+    prelude.push(`RCV.tab=tab`)
     prelude.push(`RCV.onClose=[]`)
     prelude.push(`function bindInjEnd(end,i) { return ()=>end().then(a=>a&&a[i]) }`)
     prelude.push(`RCV.obs=new ${Observations.name}(${stream.reads})`)
@@ -402,15 +406,12 @@ async function compileJS(stream) {
         //   Remember the tab ID that started this.
         //     (And re-inject JS, on start and on tab navigation.)
         prelude.push(`
-        if (typeof chrome!=''+void 0 && chrome.tabs && chrome.tabs.query) {
-            chrome.tabs.query({active:true, currentWindow:true}, tabs => {
-                if (!tabs || !tabs[0]) return
-                tabId = tabs[0].id, tabW = tabs[0].width, tabH = tabs[0].height
-                updateInjection()
-                chrome.tabs.onUpdated.addListener(updateInjection)
-                RCV.onClose.push(() => chrome.tabs.onUpdated.removeListener(updateInjection))
-            })
-        } else tabId=null, tabW=innerWidth, tabH=innerHeight, updateInjection()
+        if (tab) {
+            tabId = tab.id, tabW = tab.width, tabH = tab.height
+            chrome.tabs.onUpdated.addListener(updateInjection)
+            RCV.onClose.push(() => chrome.tabs.onUpdated.removeListener(updateInjection))
+        } else tabId=null, tabW=innerWidth, tabH=innerHeight
+        updateInjection()
         `)
     } else {
         items.splice(items.indexOf(injected), 1)
@@ -431,7 +432,7 @@ async function compileJS(stream) {
 
 
 
-function connectChannel(socket, opts) {
+function connectChannel(socket, opts, tab) {
     // Starts capturing. To stop, call the returned func.
     // In `opts`, `bytesPerValue` is 1 (int8) or 2 (int16) or 4 (float32).
     const channel = TO_CHANNEL(socket)
@@ -459,7 +460,7 @@ function connectChannel(socket, opts) {
     async function readAllData() {
         // Protocol (we're left-to-right):
         //   Start → 0xFFFFFFFF 0x01020304 JsonLen Json (For {bytesPerValue: 1|2|4}.)
-        //   0xFFFFFFFF JsLen Js → update (`RCV = new Function(Js)()`)
+        //   0xFFFFFFFF JsLen Js → update (`RCV = new Function('tab', Js)(tab)`)
         //   PredLen Pred ActLen Act JsonLen Json → ObsLen Obs
         await writeIntro()
         while (flowing)
@@ -468,7 +469,7 @@ function connectChannel(socket, opts) {
                 if (predLen === 0xffffffff) {
                     const js = await channel.read(await readU32())
                     const jsStr = decoder.decode(js.buffer)
-                    try { RCV = new Function(jsStr)() }
+                    try { RCV = new Function('tab', jsStr)(tab) }
                     catch (err) { typeof PRINT == 'function' && PRINT(err.message);  throw err }
                 } else {
                     const pred = await channel.read(predLen)

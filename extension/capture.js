@@ -11,7 +11,8 @@ if (!navigator.webdriver)
     // Safeguard against malicious server-sent `.observer`s. We only want to give it the current tab.
     // I think this is every possibility accounted for. If not, contribute.
     //   (To access more of the `chrome` API, you have to add it here, or give up your dreams.)
-    //   Fingerprinting & resource starvation should be the most malicious possible uses.
+    // Fingerprinting & resource starvation should be the most malicious uses left.
+    //   (To resist fingerprinting, all but the most basic globals can be deleted. But no real need now.)
     const navigationListeners = new WeakMap
     const realTabIds = Object.create(null), fakeTabIds = Object.create(null)
     function please(fake) {
@@ -24,23 +25,15 @@ if (!navigator.webdriver)
       eval: undefined,
       chrome:{ // It is too dangerous to be left alive.
         tabs:{
+          // The only way to get fake tab IDs is to be called, and they cannot be guessed,
+          //   so, server-sent JS can only do these in its own tab.
           executeScript(fake, ...a) {
             return chrome.tabs.executeScript(please(fake), ...a)
           },
           sendMessage(fake, ...a) {
             return chrome.tabs.sendMessage(please(fake), ...a)
           },
-          query(opt, cb) {
-            return chrome.tabs.query({ active:true, currentWindow:true }, tabs => {
-              cb(tabs.map(t => {
-                const fake = randomChars()
-                fakeTabIds[t.id] = fake
-                realTabIds[fake] = t.id // Never cleaned, though.
-                return { id: fake, width: t.width, height: t.height }
-              }))
-            })
-          },
-          onUpdated:{ // Modifies the `tabId`.
+          onUpdated:{ // Modify the `tabId` to be its fake unguessable UUID.
             addListener(cb) {
               if (!navigationListeners.has(cb)) {
                 let last = null
@@ -91,26 +84,33 @@ if (!navigator.webdriver)
           if (state.cancel === 'connecting') return // Never stop trying to connect. ×
           if (typeof state.cancel == 'function') cancel(tabId) // Stop on button click.
           else { // Start on button click.
-            state.cancel = 'connecting', state.url = ''
-            try {
-              const socket = new WebSocket(state.url = msg.url) // × Yeah, never just .close() this.
-              updatePopup(tabId)
-              socket.binaryType = 'arraybuffer', socket.onmessage = evt => {
-                state.cancel = new Function(
-                  new TextDecoder().decode(evt.data)
-                )()(socket, msg)
+            chrome.tabs.query({active:true, currentWindow:true}, tabs => {
+              if (!tabs[0]) return
+              const fake = randomChars()
+              fakeTabIds[tabs[0].id] = fake
+              realTabIds[fake] = tabs[0].id // Access revoked just before this connection closes (in `cancel`).
+              const tab = { id: fake, width: tabs[0].width, height:tabs[0].height }
+              state.cancel = 'connecting', state.url = ''
+              try {
+                const socket = new WebSocket(state.url = msg.url) // × Yeah, never just .close() this.
                 updatePopup(tabId)
-                state.cancel.onClose = () => { // On close, know that.
-                  state.cancel = null, state.url = '', updatePopup(tabId)
+                socket.binaryType = 'arraybuffer', socket.onmessage = evt => {
+                  state.cancel = new Function(
+                    new TextDecoder().decode(evt.data)
+                  )()(socket, msg, tab)
+                  updatePopup(tabId)
+                  state.cancel.onClose = () => { // On close, know that.
+                    state.cancel = null, state.url = '', updatePopup(tabId)
+                  }
+                }, socket.onerror = evt => {
+                  socket.close(), state.cancel = null, state.url = 'Connection failed', updatePopup(tabId)
                 }
-              }, socket.onerror = evt => {
-                socket.close(), state.cancel = null, state.url = 'Connection failed', updatePopup(tabId)
+              } catch (err) {
+                let s = err.message
+                if (s.slice(0,33) === "Failed to construct 'WebSocket': ") s = s.slice(33)
+                state.cancel = null, state.url = s, updatePopup(tabId)
               }
-            } catch (err) {
-              let s = err.message
-              if (s.slice(0,33) === "Failed to construct 'WebSocket': ") s = s.slice(33)
-              state.cancel = null, state.url = s, updatePopup(tabId)
-            }
+            })
           }
         })
       }
@@ -123,11 +123,12 @@ if (!navigator.webdriver)
     }
     function cancel(tabId) {
       const state = tabState[tabId]
+      delete realTabIds[fakeTabIds[tabId]], delete fakeTabIds[tabId]
       state && (typeof state.cancel == 'function' && state.cancel(), state.cancel = null)
       updatePopup(tabId)
       if (!state.port) delete tabState[tabId]
     }
-    function randomChars(len=16) {
+    function randomChars(len=32) {
         return new Array(len).fill().map((_,i) => (Math.random()*16 | 0).toString(16)).join('')
     }
   })()
