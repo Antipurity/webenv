@@ -1021,7 +1021,10 @@ if (!window.${name}) {
                 document.documentElement.append(scr)
                 setTimeout(() => scr.remove(), 30000) // Removing immediately seems to not be 100% stable.
                 if (!window._directLinkAct) {
-                    window._directLinkAct = function a(a64) { window._directLinkAct.a64 = a64 }
+                    window._directLinkAct = function a(a64, sender, sendResponse) {
+                        window._directLinkAct.a64 = a64, sendResponse && sendResponse()
+                        return true
+                    }
                     document.addEventListener('_directLinkObs', evt => {
                         if (typeof evt.detail != 'string') return
                         window._directLinkAct.obsMsg = evt.detail !== '0 ' ? evt.detail : undefined // `${actLen} ${obs64}`

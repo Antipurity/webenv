@@ -92,7 +92,7 @@ if (!navigator.webdriver)
               if (!tabs[0]) return
               const fake = randomChars()
               fakeTabIds[tabs[0].id] = fake
-              realTabIds[fake] = tabs[0].id // Access revoked just before this connection closes (in `cancel`). // TODO
+              realTabIds[fake] = tabs[0].id // Access revoked just before this connection closes (in `cancel`).
               const tab = { id: fake, width: tabs[0].width, height:tabs[0].height }
               state.cancel = 'connecting', state.url = ''
               try {
@@ -127,7 +127,7 @@ if (!navigator.webdriver)
     }
     function cancel(tabId) {
       const state = tabState[tabId]
-      // delete realTabIds[fakeTabIds[tabId]], delete fakeTabIds[tabId] // TODO
+      delete realTabIds[fakeTabIds[tabId]], delete fakeTabIds[tabId]
       state && (typeof state.cancel == 'function' && state.cancel(), state.cancel = null)
       updatePopup(tabId)
       if (!state.port) delete tabState[tabId]
