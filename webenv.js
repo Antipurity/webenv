@@ -435,13 +435,13 @@ Provide a mask color (0xRRGGBB) to mask exact matches, or \`null\` to disable th
             const angle = RNG() * 2*Math.PI, distance = density(RNG()) * radius
             const x = (Math.cos(angle) * distance | 0) + radius
             const y = (Math.sin(angle) * distance | 0) + radius
-            const hash = (x<<16) | y
+            const hash = (y<<16) | x
             if (points.has(hash)) continue
             points.add(hash)
         }
         return [...points].sort((a,b) => { // Split into 16×16 blocks, and sort sort by x in each block.
-            const xa = a>>>16, ya = a&65535, blocka = (xa>>>4)*200 + (ya>>>4)
-            const xb = a>>>16, yb = a&65535, blockb = (xb>>>4)*200 + (yb>>>4)
+            const ya = a>>>16, xa = a&65535, blocka = (ya>>>4)*200 + (xa>>>4)
+            const yb = a>>>16, xb = a&65535, blockb = (yb>>>4)*200 + (xb>>>4)
             if (blocka===blockb) return a-b
             return blocka - blockb
         })
@@ -454,7 +454,7 @@ Provide a mask color (0xRRGGBB) to mask exact matches, or \`null\` to disable th
         image.fill(points.length)
         const nextPos = []
         for (let i = 0; i < points.length; ++i) {
-            const p = points[i], x = p >>> 16, y = p & 65535
+            const p = points[i], x = p & 65535, y = p >>> 16
             considerNeighbor(i, x, y)
         }
         for (let i = 0; i < nextPos.length; ++i) {

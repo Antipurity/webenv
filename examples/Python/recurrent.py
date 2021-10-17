@@ -93,6 +93,12 @@ def L2(pred, got, *_):
 
 
 
+def optimizer_step(optimizer):
+  optimizer.step()
+  optimizer.zero_grad()
+
+
+
 # RNN.
 def recurrent(
   state,
@@ -107,6 +113,7 @@ def recurrent(
   output = webenv_slice,
   gather = webenv_gather,
   scatter = webenv_scatter,
+  update = optimizer_step,
 ):
   """
   Creates a decorator, which creates a real-time recurrent multi-stream transformer (input→output).
@@ -130,6 +137,7 @@ def recurrent(
     `output`: goes from PyTorch state and step's args to the output, async. `webenv_slice` by default.
     `gather`: extracts stream state slices before `input`. `webenv_gather` by default.
     `scatter`: reunites stream state slices after `output`. `webenv_scatter` by default.
+    `update`: applies parameter updates, given the optimizer. `optimizer_step` by default.
   After these args, supply the `transition` in another call.
   Then, await calls to step, passing in indices (`0` to only have one stream, else `np.array([[0],[1],[3],[4]], dtype=np.int64)`), observations (NaN-filled where lengths mismatch), and any other args.
   """
@@ -176,6 +184,7 @@ def recurrent(
         unrolls += 1
         if unrolls >= unrolls_per_step:
           unrolls = 0
+          update(optimizer)
           optimizer.step()
           optimizer.zero_grad()
         start_state = state = state.detach().requires_grad_(True)

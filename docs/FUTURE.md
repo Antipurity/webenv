@@ -2,7 +2,6 @@ This document outlines what still needs to be done to reach MVP state (or the "r
 
 - Make the Python example production-ready:
     - Save + load, checking that all unchangeable hyperparams are the same; also have a list of hparams that can change, such as the learning rate. Ask the user if they want to warm-start from the previous checkpoint if changed. (No tracing: batch size could pick up the slack.) ([Should be very easy.](https://pytorch.org/tutorials/beginner/saving_loading_models.html))
-    - Weight decay, maybe only on 95% least-magnitude weights, as a kind of soft sparsification (might have synergy with LDL's greater-than-DL capacity).
     - For almost 3× the efficiency below: efficient output slicing, by slicing weights and biases.
         - For simplicity, only handle first-mixed-dimension slicing, which is almost as good. First slice the outermost/first layer's output, then pick which halves of that first-sliced dimension in weights/biases the rest will use.
     - `state[0]` maximization. (Sure, just giving a model a binary feedback signal may sound non-scalable because of the need to supervise all possible edge cases, but have you ever tried using the model's world understanding: say, bringing up what it did long ago, possibly on the microphone, and hitting that reward button, making it clear that these are very related? WebEnv is a general environment with user interaction. Expand your mind!)
