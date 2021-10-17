@@ -4,7 +4,7 @@
     "version":"0.1.0",
     "manifest_version":2,
     "background":{
-        "persistent":true,
+        "persistent":false,
         "scripts":["capture.js"]
     },
     "permissions":["activeTab", "<all_urls>", "tabCapture"],
