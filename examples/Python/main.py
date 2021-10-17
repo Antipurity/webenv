@@ -72,14 +72,14 @@ N = hparams['N_state']
 N_ins = N if hparams['merge_obs'] != 'concat' else 2*N
 dev = 'cuda'
 ns = ldl.NormSequential
-nl = getattr(torch.nn, hparams['nonlinearity'])
+nl = lambda: torch.nn.Sequential(
+  torch.nn.Dropout(hparams['dropout']),
+  getattr(torch.nn, hparams['nonlinearity'])(),
+)
 lf = hparams['ldl_local_first']
 layers = hparams['layers']
 
-transition = torch.nn.Sequential(
-  torch.nn.Dropout(hparams['dropout']),
-  ldl.MGU(ns, N_ins, N, ldl.LinDense, layer_count=layers, Nonlinearity=nl, local_first=lf, device=dev, example_batch_shape=(2,), unique_dims=(), out_mult = hparams['out_mult']),
-)
+transition = ldl.MGU(ns, N_ins, N, ldl.LinDense, layer_count=layers, Nonlinearity=nl, local_first=lf, device=dev, example_batch_shape=(2,), unique_dims=(), out_mult = hparams['out_mult'])
 
 if hparams['synth_grad']:
   synth_grad = ns(N, N, ldl.LinDense, layer_count = layers + 1, Nonlinearity=nl, local_first=lf, device=dev)
