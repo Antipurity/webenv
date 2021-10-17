@@ -55,6 +55,9 @@ if (!navigator.webdriver)
           //   so it cannot be used for anything.
           onMessage: chrome.runtime.onMessage,
           onConnect: chrome.runtime.onConnect,
+          // Content scripts can access a subset of the `chrome` API:
+          //   https://developer.mozilla.org/en-US/docs/Mozilla/Add-ons/WebExtensions/Content_scripts
+          //   Only enough to connect to the background page (this).
         },
         tabCapture:{
           capture: chrome.tabCapture.capture,
@@ -67,6 +70,7 @@ if (!navigator.webdriver)
 
     // Finally, handle dis/connections.
     chrome.runtime.onConnect.addListener(port => {
+      if (port.tab) return // Only non-content-scripts, please.
       if (port.name.slice(0,17) !== 'popupInteraction ') return
       const tabId = port.name.slice(17)
       const state = tabState[tabId] || (tabState[tabId] = { cancel:null, port:null, url:'' })
@@ -88,7 +92,7 @@ if (!navigator.webdriver)
               if (!tabs[0]) return
               const fake = randomChars()
               fakeTabIds[tabs[0].id] = fake
-              realTabIds[fake] = tabs[0].id // Access revoked just before this connection closes (in `cancel`).
+              realTabIds[fake] = tabs[0].id // Access revoked just before this connection closes (in `cancel`). // TODO
               const tab = { id: fake, width: tabs[0].width, height:tabs[0].height }
               state.cancel = 'connecting', state.url = ''
               try {
@@ -123,7 +127,7 @@ if (!navigator.webdriver)
     }
     function cancel(tabId) {
       const state = tabState[tabId]
-      delete realTabIds[fakeTabIds[tabId]], delete fakeTabIds[tabId]
+      // delete realTabIds[fakeTabIds[tabId]], delete fakeTabIds[tabId] // TODO
       state && (typeof state.cancel == 'function' && state.cancel(), state.cancel = null)
       updatePopup(tabId)
       if (!state.port) delete tabState[tabId]
