@@ -41,5 +41,5 @@ With that, this really will be all I can do. Besides, who would ever be impresse
     - Replace Web Socket communication with WebRTC, to drop dropped packets rather than re-send them.
     - Compression. Examples:
         - Values: only transmit the difference between values and a simple shared prediction model, and entropy-encode that.
-        - Control (JSON, currently): just compress.
+        - Control (JSON and JS, currently): just compress. And strip comments from JS, and minify it.
         - Computation: possibly, communicate each value's precision, so that agents only have to predict the general area, not the precise imprecise values. (If agents are well-trained, this allows users to safely use a really low resolution, maybe 4-bits-per-value.)
