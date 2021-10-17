@@ -70,25 +70,13 @@ The result is a promise for the environment, which is an object with:
         // Private state.
         this._stall = null // A promise when a `relaunch` is in progress.
         this._watchdogCheckId = setInterval(() => { // This watchdog timer is easier than fixing rare-hang-on-navigation bugs.
-            if (performance.now()-this._lastStepEnd < 15000) return
+            if (!this.env || performance.now()-this._lastStepEnd < 15000) return
             this._relaunchRetrying()
         }, 30000)
         this._lastStepEnd = performance.now() // For measuring time between steps.
-        // TODO: ...Maybe, should share?... They all take the same time to compute anyway, right?
-        this._period = new class ObsNumber { // Measuring time between steps.
-            // A number that estimates some other number, independent of context (unlike a NN).
-            // `webenv.frameTime` visualizes this.
-            constructor(maxHorizon = 10000) {
-                this.m = [0,0,0], this.maxHorizon = +maxHorizon
-            }
-            valueOf() { return this.m[1] }
-            set(x) {
-                signalUpdate(x, this.m, this.maxHorizon)
-                return this.m[1]
-            }
-        }()
-        if (env && env.streams && env.streams[0]) this._period.set(+env.streams[0]._period)
         this._stepsNow = 0 // Throughput is maximized by lowballing time-between-steps, but without too many steps at once.
+        this._stepId = 0 // Incremented with rollover each step.
+        this._lastStepId = 0 // When a step completes, it sets this to what `._stepId` was at its beginning.
         this._killed = false // `.close()` will set this to true.
         await this._relaunchRetrying()
         return this
@@ -324,7 +312,10 @@ The result is a promise for the environment, which is an object with:
 
             // Don't schedule too many steps at once. If all die, end-of-step will schedule anyway.
             if (res._stepsNow < res.settings.simultaneousSteps)
-                ++res._stepsNow, setTimeout(res._step, Math.max(0, +res._period * res.lowball), res)
+                ++res._stepsNow, setTimeout(res._step, Math.max(0, +res.env._period * res.lowball), res)
+
+            const stepId = res._stepId
+            res._stepId = (res._stepId + 1)>>>0
 
             try {
                 await res.read()
@@ -347,16 +338,17 @@ The result is a promise for the environment, which is an object with:
                 // Do not let exceptions kill us.
             }
 
-            res._period.set(performance.now() - res._lastStepEnd)
+            res.env._period.set(performance.now() - res._lastStepEnd)
             res._lastStepEnd = performance.now()
+            res._lastStepId = stepId
         } finally {
             --res._stepsNow
 
             // Don't let the fire die out.
-            //   (If +res._period is too low, this trigger can get hit, and stall the pipeline.)
-            //   (If +res._period is mostly accurate, there should be a steady stream of new-steps.)
+            //   (If +env._period is too low, this trigger can get hit, and stall the pipeline.)
+            //   (If +env._period is mostly accurate, there should be a steady stream of new-steps.)
             if (!res._stepsNow)
-                ++res._stepsNow, setTimeout(res._step, Math.max(0, +res._period * res.lowball), res)
+                ++res._stepsNow, setTimeout(res._step, Math.max(0, +res.env._period * res.lowball), res)
         }
     },
     _allocArray:function fn(a) {

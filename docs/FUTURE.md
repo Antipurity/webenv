@@ -23,9 +23,9 @@ With that, this really will be all I can do. Besides, who would ever be impresse
 - Logo, for the extension, and for remembering.
 
 - Communication:
-    - Replace Web Socket communication with WebRTC.
+    - Replace Web Socket communication with WebRTC, to drop dropped packets rather than re-send them.
     - Compression.
-        - Computation: possibly, communicate a stream's precision, so that agents only have to converge to a general area, not the precise imprecise value. (If agents are well-trained, this allows users to safely use a really low resolution, maybe 4-bits-per-value.)
+        - Computation: possibly, communicate each value's precision, so that agents only have to predict the general area, not the precise imprecise values. (Use `(stream._stepId - stream._lastStepId)>>>0` for the offset.) (If agents are well-trained, this allows users to safely use a really low resolution, maybe 4-bits-per-value.)
 
 - Visualization:
     - Allow listening to real & predicted audio.

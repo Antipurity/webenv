@@ -4,7 +4,6 @@
 
 import gc
 import sys
-import time
 import asyncio
 import numpy as np
 
@@ -64,7 +63,6 @@ def webenv(agent, *interfaces, int_size=0, webenv_path='webenv', js_executor=js_
         nonlocal max_index
         while True:
             index = await _read_u32(reader)
-            packet_id = await _read_u32(reader)
             obs = _decode(await _read_data(reader, int_size))
             # Bug: if there are too few observations (<4095), this fails to read `obs`'s length correctly.
             #   Just provide more observations, why fix it.
@@ -72,12 +70,12 @@ def webenv(agent, *interfaces, int_size=0, webenv_path='webenv', js_executor=js_
             if index not in read_streams:
                 read_streams[index] = asyncio.Queue(64)
             if index > max_index: max_index = index
-            await read_streams[index].put((packet_id, obs, act_len))
+            await read_streams[index].put((obs, act_len))
             read_streams['any'].put_nowait(None)
     async def step(writer, read_lock):
         # Read from `read_streams`, call `agent`, and write what we did.
         try:
-            indices, packet_ids, obs, act_len = [], [], [], []
+            indices, obs, act_len = [], [], []
             while True:
                 await asyncio.sleep(.001)
                 while True:
@@ -94,11 +92,10 @@ def webenv(agent, *interfaces, int_size=0, webenv_path='webenv', js_executor=js_
                     if queue.empty(): continue # Only process available data.
                     item = queue.get_nowait()
                     read_streams['any'].get_nowait()
-                    if item[2] == 0xFFFFFFFF: continue # Just ignore dealloc events.
+                    if item[1] == 0xFFFFFFFF: continue # Just ignore dealloc events.
                     indices.append([i])
-                    packet_ids.append(item[0])
-                    obs.append(item[1])
-                    act_len.append(item[2])
+                    obs.append(item[0])
+                    act_len.append(item[1])
                 if len(obs): break
                 # If all streams are empty, wait for the next item.
                 await read_streams['any'].get()
@@ -107,7 +104,7 @@ def webenv(agent, *interfaces, int_size=0, webenv_path='webenv', js_executor=js_
             preds, acts = await agent(read_lock, indices, obs, act_len)
             prevW = prev_write[0]
             nextW = prev_write[0] = asyncio.Future()
-            _write_all(writer, int_size, indices, packet_ids, preds, acts)
+            _write_all(writer, int_size, indices, preds, acts)
             # await _flush(writer, prev_flush_info) # Apparently, `asyncio`'s `.drain()` cannot be trusted to return. Maybe it's because we turned off buffering.
             if asyncio.isfuture(prevW): await prevW # Ensure linear ordering of writes.
             nextW.set_result(None)
@@ -159,14 +156,13 @@ def _write_data(stream, data):
     # Length then data. Don't forget to flush afterwards.
     _write_u32(stream, data.size)
     stream.write(data.tobytes())
-def _write_all(stream, int_size, indices, packet_ids, preds, acts):
+def _write_all(stream, int_size, indices, preds, acts):
     # indices/pred/act equal-size lists (or int64 NumPy array, for indices).
     for i in range(len(preds)):
         index, pred, act = indices[i], preds[i], acts[i]
         if pred.dtype != np.float32 or act.dtype != np.float32:
             raise TypeError('Predictions & actions must be float32 arrays')
         _write_u32(stream, int(index.item()))
-        _write_u32(stream, packet_ids[i])
         _write_data(stream, _encode(pred, int_size))
         _write_data(stream, _encode(act, int_size))
 async def _flush(stream, prev_flush):

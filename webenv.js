@@ -40,6 +40,18 @@ Env's methods:
         _server: null,
         _listenPaths: Object.create(null),
         _upgradePaths: Object.create(null),
+        _period: new class ObsNumber { // Measuring time between steps.
+            // A number that estimates some other number, independent of context (unlike a NN).
+            // `webenv.frameTime` visualizes this.
+            constructor(maxHorizon = 10000) {
+                this.m = [0,0,0], this.maxHorizon = +maxHorizon
+            }
+            valueOf() { return this.m[1] }
+            set(x) {
+                signalUpdate(x, this.m, this.maxHorizon)
+                return this.m[1]
+            }
+        }(),
         async listen(path='/', func) { return listen(this, this._listenPaths, path, func) },
         async upgrade(path='/', func) { return listen(this, this._upgradePaths, path, func) },
         async reinit(...interfaces) {
@@ -772,7 +784,6 @@ Communication protocol details, simple for easy adoption:
 - Loop:
     - The agent receives:
         - u32 stream index (minimal, so it can be used to index into a dense vector of stream states),
-        - u32 packet index (incremented each step with rollover),
         - u32 observation length,
         - then observation (that many values),
         - then u32 expected action length (0xFFFFFFFF to indicate that this stream has ended, and its index will be reused later).
@@ -780,7 +791,6 @@ Communication protocol details, simple for easy adoption:
         - (The agent should replace NaN observations with its own predictions of them. This is done in-agent for differentiability.)
     - In response, the agent sends:
         - u32 stream index,
-        - u32 packet index,
         - u32 prediction length (feel free to make this 0, which would disable its visualization),
         - then observation prediction (that many values),
         - then u32 action length,
@@ -800,32 +810,25 @@ Communication protocol details, simple for easy adoption:
         while (true) {
             try {
                 const index = await readFromChannel(io.ch, 1, Number, bs)
-                const packetId = await readFromChannel(io.ch, 1, Number, bs)
                 const predData = await readArray(cons, bs)
                 const actData = await readArray(cons, bs)
                 const s = env.streams[index]
                 if (!s) continue
                 const q = s._dataQueue || (s._dataQueue = { items:[], waiting:[] })
-                const item = [packetId, predData, actData]
+                const item = [predData, actData]
                 if (q.items.length > s.settings.simultaneousSteps) q.items.shift()
-                if (q.waiting.length) // Resolve the first reader.
+                if (q.waiting.length) { // Resolve the first reader.
                     q.waiting.shift()(item)
-                else // Allow others to resolve the item.
+                } else // Allow others to resolve the item.
                     q.items.push(item)
             } catch (err) { if (err !== 'skip') throw err }
         }
     }
-    async function getDataQueueItem(s, dont = false) {
+    function getDataQueueItem(s) {
         const q = s._dataQueue || (s._dataQueue = { items:[], waiting:[] })
-        if (dont) return
         if (!q.items.length)
-            return await new Promise(then => q.waiting.push(then))
-        return items.shift()
-    }
-    function getNextPacket(s) {
-        const i = s._ioNextPacketIndex || 0
-        s._ioNextPacketIndex = (i+1)>>>0
-        return i
+            return new Promise(then => q.waiting.push(then))
+        return q.items.shift()
     }
     return {
         obsCoded: null,
@@ -854,7 +857,6 @@ Communication protocol details, simple for easy adoption:
             writeLock = new Promise(f => thenW=f);  await oldW
             const bs = this.byteswap
             await writeToChannel(io.ch, stream.index, bs)
-            await writeToChannel(io.ch, getNextPacket(stream), bs)
             await writeToChannel(io.ch, 0, bs)
             await writeToChannel(io.ch, 0xFFFFFFFF, bs)
             thenW()
@@ -866,13 +868,11 @@ Communication protocol details, simple for easy adoption:
             writeLock = new Promise(f => thenW=f);  await oldW
             const bs = this.byteswap
             await writeToChannel(io.ch, stream.index, bs)
-            await writeToChannel(io.ch, getNextPacket(stream), bs)
             await writeArray(this.obsCoded = encodeInts(obs, this.obsCoded), bs)
             await writeToChannel(io.ch, act.length, bs)
             thenW()
             // Read from our data queue.
-            const [packetId, predData, actData] = await getDataQueueItem(stream)
-            stream._lastPacketId = packetId // Currently unused.
+            const [predData, actData] = await getDataQueueItem(stream)
             decodeInts(predData, pred), decodeInts(actData, act)
         },
     }
@@ -1547,7 +1547,7 @@ Provides an observation of the time between frames, relative to the expected-Fra
             const fps = 1000 / period
             elem.firstChild.style.backgroundColor = (elem.frame = !elem.frame) ? 'lightgray' : 'darkgray'
             elem.lastChild.textContent = ' ' + fps.toFixed(1) + ' FPS'
-        }, s => +s._period],
+        }, s => +s.env._period],
     }
 })
 
