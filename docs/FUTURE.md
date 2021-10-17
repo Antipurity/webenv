@@ -25,10 +25,12 @@ With that, this really will be all I can do. Besides, who would ever be impresse
 - Communication:
     - Replace Web Socket communication with WebRTC.
     - Compression.
+        - Computation: possibly, communicate a stream's precision, so that agents only have to converge to a general area, not the precise imprecise value. (If agents are well-trained, this allows users to safely use a really low resolution, maybe 4-bits-per-value.)
 
 - Visualization:
     - Allow listening to real & predicted audio.
     - Plots of numbers-over-time, like the score.
+    - Give the prediction's args to `visualize`rs too, and properly show the computation delay. (The `webenv.io` protocol already handles that.)
 
 - Extra features for better control in `webenv.remote`, mostly controlled through the popup:
     - Allow viewing observations+predictions, exactly like `webenv.visualize` does;

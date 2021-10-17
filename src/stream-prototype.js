@@ -74,6 +74,7 @@ The result is a promise for the environment, which is an object with:
             this._relaunchRetrying()
         }, 30000)
         this._lastStepEnd = performance.now() // For measuring time between steps.
+        // TODO: ...Maybe, should share?... They all take the same time to compute anyway, right?
         this._period = new class ObsNumber { // Measuring time between steps.
             // A number that estimates some other number, independent of context (unlike a NN).
             // `webenv.frameTime` visualizes this.

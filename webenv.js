@@ -772,6 +772,7 @@ Communication protocol details, simple for easy adoption:
 - Loop:
     - The agent receives:
         - u32 stream index (minimal, so it can be used to index into a dense vector of stream states),
+        - u32 packet index (incremented each step with rollover),
         - u32 observation length,
         - then observation (that many values),
         - then u32 expected action length (0xFFFFFFFF to indicate that this stream has ended, and its index will be reused later).
@@ -779,6 +780,7 @@ Communication protocol details, simple for easy adoption:
         - (The agent should replace NaN observations with its own predictions of them. This is done in-agent for differentiability.)
     - In response, the agent sends:
         - u32 stream index,
+        - u32 packet index,
         - u32 prediction length (feel free to make this 0, which would disable its visualization),
         - then observation prediction (that many values),
         - then u32 action length,
@@ -798,12 +800,13 @@ Communication protocol details, simple for easy adoption:
         while (true) {
             try {
                 const index = await readFromChannel(io.ch, 1, Number, bs)
+                const packetId = await readFromChannel(io.ch, 1, Number, bs)
                 const predData = await readArray(cons, bs)
                 const actData = await readArray(cons, bs)
                 const s = env.streams[index]
                 if (!s) continue
                 const q = s._dataQueue || (s._dataQueue = { items:[], waiting:[] })
-                const item = [predData, actData]
+                const item = [packetId, predData, actData]
                 if (q.items.length > s.settings.simultaneousSteps) q.items.shift()
                 if (q.waiting.length) // Resolve the first reader.
                     q.waiting.shift()(item)
@@ -818,6 +821,11 @@ Communication protocol details, simple for easy adoption:
         if (!q.items.length)
             return await new Promise(then => q.waiting.push(then))
         return items.shift()
+    }
+    function getNextPacket(s) {
+        const i = s._ioNextPacketIndex || 0
+        s._ioNextPacketIndex = (i+1)>>>0
+        return i
     }
     return {
         obsCoded: null,
@@ -846,6 +854,7 @@ Communication protocol details, simple for easy adoption:
             writeLock = new Promise(f => thenW=f);  await oldW
             const bs = this.byteswap
             await writeToChannel(io.ch, stream.index, bs)
+            await writeToChannel(io.ch, getNextPacket(stream), bs)
             await writeToChannel(io.ch, 0, bs)
             await writeToChannel(io.ch, 0xFFFFFFFF, bs)
             thenW()
@@ -857,11 +866,13 @@ Communication protocol details, simple for easy adoption:
             writeLock = new Promise(f => thenW=f);  await oldW
             const bs = this.byteswap
             await writeToChannel(io.ch, stream.index, bs)
+            await writeToChannel(io.ch, getNextPacket(stream), bs)
             await writeArray(this.obsCoded = encodeInts(obs, this.obsCoded), bs)
             await writeToChannel(io.ch, act.length, bs)
             thenW()
             // Read from our data queue.
-            const [predData, actData] = await getDataQueueItem(stream)
+            const [packetId, predData, actData] = await getDataQueueItem(stream)
+            stream._lastPacketId = packetId // Currently unused.
             decodeInts(predData, pred), decodeInts(actData, act)
         },
     }
