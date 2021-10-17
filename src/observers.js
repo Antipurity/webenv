@@ -57,7 +57,8 @@ Other interfaces that want this ought to define, for the 3 execution contexts (W
         stream.extensionPage.exposeFunction('PRINT', console.error) // For debugging.
         // Auto-connect if Puppeteer-controlled.
         const secure = stream.settings.httpsOptions ? 's' : ''
-        const bpv = 1 // The most important setting. (`1` loses audio info, compared to `2`.)
+        const bpv = 4 // The most important setting.
+        //   (`1` loses audio info, compared to `2`. `4` is excessive.)
         await stream.extensionPage.evaluate(
             `chrome.tabs.query({active:true, currentWindow:true}, tabs => {
                 const socket = new WebSocket("ws${secure}://localhost:${stream.env.settings.port}/${spot.id}")
@@ -435,6 +436,8 @@ async function compileJS(stream) {
 function connectChannel(socket, opts, tab) {
     // Starts capturing. To stop, call the returned func.
     // In `opts`, `bytesPerValue` is 1 (int8) or 2 (int16) or 4 (float32).
+    const bpv = opts.bytesPerValue
+    if (![1,2,4].includes(bpv)) throw new Error('Bad bytes-per-value: '+bpv)
     const channel = TO_CHANNEL(socket)
     let flowing = true, timerID = null
 
@@ -448,9 +451,7 @@ function connectChannel(socket, opts, tab) {
     const encoder = new TextEncoder(), decoder = new TextDecoder()
 
     readAllData()
-    const result = function stopCapture() {
-        channel.close()
-    }
+    const result = function stopCapture() { channel.close() }
     channel.onClose = () => {
         flowing = false, clearTimeout(timerID), result.onClose && result.onClose()
         RCV && RCV.media && RCV.media.closeStream()
@@ -472,8 +473,9 @@ function connectChannel(socket, opts, tab) {
                     try { RCV = new Function('tab', jsStr)(tab) }
                     catch (err) { typeof PRINT == 'function' && PRINT(err.message);  throw err }
                 } else {
-                    const pred = await channel.read(predLen)
-                    const act = await channel.read(await readU32())
+                    const pred = await channel.read(predLen*bpv)
+                    const actLen = await readU32()
+                    const act = await channel.read(actLen*bpv)
                     const json = await channel.read(await readU32())
                     const jsonStr = decoder.decode(json.buffer)
                     scheduleObservers(pred, act, jsonStr)
