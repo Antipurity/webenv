@@ -22,15 +22,10 @@ With that, this really will be all I can do. Besides, who would ever be impresse
 
 - Logo, for the extension, and for remembering.
 
-- Communication:
-    - Replace Web Socket communication with WebRTC, to drop dropped packets rather than re-send them.
-    - Compression.
-        - Computation: possibly, communicate each value's precision, so that agents only have to predict the general area, not the precise imprecise values. (Use `(stream._stepId - stream._lastStepId)>>>0` for the offset.) (If agents are well-trained, this allows users to safely use a really low resolution, maybe 4-bits-per-value.)
-
 - Visualization:
     - Allow listening to real & predicted audio.
     - Plots of numbers-over-time, like the score.
-    - Give the prediction's args to `visualize`rs too, and properly show the computation delay. (The `webenv.io` protocol already handles that.)
+    - Give the prediction's args to `visualize`rs too, and properly show the computation delay. (Use `(stream._stepId - stream._lastStepId)>>>0` to know how many steps in the past the prediction is.)
 
 - Extra features for better control in `webenv.remote`, mostly controlled through the popup:
     - Allow viewing observations+predictions, exactly like `webenv.visualize` does;
@@ -41,3 +36,10 @@ With that, this really will be all I can do. Besides, who would ever be impresse
     - (And other potential 'prompt-engineering' helpers, once they are known.)
 
 - Bugfix: make `<iframe>`s work like they do for humans (scroll when scrolling with mouse over them, accept mouse/keyboard control when focused, accumulate `directLink`s).
+
+- Communication:
+    - Replace Web Socket communication with WebRTC, to drop dropped packets rather than re-send them.
+    - Compression. Examples:
+        - Values: only transmit the difference between values and a simple shared prediction model, and entropy-encode that.
+        - Control (JSON, currently): just compress.
+        - Computation: possibly, communicate each value's precision, so that agents only have to predict the general area, not the precise imprecise values. (If agents are well-trained, this allows users to safely use a really low resolution, maybe 4-bits-per-value.)
