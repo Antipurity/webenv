@@ -1,5 +1,3 @@
-# 10+ debugging days.
-
 from torch.utils.tensorboard import SummaryWriter
 import ldl
 import recurrent
@@ -34,8 +32,9 @@ hparams = {
   # Model.
   'layers': 1, # Makes computations-over-time more important than reactions, and increases FPS.
   'nonlinearity': 'Softsign', # (With layers=1, this is only used in synthetic gradient.)
-  'ldl_local_first': True,
+  'ldl_local_first': False,
   'out_mult': 1.1, # 1.1 makes predicting pure black/white in MGU easier.
+  'trace': True,
 
   # Reinforcement learning.
   'gradmax': 0., # Multiplier of planning via gradient.
@@ -44,12 +43,12 @@ hparams = {
   'gradmax_momentum': .99,
 
   # Soft sparsification.
-  'dropout': .3,
+  'dropout': .2, # Causes "output differs" warnings when 'trace' is True.
   'weight_decay': .0001,
   'weight_decay_perc': .8,
 
   # Save/load.
-  'save_every_N_steps': 10000,
+  'save_every_N_steps': 1000,
   'preserve_history': False,
 
   # Visualization of metrics.
@@ -68,6 +67,7 @@ def param_size(ps):
 
 
 
+# Create parts of the model.
 N = hparams['N_state']
 N_ins = N if hparams['merge_obs'] != 'concat' else 2*N
 dev = 'cuda'
@@ -102,6 +102,13 @@ all_params = params(synth_grad, transition, max_model)
 hparams['params'] = param_size(all_params)
 obs_loss = getattr(recurrent, hparams['obs_loss'])
 
+if hparams['trace']:
+  transition = torch.jit.trace(transition, torch.randn(2, N_ins, device=dev))
+  if synth_grad:
+    synth_grad = torch.jit.trace(synth_grad, torch.randn(2, N, device=dev))
+  if max_model:
+    max_model = torch.jit.trace(max_model, torch.randn(2, N, device=dev))
+
 
 
 # Handle saving/loading.
@@ -134,10 +141,9 @@ try:
   state2 = torch.load(os.path.join(save_p, 'current.pth'))
   if state['hparams'] != state2['hparams']:
     print(dict(set(state['hparams'].items()) ^ set(state2['hparams'].items())))
-    continuing = input('Hyperparams changed. Load anyway (else re-initialize)? [Y/n] ')
-    continuing = 'y' in continuing or 'Y' in continuing
-  else:
-    continuing = True
+    print('Hyperparams changed.')
+  continuing = input('Load (else re-initialize)? [Y/n] ')
+  continuing = 'y' in continuing or 'Y' in continuing
   if continuing:
     state['step'] = state2['step']
     state['run_name'] = state2['run_name']
@@ -186,7 +192,7 @@ def loss(pred, got, obs, act_len):
   return L
 def weight_decay(optimizer):
   optimizer.step()
-  optimizer.zero_grad()
+  optimizer.zero_grad(set_to_none=True)
   if hparams['weight_decay'] > 0.:
     with torch.no_grad():
       for p in all_params:

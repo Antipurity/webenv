@@ -338,7 +338,7 @@ The result is a promise for the environment, which is an object with:
                 // Do not let exceptions kill us.
             }
 
-            res.env._period.set(performance.now() - res._lastStepEnd)
+            res.env._period.set(stepId>1 ? performance.now() - res._lastStepEnd : 0)
             res._lastStepEnd = performance.now()
             res._lastStepId = stepId
         } finally {

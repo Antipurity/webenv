@@ -2,13 +2,17 @@
 Linearithmic dense layers.
 NN layer combination.
 Minimal gated unit.
-"""
 
-# ½-day of dev time, ¼-day of fix time. ¼-day of more fix time.
+
+
+They all support the `out_slice=...` keyword, which can speed up `out[out_slice]` for shallow nets.
+"""
 
 import math
 import torch
 import numpy as np
+
+
 
 class LinDense(torch.nn.Module):
   """
@@ -28,7 +32,8 @@ class LinDense(torch.nn.Module):
   - `Nonlinearity=None`: the constructor of non-linearities between sub-layers, given the input size.
   - `bias=True`: whether a static vector should be added after each mix/sub-layer.
   - `skip_connections=True`: whether the previous sub-layer result should be added, for improved gradient flow. Works best if `ins == outs`.
-  - `local_first=False`: whether to mix among the closest or the furthest numbers first.
+  - `local_first=False`: whether to mix among the closest or the furthest numbers first. Local-first mixing breaks `out_slice` speedups.
+  - `out_slice=...`: returns `out[out_slice]` but faster.
   - `device`
   """
   def __init__(self, ins, outs, *, n=16, batch_dims=1, unique_dims=(), weight_stdev=1, Nonlinearity=None, bias=True, skip_connections=True, local_first=False, device='cuda'):
@@ -45,7 +50,7 @@ class LinDense(torch.nn.Module):
     dims = math.ceil(math.log(max(ins, outs), n) - 1e-8)
     self.ins_dims = _dims_of(ins, n, dims)
     self.outs_dims = _dims_of(outs, n, dims)
-    self.expand = torch.nn.Unflatten(-1, self.ins_dims)
+    self.real_ins_dims = self.ins_dims # Reshape instead of Unflatten, because the latter can't be `torch.jit.trace`d.
     self.contract = torch.nn.Flatten(-len(self.ins_dims))
     if local_first:
       self.ins_dims = list(reversed(self.ins_dims))
@@ -65,7 +70,7 @@ class LinDense(torch.nn.Module):
     got_ins = np.prod(self.ins_dims)
     self.pre_pad = None if got_ins == ins else torch.nn.ConstantPad1d((0, got_ins - ins), 0)
     got_outs = np.prod(self.outs_dims)
-    self.post_slice = None if got_outs == outs else lambda x: x[..., :outs]
+    self.post_slice = got_outs != outs
     with torch.no_grad(): # Create Weights and Biases eagerly, the lazy way.
       self.forward(torch.zeros(*([1] * batch_dims), *unique_dims, ins, device=device))
     # Register params & sub-modules with PyTorch.
@@ -74,7 +79,7 @@ class LinDense(torch.nn.Module):
     self.biases = to_params(self.biases) if bias else None
     self.weights = to_params(self.weights)
     self.nonlinearities = torch.nn.ModuleList(self.nonlinearities)
-  def forward(self, x):
+  def forward(self, x, out_slice=...):
     # Pad. Reshape. Bring in batches. Mix. Bring batches out. Un-reshape. Slice.
     un1 = False
     if len(x.shape) == 1:
@@ -83,12 +88,25 @@ class LinDense(torch.nn.Module):
     batch_end = self.batch_dims
     if self.pre_pad is not None:
       x = self.pre_pad(x)
-    x = self.expand(x)
+    x = torch.reshape(x, [*x.shape[:-1], *self.real_ins_dims])
     layer_dims = list(range(len(x.shape) - len(self.ins_dims), len(x.shape)))
     x = torch.transpose(x, batch_end-1, -2)
     layer_dims[-2] = batch_end-1
-    if self.local_first:
+    # Get what we need to slice.
+    outer_slice = ...
+    extras = ()
+    if not self.local_first:
+      if out_slice is not ...:
+        sl = out_slice if isinstance(out_slice, slice) else out_slice[-1]
+        begin, end, step = sl.indices(self.outs)
+        mul = self.n ** (len(self.outs_dims)-1)
+        outer_slice = slice(begin // mul, -((-end) // mul))
+        extras = (slice(None),) * (len(self.outs_dims)-1)
+        start = begin - mul*outer_slice.start
+        final_slice = slice(begin - mul*outer_slice.start, start + end-begin)
+    else:
       layer_dims = list(reversed(layer_dims))
+    # Loop.
     for i in range(len(self.ins_dims)):
       # Nonlinearity, mix along a dimension (and bias), and skip.
       y = self.nonlinearities[i](x) if self.nonlinearities[i] is not None else x
@@ -97,20 +115,29 @@ class LinDense(torch.nn.Module):
       if self.weights[i] is None:
         self.weights[i] = torch.randn(*y.shape[batch_end:-2], self.ins_dims[i], self.outs_dims[i], requires_grad=True, device=y.device)
         self.weights[i][:] *= self.weight_stdev
-      y = torch.matmul(y, self.weights[i])
+      w = self.weights[i]
+      if outer_slice is not ...:
+        w = w[..., outer_slice] if i==0 else w[[..., outer_slice, *extras]]
+      y = torch.matmul(y, w)
       if self.biases is not None:
         if self.biases[i] is None:
           self.biases[i] = torch.randn(*y.shape[batch_end:-2], 1, self.outs_dims[i], requires_grad=True, device=y.device)
-        y = y + self.biases[i]
+        b = self.biases[i]
+        if outer_slice is not ...:
+          b = b[..., outer_slice] if i==0 else b[[..., outer_slice, *extras]]
+        y = y + b
       y = torch.transpose(y, -1, dim_at)
-      x = x + y if self.skip_connections and self.ins_dims[i] == self.outs_dims[i] else y
+      if self.skip_connections and self.ins_dims[i] == self.outs_dims[i]:
+        x = y + (x if outer_slice is ... or i>0 else x[[..., outer_slice, *extras]])
+      else:
+        x = y
     x = torch.transpose(x, -2, batch_end-1)
     x = self.contract(x)
-    if self.post_slice is not None:
-      x = self.post_slice(x)
+    if self.post_slice and outer_slice is ...:
+      x = x[..., :self.outs]
     if un1:
       x = torch.squeeze(x, 0)
-    return x
+    return x[out_slice] if self.local_first else x if outer_slice is ... else x[..., final_slice]
 def _dims_of(N, n, len):
   dims = [1] * len
   size = 1
@@ -164,17 +191,18 @@ class NormSequential(torch.nn.Module):
     self.mult = to_params(self.mult)
     self.layers = torch.nn.ModuleList(self.layers)
     self.nonlinearities = torch.nn.ModuleList(self.nonlinearities)
-  def forward(self, x, on_layer_done = None):
+  def forward(self, x, on_layer_done = None, out_slice=...):
     for i in range(len(self.layers)):
       y = x
-      if i>0:
+      first, last = i==0, i==len(self.layers)-1
+      if not first:
         y = self.nonlinearities[i-1](y)
-      y = self.layers[i](y)
+      y = self.layers[i](y, out_slice = ... if not last else out_slice)
       y = y * self.mult[i]
       if on_layer_done is not None:
         y = on_layer_done(y, i, self)
-      if self.skip_connections and (self.ins_equal_outs or i < len(self.layers)-1):
-        y = y + x
+      if self.skip_connections and (not last or self.ins_equal_outs):
+        y = y + (x if not last or out_slice is ... else x[out_slice])
       x = y
     x = torch.clamp(x, -1000, 1000) # Just in case.
     return x
@@ -211,42 +239,74 @@ class MGU(torch.nn.Module):
     self.h = Layer(outs, outs, *args, **kwargs)
     self.input = Layer(ins, outs, *args, **kwargs) if ins != outs else None
     self.out_mult = out_mult
-  def forward(self, x):
+  def forward(self, x, out_slice=...):
     # Why think about different non-linearities when you can just, not.
     y = self.input(x) if self.input is not None else x
     f = torch.sigmoid(self.z(y)) # 0…1
-    z = (f * self.out_mult) * torch.tanh(self.h(f*y))
-    if f.shape[-1] == x.shape[-1]:
-      return (1-f) * x + z
-    else:
-      return (1-f) * x[..., 0:f.shape[-1]] + z
-  def parameters(self):
-    yield from self.z.parameters()
-    yield from self.h.parameters()
-    if self.input is not None:
-      yield from self.input.parameters()
+    if f.shape[-1] != x.shape[-1]: x = x[..., 0:f.shape[-1]]
+    if out_slice is not ...: x = x[out_slice]
+    f_slice = f if out_slice is ... else f[out_slice]
+    return (1 - f_slice) * x + f_slice * self.out_mult * torch.tanh(self.h(f * y, out_slice=out_slice))
 
 
 
 if __name__ == '__main__':
-  # Goes down to about 1e-8.
+  # L2 goes down to about 1e-8.
   def report_mean_stdev(f, ins, size, device): # Calibrate.
-    ins = torch.randn(ins, size, device=device)
-    outs = f(ins)
-    print('After going from mean=0 std-dev=1 (best if these are preserved):')
-    print('    mean:', outs.mean().cpu().detach().numpy(), 'std-dev:', outs.std().cpu().detach().numpy())
+    with torch.no_grad():
+      ins = torch.randn(ins, size, device=device)
+      outs = f(ins)
+      print('After going from mean=0 std-dev=1 (best if these are preserved):')
+      print('    mean:', outs.mean().cpu().numpy(), 'std-dev:', outs.std().cpu().numpy())
 
   n = 16
   k = 4
-  N = 16**k
-  ldl = LinDense(N, N, n=16, weight_stdev=2**-k, bias=False, Nonlinearity=torch.nn.Softsign)
-  report_mean_stdev(ldl, 10, N, 'cuda')
-
+  N = 16**k - 5 # Not perfectly-aligned, for testing.
+  kwargs = {
+    'n': 16,
+    'weight_stdev': 2**-k,
+    'bias': False,
+    'Nonlinearity': torch.nn.Softsign,
+  }
+  ldl = LinDense(N, N, **kwargs)
   optim = torch.optim.Adam(ldl.parameters(), lr=.01)
   need = torch.rand(N, device='cuda') * 2 - 1
+  report_mean_stdev(ldl, 10, N, 'cuda')
+
+  # Check that slices work.
+  def test_out_slices(fn, need):
+    def run(fn, *args, **kwargs):
+      A, B = torch.cuda.Event(enable_timing=True), torch.cuda.Event(enable_timing=True)
+      A.record()
+      result = fn(*args, **kwargs)
+      B.record()
+      torch.cuda.synchronize()
+      return [result, A.elapsed_time(B)]
+    with torch.no_grad():
+      sliced_time = 0
+      output, full_time = run(fn, need)
+      times = 5000
+      for _ in range(times):
+        import random
+        start = random.randint(0, need.shape[-1])
+        sl = slice(start, random.randint(start, need.shape[-1]))
+        correct = output[sl]
+        got, sliced_time_here = run(fn, need, out_slice=sl)
+        sliced_time += sliced_time_here
+        if correct.shape != got.shape or ((correct - got).abs() > 1e-3).any():
+          print('out_slice does not work:', sl, correct.shape, got.shape)
+          raise RuntimeError('Output slicing does not work')
+      return [full_time * times, sliced_time]
+  ldl_full_time, ldl_small_time = test_out_slices(ldl, need)
+  print('Output slicing works; ' + str(int(ldl_full_time/ldl_small_time*100-100)) + '% speedup.')
+  mgu_full_time, mgu_small_time = test_out_slices(MGU(NormSequential, N, N, LinDense, layer_count=2, **kwargs), need)
+  print('MGU output slicing works; ' + str(int(mgu_full_time/mgu_small_time*100-100)) + '% speedup.')
+  import time
+  time.sleep(2)
+
   for _ in range(500):
     optim.zero_grad()
     L = (ldl(need) - need).square().sum() # One-sample autoencoder.
-    print('L1:', L.cpu().detach().numpy())
+    print('L2:', L.cpu().detach().numpy())
     L.backward()
     optim.step()
