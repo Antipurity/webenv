@@ -37,8 +37,8 @@ hparams = {
   'trace': True,
 
   # Reinforcement learning.
-  'gradmax': 0., # Multiplier of planning via gradient.
-  'gradmax_only_actions': False, # Where GradMax's gradient goes: only actions, or the whole state.
+  'gradmax': 1., # Multiplier of planning via gradient.
+  'gradmax_only_actions': True, # Where GradMax's gradient goes: only actions, or the whole state.
   'gradmax_pred_gradient': False, # Whether GradMax's gradient to state includes reward misprediction.
   'gradmax_momentum': .99,
 
@@ -88,6 +88,7 @@ else:
 from reinforcement_learning import GradMaximize
 if hparams['gradmax']>0:
   max_model = GradMaximize(
+    # TODO: A non-linearity at the end, maybe? Does it matter that much, though?
     ns(N, 1, ldl.LinDense, layer_count=layers, Nonlinearity=nl, local_first=lf, device=dev),
     strength=hparams['gradmax'],
     pred_gradient=hparams['gradmax_pred_gradient'],
@@ -106,8 +107,6 @@ if hparams['trace']:
   transition = torch.jit.trace(transition, torch.randn(2, N_ins, device=dev))
   if synth_grad:
     synth_grad = torch.jit.trace(synth_grad, torch.randn(2, N, device=dev))
-  if max_model:
-    max_model = torch.jit.trace(max_model, torch.randn(2, N, device=dev))
 
 
 
@@ -175,7 +174,7 @@ def loss(pred, got, obs, act_len):
       # Do not consider internal state as actions.
       # (Lazy: if streams are wildly different in action length, then gradients are inconsistent.)
       acts = max(act_len) if isinstance(act_len, list) else act_len
-      act_only = torch.cat((pred[..., :-acts].detach(), pred[..., -acts:])) if acts > 0 else pred.detach()
+      act_only = torch.cat((pred[..., :-acts].detach(), pred[..., -acts:]), -1) if acts > 0 else pred.detach()
     else:
       act_only = pred
     L = L + max_model(act_only, Return.detach())

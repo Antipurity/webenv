@@ -39,3 +39,5 @@ With that, this really will be all I can do.
         - Values: only transmit the difference between values and a simple shared prediction model, and entropy-encode that.
         - Control (JSON and JS, currently): just compress. And strip comments from JS, and minify it.
         - Computation: possibly, communicate each value's precision, so that agents only have to predict the general area, not the precise imprecise values. (If agents are well-trained, this allows users to safely use a really low resolution, maybe 4-bits-per-value.)
+
+- At least mouse+keyboard interaction with native applications (games), because it's probably where you spend most of your time anyway, and WebEnv is all about taking your agents with you through your life.
