@@ -22,7 +22,7 @@ The WebEnv environment is intended to be usable with any models that you can com
 
 However.
 
-The single most important point for developing AGI is:
+[The single ](https://mathai-iclr.github.io/papers/papers/MATHAI_29_paper.pdf)[most important point](https://openai.com/blog/deep-double-descent/) for developing AGI is:
 
 - **Have huge computational capabilities**: be rich, research for the rich, and/or live in the future.
 
@@ -81,13 +81,11 @@ Learning a thing is more efficient than leaving it static. So what is the goal o
 Without spoiling the experience, WebEnv's `directScore(x)` can provide a goal distribution that is both complex enough to average out heuristics, and is aligned with humanity's interests.    
 Have to apply that compute, though. Both human-compute, making it a standard practice, and machine-compute, learning it.
 
-Not mentioned: exploration, which in a sense *maximizes* loss through actions in addition to minimizing it, to offset exploitation and sample possibilities more uniformly. Could be useful. Could be supplanted by intermittent random-page transitions, and/or user-defined reward. Unclear right now.
+Naturally, you can add anything you want to this base: exploration, [dropout](https://jmlr.org/papers/volume15/srivastava14a/srivastava14a.pdf), etc.
 
-Moreover, some representation-simplicity encouragement such as [dropout](https://jmlr.org/papers/volume15/srivastava14a/srivastava14a.pdf) or `x[random.randrange(len(x)):]` could improve generalization. The narrative (4 words twice) was already too complex, no need for more details.
+Moreover, arbitrary-goals might be enough to learn a consistent world model, making next-frame prediction unnecessary. However, self-supervised learning builds the most stable yet accurate knowledge base for any goal to use, so, universe assimilator > general intelligence, probably. Unclear without compute and human endorsement of those arbitrary goals.
 
-Additionally, arbitrary-goals might be enough to learn a consistent world model, making next-frame prediction unnecessary. However, self-supervised learning builds the most stable yet accurate knowledge base for any goal to use, so, universe assimilator > general intelligence, probably. Unclear without compute and human endorsement of those arbitrary goals.
-
-Furthermore, remember that your agents are only as secure as the hardware+software stack that they are built on, which is [very ](https://cromwell-intl.com/cybersecurity/hardware.html)[unsafe](https://owasp.org/www-community/vulnerabilities/). Write secure code, people; if possible, isolate browsers launched by WebEnv in a VM or on another machine.
+Furthermore, remember that your agents are only as secure as the hardware+software stack that they are built on, which is [very ](https://cromwell-intl.com/cybersecurity/hardware.html)[unsafe](https://owasp.org/www-community/vulnerabilities/). Write secure code, people; if possible, isolate `webenv.browser`s in a VM or on another machine.
 
 ## Conclusion
 
