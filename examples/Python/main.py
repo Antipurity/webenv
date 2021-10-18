@@ -85,10 +85,10 @@ if hparams['synth_grad']:
   synth_grad = ns(N, N, ldl.LinDense, layer_count = layers + 1, Nonlinearity=nl, local_first=lf, device=dev)
 else:
   synth_grad = None
-from reinforcement_learning import GradMaximize
+import reinforcement_learning as RL
 if hparams['gradmax']>0:
-  max_model = GradMaximize(
-    # TODO: A non-linearity at the end, maybe? Does it matter that much, though?
+  # TODO: Don't have `max_model`, instead use `RL.split(fn, outs)` in `transition` instead (and to maximize reward, `transition.second(pred, out_slice=…)` — …except, isn't input of different size here…) (and to add misprediction bonuses, make some observation's number predict them, preferably the second one, and add those two together into the maximized reward).
+  max_model = RL.GradMaximize(
     ns(N, 1, ldl.LinDense, layer_count=layers, Nonlinearity=nl, local_first=lf, device=dev),
     strength=hparams['gradmax'],
     pred_gradient=hparams['gradmax_pred_gradient'],

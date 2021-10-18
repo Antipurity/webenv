@@ -14,6 +14,25 @@ import numpy as np
 
 
 
+class Linear(torch.nn.Module):
+  """The simplest all-to-all linear connectivity of a vector.
+  Impractical for large vector sizes."""
+  def __init__(self, ins, outs, bias=True, device='cpu'):
+    super(Linear, self).__init__()
+    sk = math.sqrt(1 / ins)
+    self.w = torch.nn.Parameter(torch.rand(ins, outs, device=device, requires_grad=True))
+    self.b = torch.nn.Parameter(torch.rand(outs, device=device, requires_grad=True)) if bias else None
+    with torch.no_grad(): # Be like torch.nn.Linear at init.
+      self.w[:] = (self.w*2-1) * sk
+      if self.b is not None: self.b[:] = (self.b*2-1) * sk
+  def forward(self, x, out_slice=...):
+    if out_slice is ...: return torch.matmul(x, self.w) + (self.b if self.b is not None else 0)
+    sl = out_slice if isinstance(out_slice, slice) else out_slice[-1]
+    w, b = self.w[:, sl], (self.b[sl] if self.b is not None else 0)
+    return torch.matmul(x, w) + b
+
+
+
 class LinDense(torch.nn.Module):
   """
   An implementation of linearithmic dense layers for PyTorch.

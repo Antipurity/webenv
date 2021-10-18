@@ -1,12 +1,7 @@
 This document outlines what still needs to be done to reach MVP state (or the "ready" state).
 
 - Make the Python example production-ready:
-    - `state[0]` maximization. (Sure, just giving a model a binary feedback signal may sound non-scalable because of the need to supervise all possible edge cases, but have you ever tried using the model's world understanding: say, bringing up what it did long ago, possibly on the microphone, and hitting that reward button, making it clear that these are very related? WebEnv is a general environment with user interaction. Expand your mind!)
-        - To make leaving holes in `state[0]` (as should be done most of the time) not screw up `state[0]` over time, AND to not have an extra model just for reward prediction, have to split the RNN and its gradient in twain:
-            - (`s[i]` really means `s[..., i]` here. `A` is `x[:mid]`, `B` is `x[mid:]`.)
-            - `reinforcement_learning.Split(f, ins, outs, *, **)`: if `ins != outs`, have another NN that turns input into same-sized input `x`; then `x→(concat f(concat A B.detach())[:mid] f(concat A.detach() B)[mid:])`. ...Is that right? How would loss be computed with this?
-                - Or should input for `concat` be supplied via `recurrent.recurrent`'s `input`, made differentiable?...
-            - Prediction error is unchanged, since it's only on the first half. Goal-maximization becomes `f(concat A.detach() B)[0].sum()` with a frozen `f`. ...How do we get that frozen `f`, if we only have `.Split`? Should we really just read its prop?
+    - `state[0]` maximization: use `reinforcement_learning.Split`. (Sure, just giving a model a binary feedback signal may sound non-scalable because of the need to supervise all possible edge cases, but have you ever tried using the model's world understanding: say, bringing up what it did long ago, possibly on the microphone, and hitting that reward button, making it clear that these are very related? WebEnv is a general environment with user interaction. Expand your mind! Assuming that you have the compute and the culture for it.)
 
 With that, this really will be all I can do.
 

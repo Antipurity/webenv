@@ -11,8 +11,64 @@ def L2(pred, got):
 
 
 
+class Split(torch.nn.Module):
+  """
+  Splits an RNN (any `x→x` 1D function) into two RNNs, so that two goals can be optimized for without gradient interference, but with mutual awareness. Specify the loss separately.
+  (Goals such as reward prediction and its maximization.)
+  Provide the RNN and the expected output count.
+  See methods.
+  """
+  def __init__(self, fn, outs):
+    if outs % 2: raise TypeError('Output count must be even')
+    super(Split, self).__init__()
+    self.fn = fn
+    self.frozen = False
+    self.half_outs = outs // 2
+    self.p = [p for p in fn.parameters() if p.requires_grad]
+  def first(self, x, freeze=True, out_slice=..., chunks=None):
+    """Evaluates the first RNN."""
+    try:
+      self.freeze(freeze)
+      return self.fn(self.chunk(x, 0, chunks), out_slice=out_slice)
+    finally:
+      if freeze: self.freeze(False)
+  def second(self, x, freeze=True, out_slice=..., chunks=None):
+    """Evaluates the second RNN."""
+    try:
+      self.freeze(freeze)
+      return self.fn(self.chunk(x, 1, chunks), out_slice=out_slice)
+    finally:
+      if freeze: self.freeze(False)
+  def chunk(self, x, half=None, chunks=None):
+    """Chunks the input into first half (`0`) and second half (`1`).
+    The output is the same as the input, except it's only differentiable at that half.
+    (Input size could be a multiple of output size, in which case input is treated as many inputs concatenated, meaning, halves are repeated.)"""
+    if chunks is None:
+      chunks = x.chunk(x.shape[-1] // self.half_outs, -1)
+    if half is None: return chunks
+    return torch.cat([c if i % 2 == half else c.detach() for i,c in enumerate(chunks)], -1)
+  def freeze(self, do=True):
+    """Un/freezes the model's trainable parameters.
+    Use when computing a loss that's dependent on the model (such as prediction's maximization)."""
+    if self.frozen != do:
+      for p in self.p:
+        p.requires_grad_(not do)
+      self.frozen = do
+  def forward(self, x):
+    """(concat f(first)[:mid] f(second)[mid:])
+    This but (up to 2×) faster for shallower networks."""
+    # 
+    m = self.half_outs
+    chunks = self.chunk(x)
+    a, b = (..., slice(None, m)), (..., slice(m, None))
+    return torch.cat((self.first(x, False, a, chunks), self.second(x, False, b, chunks)), -1)
+
+
+
 class GradMaximize(torch.nn.Module):
   """
+  Old.
+  Inferior (because reward prediction machinery can be reused, whereas this creates a separate predictor).
   Gradient-based reward maximization.
 
   In ML terms, this implements (simplified) Deep Deterministic Policy Gradients: https://spinningup.openai.com/en/latest/algorithms/ddpg.html
@@ -69,19 +125,19 @@ class GradMaximize(torch.nn.Module):
 
 if __name__ == '__main__':
   # Maximize a particular number in the state.
-  # Dirscrete RL: performance increases with action-count and slowly saturates.
-  #   (This test is like only picking the best-of-many initializations.)
-  # GradMax: far better than the best discrete RL, at much lower cost: it optimizes, not just picks.
+  #   `Split` is more direct, so can optimize the number far quicker.
   import numpy as np
-  def str(n):
+  def str2(n):
     return np.array2string(n, precision=2)
   def reward(state):
     return state[...,0].unsqueeze(-1).detach()
   ins = 20
-  # Test GradMaximize.
-  for N in range(1, 2):
+  N, tries = 1, 500
+  # (Removed the test of `Maximize`, which enumerates actions. It was very non-scalable.)
+  # Test `GradMaximize`: model & maximize the first number.
+  for _ in range(N):
     scores = []
-    for tries in range(100):
+    for _ in range(tries):
       model = torch.nn.Linear(ins, ins, bias=False)
       max_model = GradMaximize(torch.nn.Linear(ins, 1, bias=False))
       optim = torch.optim.Adam([*model.parameters(), *max_model.parameters()], lr=.01)
@@ -89,6 +145,22 @@ if __name__ == '__main__':
       for iter in range(100):
         out = model(input)
         max_model(out, reward(out)).backward()
-        optim.step(), optim.zero_grad()
+        optim.step(), optim.zero_grad(True)
       scores.append(reward(out).sum().detach())
-    print('GradMax', 'score mean', str(np.mean(scores)), 'std-dev', str(np.std(scores)))
+    print('GradMax', 'score: mean', str2(np.mean(scores)), 'std-dev', str2(np.std(scores)))
+  # Test `Split`: second half maximizes the first number.
+  import ldl
+  for _ in range(N):
+    scores = []
+    for _ in range(tries):
+      model = Split(ldl.Linear(ins, ins, bias=False), ins)
+      optim = torch.optim.Adam(model.parameters(), lr=.01)
+      input = torch.randn(ins)
+      for iter in range(100):
+        # Need `model(input)` and not just `input` to optimize output.
+        out = model.second(model(input), out_slice=slice(0,1))
+        L = -out.sum()
+        L.backward()
+        optim.step(), optim.zero_grad(True)
+      scores.append(reward(out).sum().detach())
+    print('Split', 'score: mean', str2(np.mean(scores)), 'std-dev', str2(np.std(scores)))
