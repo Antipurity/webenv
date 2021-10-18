@@ -12,9 +12,10 @@ import datetime
 # Lots of hyperparams, so code is overly complex; pretend that non-picked `if` branches do not exist, at first.
 
 hparams = {
-  # How many instances to run.
+  # The environment.
   'batch_size': 1,
   'remote_size': 1,
+  'homepage': 'about:blank',
 
   # Optimization.
   'lr': .001,
@@ -209,8 +210,7 @@ webenv.webenv(
   'we.defaults',
   [
     'we.settings',
-    # '{ homepage:"https://www.google.com/" }', # TODO
-    '{ homepage:"about:blank" }',
+    '{ homepage:"' + hparams['homepage'] + '" }',
     # Note: ideally, the homepage would be a redirector to random websites.
     #   (Install & use the RandomURL dataset if you can. No pre-existing website is good enough.)
   ],
