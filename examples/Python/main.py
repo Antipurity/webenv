@@ -5,7 +5,9 @@ import ldl
 import recurrent
 import webenv
 
+import os
 import torch
+import datetime
 
 # Lots of hyperparams, so code is overly complex; pretend that non-picked `if` branches do not exist, at first.
 
@@ -45,26 +47,23 @@ hparams = {
   'weight_decay': .0001,
   'weight_decay_perc': .8,
 
+  # Save/load.
+  'save_every_N_steps': 10000,
+  'preserve_history': False,
+
   # Visualization of metrics.
   'console': True,
   'tensorboard': False, # TODO: True
 }
 relevant_hparams = ['lr', 'gradmax', 'unroll_length', 'nonlinearity'] # To be included in the run's name.
+save_path = 'models'
 
 
 
 def params(*models):
-  ps = set()
-  for m in models:
-    if hasattr(m, 'parameters'):
-      for p in m.parameters():
-        ps.add(p) # Prevent repetitions.
-  return ps
+  return set(p for m in models if hasattr(m, 'parameters') for p in m.parameters())
 def param_size(ps):
-  sz = 0
-  for p in ps:
-    sz += 1 if isinstance(p,float) else torch.numel(p)
-  return sz
+  return sum(1 if isinstance(p,float) else torch.numel(p) for p in ps)
 
 
 
@@ -102,23 +101,65 @@ all_params = params(synth_grad, transition, max_model)
 hparams['params'] = param_size(all_params)
 obs_loss = getattr(recurrent, hparams['obs_loss'])
 
-import os
-import datetime
+
+
+# Handle saving/loading.
 hparams_str = "__".join([k+"_"+str(hparams[k]) for k in relevant_hparams])
-run_name = datetime.datetime.now().strftime("%Y%m%d-%H%M%S") + "_" + hparams_str
-run_p = os.path.join(os.path.dirname(os.path.realpath(__file__)), 'runs', run_name)
+state = {
+  'step': 0,
+  'run_name': datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S") + "_" + hparams_str,
+  'hparams': hparams,
+  'transition': transition.state_dict(),
+  'synth_grad': synth_grad.state_dict() if synth_grad else None,
+  'max_model': max_model.state_dict() if max_model else None,
+  'optim': optim.state_dict(),
+}
+def force_state_dict(old, saved):
+  if not isinstance(old, dict): return
+  with torch.no_grad():
+    for name, to in old.items():
+      if name not in saved: continue
+      if not torch.is_tensor(to): continue
+      fr = saved[name]
+      if to.shape == fr.shape:
+        to.copy_(fr)
+      else:
+        fr_shape = [slice(0, i) for i in fr.shape]
+        to_shape = [slice(0, i) for i in to.shape]
+        to[fr_shape] = fr[to_shape]
+run_p = os.path.join(os.path.dirname(os.path.realpath(__file__)), 'runs', state['run_name'])
+save_p = os.path.join(os.path.dirname(os.path.realpath(__file__)), save_path)
+try:
+  state2 = torch.load(os.path.join(save_p, 'current.pth'))
+  if state['hparams'] != state2['hparams']:
+    print(dict(set(state['hparams'].items()) ^ set(state2['hparams'].items())))
+    continuing = input('Hyperparams changed. Load anyway (else re-initialize)? [Y/n] ')
+    continuing = 'y' in continuing or 'Y' in continuing
+  else:
+    continuing = True
+  if continuing:
+    state['step'] = state2['step']
+    state['run_name'] = state2['run_name']
+    for k in state:
+      if k != 'hparams' and k in state2:
+        force_state_dict(state[k], state2[k])
+except FileNotFoundError:
+  pass
+
+
+
+# Put together the loss & agent.
 if hparams['tensorboard']:
   writer = SummaryWriter(log_dir=run_p)
   writer.add_hparams(hparams, {}) # Would have been nice if this worked without TF.
 
-i = 0
 def loss(pred, got, obs, act_len):
-  global i;  i += 1
+  state['step'] += 1
   L = obs_loss(pred, got) / hparams['loss_divisor']
   if hparams['console']:
     print(str(obs.shape[0])+'×', (L / pred.shape[0]).cpu().detach().numpy())
   if hparams['tensorboard']:
-    writer.add_scalar('Loss', L, i-1)
+    writer.add_scalar('Loss', L, state['step']-1)
   if max_model is not None:
     # Note: autoencoder loss may be more appropriate as reward than prediction loss `L`, because that makes internal state more important than external state, minimizing control of web-pages over the agent.
     divisor = 1000. # A base-10 logarithmic scale might be better.
@@ -131,6 +172,16 @@ def loss(pred, got, obs, act_len):
     else:
       act_only = pred
     L = L + max_model(act_only, Return.detach())
+  if hparams['save_every_N_steps'] and state['step'] % hparams['save_every_N_steps'] == 0:
+    # Save, though it's sync here: inefficient.
+    os.makedirs(save_p, exist_ok=True)
+    torch.save(state, os.path.join(save_p, 'current.pth'))
+    torch.save(state, os.path.join(save_p, 'backup.pth'))
+    if hparams['preserve_history']:
+      import datetime
+      now = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+      torch.save(state, os.path.join(save_p, now + '.pth'))
+    print('Saved.')
   return L
 def weight_decay(optimizer):
   optimizer.step()
@@ -158,7 +209,8 @@ webenv.webenv(
   'we.defaults',
   [
     'we.settings',
-    '{ homepage:"https://www.google.com/" }',
+    # '{ homepage:"https://www.google.com/" }', # TODO
+    '{ homepage:"about:blank" }',
     # Note: ideally, the homepage would be a redirector to random websites.
     #   (Install & use the RandomURL dataset if you can. No pre-existing website is good enough.)
   ],
