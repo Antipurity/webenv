@@ -2,7 +2,7 @@ You fool.
 
 You thought that this is the directory for the processes that make sure that every component of WebEnv works.
 
-But tests would have little purpose: WebEnv is too modular, and each module changes very rarely and can just be held in mind when it does (only requiring a few sanity checks at the end to make sure it works).
+But WebEnv is too modular: WebEnv modules are small enough to be held entirely in mind (and sanity-checked only as needed), so most bugs concern internal state and behavior over time, not the trivially-obvious deterministic behavior. We don't anticipate architectural rewrites, therefore, no unit tests. Just run the Python example with whatever interfaces that your changes have affected, and possibly connect the extension & web page.
 
 This is just the simple test web page to test that plain-web-page `webenv.remote` connections work.
 

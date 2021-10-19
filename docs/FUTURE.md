@@ -38,3 +38,5 @@ With that, this really will be all I can do.
 - A more sophisticated data pipeline for training on edge cases than "see them once, perform 1 update".
 
 - At least mouse+keyboard interaction with native applications (games), because it's probably where you spend most of your time anyway, and WebEnv is all about taking your agents with you through your life.
+
+- Unit tests.
