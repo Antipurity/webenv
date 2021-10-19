@@ -25,7 +25,7 @@ def webenv_merge(state, obs_t):
   Note that this overwrites predictions, so the model cannot access them. If you want your model to know both real and predicted numbers, use `input=webenv_concat` in `recurrent`.
   """
   padded = torch.nn.functional.pad(obs_t, (0, state.shape[-1] - obs_t.shape[-1], 0,0), value=np.nan)
-  return torch.where(torch.isnan(padded), state, padded)
+  return torch.clamp(torch.where(torch.isnan(padded), state, padded), -1, 1)
 def webenv_concat(state, obs_t):
   """
   Puts observations after predictions. Expect twice the numbers in your transition model.
@@ -102,7 +102,7 @@ def optimizer_step(optimizer):
 # RNN.
 def recurrent(
   state,
-  loss = L1,
+  loss = L2,
   optimizer=None,
   device='cuda',
   unroll_length=16,
@@ -121,7 +121,7 @@ def recurrent(
   Args:
     `state`: the initial state or its shape, such as `(1,64)`. The decorated `transition` takes a state and returns a state, as PyTorch tensors.
       (This is never re-allocated, so make sure to never go above this.)
-    `loss`: computes the number to minimize, given `pred` and `actual` (and all args). L1 by default.
+    `loss`: computes the number to minimize, given `pred` and `actual` (and all args). L2 by default.
       (`pred` and `actual` differ only in `input`. The shared parts can be conditioned-on, by learned losses.)
     `optimizer`: the PyTorch optimizer. Adam by default.
     `device`: the device to use for numeric computations. `'cuda'` by default.

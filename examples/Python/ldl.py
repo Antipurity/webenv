@@ -258,11 +258,12 @@ class MGU(torch.nn.Module):
     self.h = Layer(outs, outs, *args, **kwargs)
     self.input = Layer(ins, outs, *args, **kwargs) if ins != outs else None
     self.out_mult = out_mult
+    self.ins, self.outs = ins, outs
   def forward(self, x, out_slice=...):
     # Why think about different non-linearities when you can just, not.
     y = self.input(x) if self.input is not None else x
     f = torch.sigmoid(self.z(y)) # 0…1
-    if f.shape[-1] != x.shape[-1]: x = x[..., 0:f.shape[-1]]
+    if self.ins != self.outs: x = x[..., 0:self.outs]
     if out_slice is not ...: x = x[out_slice]
     f_slice = f if out_slice is ... else f[out_slice]
     return (1 - f_slice) * x + f_slice * self.out_mult * torch.tanh(self.h(f * y, out_slice=out_slice))

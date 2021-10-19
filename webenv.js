@@ -2025,6 +2025,7 @@ if (!window.${name}) window.${name} = function(score) {
         async read(stream, obs, end) {
             const spot = Spot(stream)
             const norm = +spot.score
+            obs.fill(NaN)
             if (!hidden) await end(), obs[0] = norm
         },
         init(stream) { store.open() },

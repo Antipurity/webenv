@@ -1,12 +1,3 @@
-This document outlines what still needs to be done to reach MVP state (or the "ready" state).
-
-- Make the Python example production-ready:
-    - `state[0]` maximization: use `reinforcement_learning.Split`. (Sure, just giving a model a binary feedback signal may sound non-scalable because of the need to supervise all possible edge cases, but have you ever tried using the model's world understanding: say, bringing up what it did long ago, possibly on the microphone, and hitting that reward button, making it clear that these are very related? WebEnv is a general environment with user interaction. Expand your mind! Assuming that you have the compute and the culture for it.)
-
-With that, this really will be all I can do.
-
----
-
 ## Post-MVP (when useful)
 
 - Logo, for the extension, and for impressions.
@@ -20,9 +11,9 @@ With that, this really will be all I can do.
 
 - Extra features for better control in `webenv.remote`, mostly controlled through the popup:
     - Allow viewing observations+predictions, exactly like `webenv.visualize` does;
-    - 2 buttons for ±1 `directScore`, with the ability to bind them to in-page keybindings for convenience;
-    - Cut out a DOM element (putting an absolutely-positioned rect on top of it, removable via click), to draw predictions on top of it;
     - Directly link [microphone/camera/etc](https://developer.mozilla.org/en-US/docs/Web/API/Media_Streams_API) data (play audio-only data in-page, to re-use a data channel that agents should already understand);
+    - 2 buttons for ±1 `directScore`, with the ability to bind them to in-page keybindings for convenience (this might sound non-scalable because every possible edge case has to be covered, but the more advanced the agent, the less you have to cover, especially if you do things like bring up what it did long ago on the microphone or such before hitting that button);
+    - Cut out a DOM element (putting an absolutely-positioned rect on top of it, removable via click), to draw predictions on top of it;
     - An option to (try to) disable navigation for less user annoyance, via https://stackoverflow.com/questions/821011/prevent-a-webpage-from-navigating-away-using-javascript when all else fails.
     - (And other potential 'prompt-engineering' helpers, once they are known.)
 

@@ -51,17 +51,13 @@ Here, predictions are on the right, delayed by a few frames. We used [Google's h
   <img src=images/noexplore-anim.gif>
 </p>
 
-(Looking at it makes you somewhat more aware of your own colorful patternful noise and fleeting afterimages near changed conditions, and hallucinations, right? Why would those exist if not because of next-frame prediction? Do not draw conclusions from overly-small models, though.)
+(The dots are similar to your own colorful patternful noise and fleeting afterimages near changed conditions, and hallucinations. This might show that your brain learns stuff, though data is inconclusive.)
 
-The loss goes down somewhat, though exploration hardly does anything here.
+The loss goes down, and reward goes up, though exploration hardly does anything in this simple environment.
 
-Here, `unroll_length` is `1`, and blue is without an exploration bonus (so, only next-frame prediction), orange is with it (`gradmax` is `1.`):
+TODO: Loss & reward plots of the new algo. (And preferably, another GIF, now that UI is updated.)
 
-<p style="text-align:center">
-  <img width=342 src=images/orange-explore-blue-not.png>
-</p>
-
-However, `unroll_length`=`2` (orange) learns better than synthetic-gradient-only `unroll_length`=`1` (red):
+Here, `unroll_length`=`2` (orange) learns better than synthetic-gradient-only `unroll_length`=`1` (red):
 
 <p style="text-align:center">
   <img width=342 src=images/unroll_length_2_is_better.png>
@@ -69,7 +65,7 @@ However, `unroll_length`=`2` (orange) learns better than synthetic-gradient-only
 
 In conclusion:
 
-Predictions are blurry, and loss is high. Video prediction is not solved, only poked at.
+Predictions are blurry, and loss is high. After a couple hours of training, video prediction is not solved, only poked at.
 
 Not satisfied? Perfect: implement your own ideas on your big computer.
 

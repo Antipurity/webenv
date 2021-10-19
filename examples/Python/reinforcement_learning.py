@@ -44,7 +44,7 @@ class Split(torch.nn.Module):
     The output is the same as the input, except it's only differentiable at that half.
     (Input size could be a multiple of output size, in which case input is treated as many inputs concatenated, meaning, halves are repeated.)"""
     if chunks is None:
-      chunks = x.chunk(x.shape[-1] // self.half_outs, -1)
+      chunks = x.chunk(torch.div(x.shape[-1], self.half_outs, rounding_mode='trunc'), -1)
     if half is None: return chunks
     return torch.cat([c if i % 2 == half else c.detach() for i,c in enumerate(chunks)], -1)
   def freeze(self, do=True):
