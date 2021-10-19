@@ -1947,10 +1947,10 @@ Exposes a function that allows web pages to rate the agent's performance with a 
 
 The agents can access the normalized-to-\`-1\`…\`1\` \`obs[0]\` unless \`hidden\`, and model & maximize it. (Normalized so that there is no preference among pages, only for in-page performance. And to be in a sane range.)
 
-SHA-256 hashes of URLs are reported to the server (for normalization), for as much privacy as possible.
+SHA-256 hashes of URLs are reported to the server (for normalization), for as much privacy as possible (though a rainbow table is trivial to construct from web crawl indices).
 
 Args:
-- \`hidden\`: if \`false\`, exposes 1 number to the agent at the beginning: the average score since the last frame, or \`NaN\`.
+- \`hidden\`: if \`false\`, exposes \`4\` numbers to the agent at the beginning: 0th is the average score since the last frame or \`NaN\`; the others are always-\`NaN\` scratch-space for agents.
 - \`maxHorizon\`: approximately how many most-recent samples to average over.
 - \`store\`: the database of URL→momentums.
     - It is either \`{ scoreFile='', saveInterval=300, maxUrls=1000000 }\` for simple JSON-saving every 300 seconds, or
@@ -1969,7 +1969,7 @@ if (!window.${name}) window.${name} = function(score) {
 }`
     return {
         priority: 999999999,
-        reads: hidden ? undefined : 1,
+        reads: hidden ? undefined : 4,
         async reactToObserver(stream, result) {
             const spot = Spot(stream)
             if (typeof result == 'string' && result.length < 128) {
