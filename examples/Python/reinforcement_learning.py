@@ -65,6 +65,18 @@ class Split(torch.nn.Module):
 
 
 
+class AlsoGoalsForActions(torch.nn.Module):
+  """Like `fn(x)`, but `fn(x)[2:4]` becomes `fn.second(x)[0:2]`. (It makes sense in `main.py`.)"""
+  def __init__(self, fn):
+    super(AlsoGoalsForActions, self).__init__()
+    self.fn = fn
+  def forward(self, x):
+    out = self.fn(x)
+    out[..., 2:4] = self.fn.second(x, out_slice=(..., slice(0,2)))
+    return out
+
+
+
 class GradMaximize(torch.nn.Module):
   """
   Old.

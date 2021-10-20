@@ -1,4 +1,4 @@
-A PyTorch implementation of an agent.
+A PyTorch implementation of a WebEnv agent.
 
 ## Files
 
@@ -7,10 +7,8 @@ A PyTorch implementation of an agent.
   - `recurrent.py`: RNN training. (Backpropagation-through-time and synthetic gradient.)
 - Replaceable:
   - `ldl.py`: linearithmic (time and space) dense layers. (For handling big inputs & outputs with neither quadratic scaling nor assumptions about structure.)
-  - `reinforcement_learning.py`: maximization code, for non-prediction goals. (Mostly by modeling the reward and maximizing that model's output.)
+  - `reinforcement_learning.py`: maximization code, for non-prediction goals. (A 2-player game: 1 predicts, 2 maximizes prediction.)
   - `main.py`: putting it all together.
-
-Unimplemented: save/load.
 
 Did not implement opinions: non-static sparsity (to make [low-dimensional representations](https://arxiv.org/abs/1906.10720) high-dimensional by combining many); [Transformers](https://arxiv.org/abs/2103.03206); non-loss [exploration reward](https://arxiv.org/abs/2101.09458) to [optimize](http://proceedings.mlr.press/v32/silver14.pdf); experience replay; [GAN](https://phillipi.github.io/pix2pix/) or [DDPM](https://arxiv.org/abs/2006.11239) losses; [Siamese networks](https://arxiv.org/abs/2011.10566); literally anything else (use your imagination and/or ML expertise).
 
@@ -51,11 +49,20 @@ Here, predictions are on the right, delayed by a few frames. We used [Google's h
   <img src=images/noexplore-anim.gif>
 </p>
 
-(The dots are similar to your own colorful patternful noise and fleeting afterimages near changed conditions, and hallucinations. This might show that your brain learns stuff, though data is inconclusive.)
+<p style="text-align:center">
+  <img src=images/webenv-1.gif>
+  <img src=images/webenv-2.gif>
+</p>
 
-The loss goes down, and reward goes up, though exploration hardly does anything in this simple environment.
+(The dots look similar to your own colorful patternful noise and fleeting afterimages near changed conditions, and hallucinations. This might demonstrate that your brain learns stuff, though data is inconclusive.)
 
-TODO: Loss & reward plots of the new algo. (And preferably, another GIF, now that UI is updated.)
+Prediction loss goes down, reward goes up, which is all we really need:
+
+<p style="text-align:center">
+  <img width=342 src=images/webenv-3.png>
+</p>
+
+(Cliffs often point away from the optimization direction, locally: smooth change is optimization, sudden change is unexpected.)
 
 Here, `unroll_length`=`2` (orange) learns better than synthetic-gradient-only `unroll_length`=`1` (red):
 
@@ -87,3 +94,5 @@ Since math-y visualizations are always pretty, here is a comparison between vani
 </p>
 
 Every input→output connection is included (as a combination of a few others). So despite sparsity, the minimal reaction time is still `1` frame, no matter what needs to be reacted to.
+
+LDL is not as interesting as dynamically adding & learning & pruning connections and seeing full connectivity emerge, but at least it is more suited for GPUs.

@@ -20,7 +20,7 @@ Comparing OS (an operating system, such as Windows) and a browser:
 
 - OSes are not essentially stateless, so they gradually accumulate garbage and/or break from not-quite-proper usage. The Web is intended to be stateless.
 
-- OSes run browsers. [But browsers can run OSes too](https://bellard.org/jslinux/), though the experience is significantly more limited.
+- OSes run browsers. [But browsers can technically run OSes too.](https://bellard.org/jslinux/)
 
 Browser > OS.
 
@@ -31,6 +31,20 @@ Comparing software and hardware (the real world):
 - To learn, robots need to plot paths between every part of reality, without things like "dying" in between. On the Web, teleportation is the default.
 
 Browser > robot.
+
+### The Web is too primitive compared to full human interaction. Won't work.
+
+The Web has many flaws that make it unsuitable to be a parent.
+
+- No `directScore` and culture around it: governed by overly simplistic algorithms due to the need to scale them, such as likes on social media, conveyed through text on the screen. This example is very hard to convert into a useful reward signal, and even if you do, many people call for having no algorithm to judge people by, because their minds are better judges.
+
+- No `directLink` and culture around it: most interaction is through text. Chomsky would have been proud, but a lot of communication is lost in language-on-screen. Humans can at least learn to write down their feelings and reactions, but how would programs know what's missing?
+
+- No grounding in reality. In case you don't know, there are no Web-controlled humans or robots: lack of trustworthiness leads to lack of trust.
+
+But inability to improve is not one of these flaws.
+
+Think not just of solving WebEnv, but of how working on the solution would begin to patch up these holes. We can work on a brighter future together.
 
 ### I hate everything involving the words "money", "centralization", and "surveillance". Why is this "AGI-as-a-service" thing mentioned?
 
