@@ -1,0 +1,12 @@
+/examples/Python/images/
+
+/puppeteer-chrome-profile-*/
+/node_modules/
+/cached/
+/data/
+scores.json
+test.js
+extension.pem
+/examples/Python/models/
+/examples/Python/runs/
+/examples/Python/__pycache__/
